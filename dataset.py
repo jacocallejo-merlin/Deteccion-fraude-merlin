@@ -1,78 +1,51 @@
-# -*- coding: utf-8 -*-
-"""
-Genera datos sintéticos de 6 meses para las 12 tablas de `fraude_pagos`,
-con los 9 tipos de fraude que definimos inyectados aleatoriamente.
-
-Diseño clave: como este es un dataset SINTÉTICO donde nosotros decidimos
-qué es fraude, la etiqueta de verdad-terreno vive en la tabla `alerta`:
-toda `transaccion_id` que aparece en `alerta` es un caso fraudulento
-inyectado a propósito (y `patron_id` dice de qué tipo). Para entrenar,
-un LEFT JOIN transaccion-alerta y comprobar si hay fila es tu "es_fraude".
-
-Uso:
-    python generar_dataset.py                # genera y carga en ClickHouse
-    python generar_dataset.py --dry-run       # genera en memoria, no conecta a nada
-    python generar_dataset.py --seed 7        # reproducible con otra semilla
-    python generar_dataset.py --dias 90       # dataset más corto para probar rápido
-"""
 import argparse
 import random
 from datetime import datetime, timedelta, date
 
 import numpy as np
 import pandas as pd
+from faker import Faker
 
-# ------------------------------------------------------------------ #
-# Configuración de conexión — igual que BD_VACIAS.py
-# ------------------------------------------------------------------ #
+fake = Faker("es_ES")
 HOST = "localhost"
 PORT = 8123
 USER = "default"
 PASSWORD = "password"
 DATABASE = "fraude_pagos"
 
-# ------------------------------------------------------------------ #
-# Volumen del dataset (ajustable)
-# ------------------------------------------------------------------ #
 N_CLIENTES = 2000
 N_COMERCIOS = 30
 N_DISPOSITIVOS = 2600
-TRANSACCIONES_DIA_MEDIA = 200      # media de Poisson, transacciones legítimas/día
-TASA_FRAUDE_OBJETIVO = 0.02        # ~2% de las transacciones totales
+TRANSACCIONES_DIA_MEDIA = 200     
+TASA_FRAUDE_OBJETIVO = 0.02       
 
-# Reparto del fraude por tipo (en proporción de TRANSACCIONES fraudulentas,
-# no de "casos" — un caso de card testing genera varias transacciones)
-PROPORCION_FRAUDE = {
-    "pico_gasto":        0.25,
-    "card_testing":       0.20,
-    "smurfing":           0.15,
-    "account_takeover":   0.15,
-    "ip_sospechosa":      0.10,
-    "dispositivo_nuevo":  0.08,
-    "devolucion_abusiva": 0.04,
-    "bot":                0.02,
-    "bust_out":           0.01,
-}
-# Transacciones que genera, en promedio, UN caso de cada tipo
+TIPOS_FRAUDE = ["pico_gasto", "card_testing", "smurfing", "account_takeover", "ip_sospechosa",
+                "dispositivo_nuevo", "devolucion_abusiva", "bot", "bust_out"]
+
+
+def calcular_proporciones_fraude(modo, rng):
+    if modo == "igual":
+        p = 1.0 / len(TIPOS_FRAUDE)
+        return {tipo: p for tipo in TIPOS_FRAUDE}
+    if modo == "aleatoria":
+        valores = rng.dirichlet(np.ones(len(TIPOS_FRAUDE)))
+        return dict(zip(TIPOS_FRAUDE, valores))
+    raise ValueError(f"modo de proporciones desconocido: {modo}")
+
 TXNS_POR_CASO = {
     "pico_gasto": 1, "card_testing": 8, "smurfing": 5, "account_takeover": 1,
     "ip_sospechosa": 1, "dispositivo_nuevo": 1, "devolucion_abusiva": 1,
     "bot": 1, "bust_out": 1,
 }
 
-PAISES_HABITUALES = ["España", "Francia", "Alemania", "Portugal", "Italia", "Reino Unido"]
-PAISES_HABITUALES_PESOS = [0.55, 0.12, 0.10, 0.08, 0.08, 0.07]
-PAISES_RAROS = ["Rusia", "Nigeria", "Vietnam", "Ucrania", "Indonesia", "Filipinas"]
-
-NOMBRES = ["Marta", "Carlos", "Laura", "David", "Sofía", "Pablo", "Elena", "Javier",
-           "Lucía", "Diego", "Ana", "Sergio", "Claudia", "Mario", "Irene", "Hugo"]
-APELLIDOS = ["García", "Martínez", "López", "Fernández", "Pérez", "González", "Sánchez",
-             "Romero", "Torres", "Ramírez", "Flores", "Díaz", "Ortega", "Molina"]
+PAISES_HABITUALES = ["España", "Francia", "Alemania", "Portugal", "Italia",
+                      "Reino Unido", "Países Bajos", "Bélgica", "Irlanda", "Polonia"]
+PAISES_HABITUALES_PESOS = [0.50, 0.10, 0.09, 0.07, 0.07, 0.06, 0.04, 0.03, 0.02, 0.02]
+PAISES_RAROS = ["Rusia", "Nigeria", "Vietnam", "Ucrania", "Indonesia", "Filipinas",
+                "China", "Pakistán", "Brasil", "India", "Sudáfrica", "Egipto"]
 
 
-# ------------------------------------------------------------------ #
-# Contenedor con contadores de ID y las listas de filas a insertar
-# ------------------------------------------------------------------ #
+
 class Fabrica:
     def __init__(self):
         self._contadores = {}
@@ -87,14 +60,11 @@ class Fabrica:
         return self._contadores[tabla]
 
 
-# ------------------------------------------------------------------ #
-# Generación de entidades maestras
-# ------------------------------------------------------------------ #
 def generar_clientes(fab, rng, fecha_inicio, fecha_fin):
     paises_por_cliente = {}
     for _ in range(N_CLIENTES):
         cid = fab.siguiente_id("cliente")
-        nombre = f"{rng.choice(NOMBRES)} {rng.choice(APELLIDOS)}"
+        nombre = fake.name()
         alta = fecha_inicio - timedelta(days=int(rng.integers(0, 700)))
         fab.tablas["cliente"].append({
             "cliente_id": cid,
@@ -107,15 +77,17 @@ def generar_clientes(fab, rng, fecha_inicio, fecha_fin):
 
 
 def generar_comercios(fab, rng):
-    categorias = ["electrónica", "moda", "alimentación", "viajes", "hogar", "ocio"]
+    categorias = ["electrónica", "moda", "alimentación", "viajes", "hogar", "ocio",
+                  "deporte", "belleza", "juguetería", "librería", "mascotas",
+                  "bricolaje", "automoción", "joyería", "farmacia", "restauración"]
     for _ in range(N_COMERCIOS):
         cid = fab.siguiente_id("comercio")
         fab.tablas["comercio"].append({
             "comercio_id": cid,
             "categoria_negocio": rng.choice(categorias),
             "pais": rng.choice(PAISES_HABITUALES, p=PAISES_HABITUALES_PESOS),
-            "nombre": f"Comercio {cid}",
-            "ciudad": rng.choice(["Madrid", "Barcelona", "Valencia", "Sevilla", "Bilbao"]),
+            "nombre": fake.company(),
+            "ciudad": fake.city(),
         })
 
 
@@ -124,10 +96,11 @@ def generar_dispositivos(fab, rng):
         "movil": (["iPhone 14", "Samsung Galaxy S23", "Xiaomi 13"], ["iOS 17", "Android 14"]),
         "ordenador": (["MacBook Pro", "Dell XPS", "HP Pavilion"], ["macOS 14", "Windows 11", "Ubuntu 22.04"]),
         "tablet": (["iPad Air", "Samsung Tab S9"], ["iOS 17", "Android 14"]),
+        "datafono": (["Ingenico Move 5000", "Verifone V400m", "PAX A920"], ["Android POS", "Linux embebido"]),
     }
     for _ in range(N_DISPOSITIVOS):
         did = fab.siguiente_id("dispositivo")
-        tipo = rng.choice(list(tipos.keys()), p=[0.6, 0.3, 0.1])
+        tipo = rng.choice(list(tipos.keys()), p=[0.55, 0.25, 0.10, 0.10])
         modelos, sistemas = tipos[tipo]
         fab.tablas["dispositivo"].append({
             "dispositivo_id": did,
@@ -140,29 +113,38 @@ def generar_dispositivos(fab, rng):
 def generar_patrones(fab):
     patrones = [
         ("pico_gasto", "Pico de gasto anómalo",
-         "Cantidad muy por encima de la media histórica del cliente"),
+         "Cantidad muy por encima de la media histórica del cliente",
+         "importe de varios miles de euros, muy por encima del gasto habitual del cliente"),
         ("card_testing", "Card testing",
-         "Ráfaga de importes muy bajos en poco tiempo con el mismo método de pago"),
+         "Ráfaga de importes muy bajos en poco tiempo con el mismo método de pago",
+         ">=5 transacciones del mismo metodo_id, importe <2€, en menos de 10 minutos"),
         ("smurfing", "Estructuración (smurfing)",
-         "Varios pagos repetidos justo por debajo de un umbral redondo"),
+         "Varios pagos repetidos justo por debajo de un umbral redondo",
+         ">=3 pagos del mismo metodo_id, cada uno justo por debajo de 1000€, repartidos en varias horas"),
         ("account_takeover", "Account takeover",
-         "Varios intentos de login fallidos, cambio de dato y compra en la misma sesión"),
+         "Varios intentos de login fallidos, cambio de dato y compra en la misma sesión",
+         "evento cambio_dato seguido de una transaccion >300€ en menos de 1h, misma sesion, con >=4 intentos de login previos"),
         ("ip_sospechosa", "IP/geolocalización sospechosa",
-         "Sesión desde un país distinto al habitual del cliente, a menudo con VPN/proxy"),
+         "Sesión desde un país distinto al habitual del cliente, a menudo con VPN/proxy",
+         "sesion con proxy_vpn=true e ip_pais distinto al pais habitual del cliente"),
         ("dispositivo_nuevo", "Dispositivo nuevo de alto riesgo",
-         "Compra de importe alto desde un dispositivo nunca visto para ese cliente"),
+         "Compra de importe alto desde un dispositivo nunca visto para ese cliente",
+         "transaccion >400€ desde un dispositivo_id no presente en cliente_dispositivo para ese cliente"),
         ("devolucion_abusiva", "Abuso de devoluciones",
-         "Varias compras seguidas de devolución en un plazo muy corto"),
+         "Varias compras seguidas de devolución en un plazo muy corto",
+         "devolucion tipo=fraudulenta registrada en menos de 48h tras la transaccion"),
         ("bot", "Actividad tipo bot",
-         "Eventos consecutivos dentro de una sesión a una velocidad no humana"),
+         "Eventos consecutivos dentro de una sesión a una velocidad no humana",
+         ">=4 eventos en la misma sesion separados por <1 segundo entre si"),
         ("bust_out", "Bust-out",
-         "Historial largo de compras pequeñas seguido de un cargo cercano al límite de crédito"),
+         "Historial largo de compras pequeñas seguido de un cargo cercano al límite de crédito",
+         "historial de compras pequeñas durante semanas seguido de un cargo entre el 85% y 98% del limite_credito"),
     ]
     ids = {}
-    for clave, nombre, descripcion in patrones:
+    for clave, nombre, descripcion, condicion in patrones:
         pid = fab.siguiente_id("patron")
         fab.tablas["patron"].append({
-            "patron_id": pid, "nombre": nombre, "descripcion": descripcion, "condicion": clave,
+            "patron_id": pid, "nombre": nombre, "descripcion": descripcion, "condicion": condicion,
         })
         ids[clave] = pid
     return ids
@@ -188,24 +170,30 @@ def generar_metodos_pago(fab, rng, clientes_ids, fecha_ref):
     return por_cliente
 
 
-def generar_canales_pago(fab, rng, comercios_ids):
+def generar_canales_pago(fab, rng, comercios_ids, dispositivos_datafono_ids):
     por_comercio = {cid: [] for cid in comercios_ids}
+    canal_tipo = {}
+    canal_a_datafono = {}
     for cid in comercios_ids:
         for _ in range(int(rng.integers(1, 3))):
             chid = fab.siguiente_id("canal_pago")
+            tipo = rng.choice(["web", "app", "datafono"])
             fab.tablas["canal_pago"].append({
                 "canal_id": chid,
                 "comercio_id": cid,
-                "tipo": rng.choice(["web", "app", "datafono"]),
+                "tipo": tipo,
                 "ubicacion": rng.choice(["online"] * 3 + ["Madrid", "Barcelona"]),
             })
             por_comercio[cid].append(chid)
-    return por_comercio
+            canal_tipo[chid] = tipo
+            if tipo == "datafono" and dispositivos_datafono_ids:
+                canal_a_datafono[chid] = int(rng.choice(dispositivos_datafono_ids))
+    return por_comercio, canal_tipo, canal_a_datafono
 
 
-def generar_cliente_dispositivo(fab, rng, clientes_ids, dispositivos_ids):
+def generar_cliente_dispositivo(fab, rng, clientes_ids, dispositivos_personales_ids):
     por_cliente = {cid: [] for cid in clientes_ids}
-    dispositivos_libres = list(dispositivos_ids)
+    dispositivos_libres = list(dispositivos_personales_ids)
     rng.shuffle(dispositivos_libres)
     puntero = 0
     for cid in clientes_ids:
@@ -217,17 +205,12 @@ def generar_cliente_dispositivo(fab, rng, clientes_ids, dispositivos_ids):
             puntero += 1
             fab.tablas["cliente_dispositivo"].append({"cliente_id": cid, "dispositivo_id": did})
             por_cliente[cid].append(did)
-        # ~3% de los dispositivos se comparten con otro cliente (N:N real)
         if rng.random() < 0.03:
             otro = int(rng.choice(dispositivos_libres))
             fab.tablas["cliente_dispositivo"].append({"cliente_id": cid, "dispositivo_id": otro})
             por_cliente[cid].append(otro)
     return por_cliente
 
-
-# ------------------------------------------------------------------ #
-# Helpers para sesión + eventos + transacción + alerta
-# ------------------------------------------------------------------ #
 def ip_aleatoria(rng):
     return ".".join(str(int(rng.integers(1, 255))) for _ in range(4))
 
@@ -240,7 +223,6 @@ def crear_sesion(fab, rng, cliente_id, dispositivo_id, momento, pais_ip,
         "ip_sesion": ip_aleatoria(rng), "ip_pais": pais_ip, "proxy_vpn": bool(proxy_vpn),
         "num_intentos_login": intentos, "resultado_login": resultado, "timestamp": momento,
     })
-    # eventos de login dentro de la sesión
     t = momento - timedelta(seconds=intentos * 8)
     for i in range(intentos - 1):
         fab.tablas["evento"].append({
@@ -275,11 +257,12 @@ def crear_transaccion(fab, sesion_id, metodo_id, canal_id, dispositivo_id, momen
     return tid
 
 
-def crear_alerta(fab, rng, transaccion_id, patron_id, nota_riesgo=None):
+def crear_alerta(fab, rng, transaccion_id, patron_id, momento, nota_riesgo=None):
+    fecha_deteccion = momento + timedelta(seconds=int(rng.integers(2, 180)))
     fab.tablas["alerta"].append({
         "alerta_id": fab.siguiente_id("alerta"), "transaccion_id": transaccion_id,
         "patron_id": patron_id, "nota_riesgo": float(nota_riesgo if nota_riesgo is not None else rng.uniform(0.6, 0.99)),
-        "fecha": datetime.now(), "estado": "pendiente",
+        "fecha": fecha_deteccion, "estado": "pendiente",
     })
 
 
@@ -287,13 +270,10 @@ def momento_aleatorio(rng, fecha_inicio, fecha_fin):
     delta = (fecha_fin - fecha_inicio).total_seconds()
     return fecha_inicio + timedelta(seconds=float(rng.uniform(0, delta)))
 
-
-# ------------------------------------------------------------------ #
-# Transacciones legítimas (la base "sana" del dataset)
-# ------------------------------------------------------------------ #
 def generar_transacciones_normales(fab, rng, fecha_inicio, fecha_fin, clientes_ids,
                                     metodos_por_cliente, disp_por_cliente,
-                                    canales_por_comercio, comercios_ids, paises_por_cliente):
+                                    canales_por_comercio, comercios_ids, paises_por_cliente,
+                                    canal_tipo, canal_a_datafono):
     n_dias = (fecha_fin - fecha_inicio).days
     for dia in range(n_dias):
         dia_inicio = fecha_inicio + timedelta(days=dia)
@@ -303,11 +283,15 @@ def generar_transacciones_normales(fab, rng, fecha_inicio, fecha_fin, clientes_i
             if not metodos_por_cliente[cid] or not disp_por_cliente[cid]:
                 continue
             metodo_id = int(rng.choice(metodos_por_cliente[cid]))
-            dispositivo_id = int(rng.choice(disp_por_cliente[cid]))
             comercio_id = int(rng.choice(comercios_ids))
             if not canales_por_comercio[comercio_id]:
                 continue
             canal_id = int(rng.choice(canales_por_comercio[comercio_id]))
+
+            if canal_tipo[canal_id] == "datafono" and canal_id in canal_a_datafono:
+                dispositivo_id = canal_a_datafono[canal_id]
+            else:
+                dispositivo_id = int(rng.choice(disp_por_cliente[cid]))
 
             momento = dia_inicio + timedelta(seconds=int(rng.integers(0, 86400)))
             sesion_id = crear_sesion(fab, rng, cid, dispositivo_id, momento,
@@ -319,7 +303,6 @@ def generar_transacciones_normales(fab, rng, fecha_inicio, fecha_fin, clientes_i
             crear_transaccion(fab, sesion_id, metodo_id, canal_id, dispositivo_id,
                                momento, cantidad, estado=estado)
 
-    # devoluciones legítimas: ~2% de las transacciones aprobadas de más de 60€
     aprobadas_altas = [t for t in fab.tablas["transaccion"]
                         if t["estado"] == "aprobada" and t["cantidad"] > 60]
     n_devol = min(len(aprobadas_altas), max(1, int(len(aprobadas_altas) * 0.02)))
@@ -333,16 +316,12 @@ def generar_transacciones_normales(fab, rng, fecha_inicio, fecha_fin, clientes_i
             "estado": "procesada",
         })
 
-
-# ------------------------------------------------------------------ #
-# Casos de fraude — cada función crea 1+ transacciones y su(s) alerta(s)
-# ------------------------------------------------------------------ #
 def caso_pico_gasto(fab, rng, cid, metodo_id, dispositivo_id, canal_id, momento, pais, patron_id):
     sesion_id = crear_sesion(fab, rng, cid, dispositivo_id, momento, pais_ip=pais, intentos=1)
     crear_evento_generico(fab, sesion_id, "intento_pago", momento)
-    cantidad = float(rng.uniform(1500, 6000))  # muy por encima de lo habitual
+    cantidad = float(rng.uniform(1500, 6000))  
     tid = crear_transaccion(fab, sesion_id, metodo_id, canal_id, dispositivo_id, momento, cantidad)
-    crear_alerta(fab, rng, tid, patron_id)
+    crear_alerta(fab, rng, tid, patron_id, momento)
 
 
 def caso_card_testing(fab, rng, cid, metodo_id, dispositivo_id, canales_ids, momento, pais, patron_id):
@@ -354,7 +333,7 @@ def caso_card_testing(fab, rng, cid, metodo_id, dispositivo_id, canales_ids, mom
         estado = "rechazada" if rng.random() < 0.8 else "aprobada"
         crear_evento_generico(fab, sesion_id, "intento_pago", t)
         tid = crear_transaccion(fab, sesion_id, metodo_id, canal_id, dispositivo_id, t, cantidad, estado=estado)
-        crear_alerta(fab, rng, tid, patron_id, nota_riesgo=0.8)
+        crear_alerta(fab, rng, tid, patron_id, t, nota_riesgo=0.8)
         t += timedelta(seconds=int(rng.integers(5, 40)))
 
 
@@ -366,7 +345,7 @@ def caso_smurfing(fab, rng, cid, metodo_id, dispositivo_id, canales_ids, momento
         cantidad = umbral - float(rng.uniform(5, 40))
         crear_evento_generico(fab, sesion_id, "intento_pago", t)
         tid = crear_transaccion(fab, sesion_id, metodo_id, canal_id, dispositivo_id, t, cantidad)
-        crear_alerta(fab, rng, tid, patron_id, nota_riesgo=0.75)
+        crear_alerta(fab, rng, tid, patron_id, t, nota_riesgo=0.75)
         t += timedelta(minutes=int(rng.integers(10, 90)))
 
 
@@ -379,7 +358,7 @@ def caso_account_takeover(fab, rng, cid, metodo_id, dispositivo_id, canal_id, mo
     crear_evento_generico(fab, sesion_id, "intento_pago", t)
     cantidad = float(rng.uniform(300, 2500))
     tid = crear_transaccion(fab, sesion_id, metodo_id, canal_id, dispositivo_id, t, cantidad)
-    crear_alerta(fab, rng, tid, patron_id, nota_riesgo=0.9)
+    crear_alerta(fab, rng, tid, patron_id, t, nota_riesgo=0.9)
 
 
 def caso_ip_sospechosa(fab, rng, cid, metodo_id, dispositivo_id, canal_id, momento, pais_raro, patron_id):
@@ -388,7 +367,7 @@ def caso_ip_sospechosa(fab, rng, cid, metodo_id, dispositivo_id, canal_id, momen
     crear_evento_generico(fab, sesion_id, "intento_pago", momento)
     cantidad = float(rng.uniform(50, 800))
     tid = crear_transaccion(fab, sesion_id, metodo_id, canal_id, dispositivo_id, momento, cantidad)
-    crear_alerta(fab, rng, tid, patron_id, nota_riesgo=0.7)
+    crear_alerta(fab, rng, tid, patron_id, momento, nota_riesgo=0.7)
 
 
 def caso_dispositivo_nuevo(fab, rng, cid, metodo_id, dispositivo_id_nuevo, canal_id, momento, pais, patron_id):
@@ -396,7 +375,7 @@ def caso_dispositivo_nuevo(fab, rng, cid, metodo_id, dispositivo_id_nuevo, canal
     crear_evento_generico(fab, sesion_id, "intento_pago", momento)
     cantidad = float(rng.uniform(400, 2000))
     tid = crear_transaccion(fab, sesion_id, metodo_id, canal_id, dispositivo_id_nuevo, momento, cantidad)
-    crear_alerta(fab, rng, tid, patron_id, nota_riesgo=0.65)
+    crear_alerta(fab, rng, tid, patron_id, momento, nota_riesgo=0.65)
 
 
 def caso_devolucion_abusiva(fab, rng, cid, metodo_id, dispositivo_id, canales_ids, momento, pais, patron_id):
@@ -411,7 +390,7 @@ def caso_devolucion_abusiva(fab, rng, cid, metodo_id, dispositivo_id, canales_id
         "importe": cantidad, "fecha": momento + timedelta(hours=int(rng.integers(6, 48))),
         "estado": "procesada",
     })
-    crear_alerta(fab, rng, tid, patron_id, nota_riesgo=0.7)
+    crear_alerta(fab, rng, tid, patron_id, momento, nota_riesgo=0.7)
 
 
 def caso_bot(fab, rng, cid, metodo_id, dispositivo_id, canal_id, momento, pais, patron_id):
@@ -419,15 +398,14 @@ def caso_bot(fab, rng, cid, metodo_id, dispositivo_id, canal_id, momento, pais, 
     t = momento
     for tipo in ["intento_pago", "cambio_dato", "intento_pago", "intento_pago"]:
         crear_evento_generico(fab, sesion_id, tipo, t, "generado en ráfaga")
-        t += timedelta(seconds=1)  # velocidad no humana (misma franja de segundo)
+        t += timedelta(seconds=1) 
     cantidad = float(rng.uniform(20, 300))
     tid = crear_transaccion(fab, sesion_id, metodo_id, canal_id, dispositivo_id, momento, cantidad)
-    crear_alerta(fab, rng, tid, patron_id, nota_riesgo=0.6)
+    crear_alerta(fab, rng, tid, patron_id, momento, nota_riesgo=0.6)
 
 
 def caso_bust_out(fab, rng, cid, metodo_id, dispositivo_id, canales_ids, fecha_inicio, momento, pais,
                    limite_credito, patron_id):
-    # historial largo de compras pequeñas antes del cargo grande
     t = fecha_inicio
     while t < momento - timedelta(days=5):
         sesion_id = crear_sesion(fab, rng, cid, dispositivo_id, t, pais_ip=pais, intentos=1)
@@ -441,21 +419,18 @@ def caso_bust_out(fab, rng, cid, metodo_id, dispositivo_id, canales_ids, fecha_i
     crear_evento_generico(fab, sesion_id, "intento_pago", momento)
     cantidad = float(limite_credito) * rng.uniform(0.85, 0.98)
     tid = crear_transaccion(fab, sesion_id, metodo_id, canal_id, dispositivo_id, momento, cantidad)
-    crear_alerta(fab, rng, tid, patron_id, nota_riesgo=0.85)
+    crear_alerta(fab, rng, tid, patron_id, momento, nota_riesgo=0.85)
 
 
-# ------------------------------------------------------------------ #
-# Orquestación del fraude
-# ------------------------------------------------------------------ #
 def generar_fraude(fab, rng, fecha_inicio, fecha_fin, clientes_ids, metodos_por_cliente,
                     disp_por_cliente, canales_por_comercio, comercios_ids, paises_por_cliente,
-                    patron_ids):
+                    patron_ids, proporcion_fraude):
     n_txn_total_estimado = TRANSACCIONES_DIA_MEDIA * (fecha_fin - fecha_inicio).days
     n_fraude_objetivo = int(n_txn_total_estimado * TASA_FRAUDE_OBJETIVO / (1 - TASA_FRAUDE_OBJETIVO))
 
     todos_los_dispositivos = set(d["dispositivo_id"] for d in fab.tablas["dispositivo"])
 
-    for tipo, proporcion in PROPORCION_FRAUDE.items():
+    for tipo, proporcion in proporcion_fraude.items():
         n_txns_tipo = max(1, int(n_fraude_objetivo * proporcion))
         n_casos = max(1, n_txns_tipo // TXNS_POR_CASO[tipo])
         patron_id = patron_ids[tipo]
@@ -503,16 +478,13 @@ def generar_fraude(fab, rng, fecha_inicio, fecha_fin, clientes_ids, metodos_por_
                                fecha_inicio, momento, pais_habitual, limite, patron_id)
 
 
-# ------------------------------------------------------------------ #
-# Carga en ClickHouse
-# ------------------------------------------------------------------ #
 ORDEN_INSERCION = ["cliente", "comercio", "dispositivo", "patron", "metodo_pago",
                     "canal_pago", "cliente_dispositivo", "sesion", "evento",
                     "transaccion", "devolucion", "alerta"]
 
 
 def cargar_en_clickhouse(fab):
-    import clickhouse_connect  # se importa aquí para que --dry-run no lo necesite instalado
+    import clickhouse_connect  
     client = clickhouse_connect.get_client(
         host=HOST, port=PORT, username=USER, password=PASSWORD, database=DATABASE
     )
@@ -541,16 +513,19 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="No conecta a ClickHouse, solo genera y resume")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--dias", type=int, default=180)
+    parser.add_argument("--proporciones", choices=["igual", "aleatoria"], default="aleatoria",
+                         help="como repartir el fraude entre los 9 tipos: aleatoria (por defecto) o igual")
     args = parser.parse_args()
 
     rng = np.random.default_rng(args.seed)
     random.seed(args.seed)
+    Faker.seed(args.seed)
 
     fecha_fin = datetime.now()
     fecha_inicio = fecha_fin - timedelta(days=args.dias)
 
     fab = Fabrica()
-    fab.tablas = {k: [] for k in fab.tablas}  # reset limpio
+    fab.tablas = {k: [] for k in fab.tablas} 
 
     print("Generando entidades maestras...")
     paises_por_cliente = generar_clientes(fab, rng, fecha_inicio, fecha_fin)
@@ -560,21 +535,28 @@ def main():
 
     clientes_ids = [c["cliente_id"] for c in fab.tablas["cliente"]]
     comercios_ids = [c["comercio_id"] for c in fab.tablas["comercio"]]
-    dispositivos_ids = [d["dispositivo_id"] for d in fab.tablas["dispositivo"]]
+    dispositivos_personales_ids = [d["dispositivo_id"] for d in fab.tablas["dispositivo"] if d["tipo"] != "datafono"]
+    dispositivos_datafono_ids = [d["dispositivo_id"] for d in fab.tablas["dispositivo"] if d["tipo"] == "datafono"]
 
     metodos_por_cliente = generar_metodos_pago(fab, rng, clientes_ids, fecha_inicio)
-    canales_por_comercio = generar_canales_pago(fab, rng, comercios_ids)
-    disp_por_cliente = generar_cliente_dispositivo(fab, rng, clientes_ids, dispositivos_ids)
+    canales_por_comercio, canal_tipo, canal_a_datafono = generar_canales_pago(
+        fab, rng, comercios_ids, dispositivos_datafono_ids
+    )
+    disp_por_cliente = generar_cliente_dispositivo(fab, rng, clientes_ids, dispositivos_personales_ids)
 
     print("Generando transacciones legítimas (esto puede tardar un poco)...")
     generar_transacciones_normales(fab, rng, fecha_inicio, fecha_fin, clientes_ids,
                                     metodos_por_cliente, disp_por_cliente,
-                                    canales_por_comercio, comercios_ids, paises_por_cliente)
+                                    canales_por_comercio, comercios_ids, paises_por_cliente,
+                                    canal_tipo, canal_a_datafono)
 
-    print("Inyectando casos de fraude...")
+    proporcion_fraude = calcular_proporciones_fraude(args.proporciones, rng)
+    print(f"Inyectando casos de fraude (reparto: {args.proporciones})...")
+    for tipo, p in proporcion_fraude.items():
+        print(f"    {tipo}: {p:.3f}")
     generar_fraude(fab, rng, fecha_inicio, fecha_fin, clientes_ids, metodos_por_cliente,
                     disp_por_cliente, canales_por_comercio, comercios_ids, paises_por_cliente,
-                    patron_ids)
+                    patron_ids, proporcion_fraude)
 
     resumen(fab)
 
