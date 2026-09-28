@@ -3,7 +3,7 @@ import clickhouse_connect
 HOST = 'localhost'
 PORT = 8123
 USER = 'default'
-PASSWORD = 'password'  #
+PASSWORD = 'password'  
 DATABASE = 'fraude_pagos'
 
  
@@ -21,14 +21,13 @@ def crear_base_de_datos():
  
 def crear_tablas(client):
     tablas = {}
- 
- 
     tablas['cliente'] = '''
         CREATE TABLE IF NOT EXISTS cliente (
             cliente_id      UInt32,
             nombre_completo String,
             email           String,
-            timestamp       DateTime
+            pais            LowCardinality(String),
+            fecha_alta      DateTime
         ) ENGINE = MergeTree()
         ORDER BY cliente_id
     '''
@@ -36,13 +35,13 @@ def crear_tablas(client):
     tablas['metodo_pago'] = '''
         CREATE TABLE IF NOT EXISTS metodo_pago (
             metodo_id           UInt32,
-            cliente_id          UInt32,  
+            cliente_id          UInt32,                  
             numero_enmascarado  String,
-            tipo                String,
-            entidad_emisora     String,
+            tipo                LowCardinality(String),
+            entidad_emisora     LowCardinality(String),
             fecha_expiracion    Date,
             limite_credito      Nullable(Decimal(10, 2)),
-            estado              String
+            estado              LowCardinality(String)
         ) ENGINE = MergeTree()
         ORDER BY metodo_id
     '''
@@ -50,10 +49,10 @@ def crear_tablas(client):
     tablas['comercio'] = '''
         CREATE TABLE IF NOT EXISTS comercio (
             comercio_id       UInt32,
-            categoria_negocio String,
-            pais              String,
             nombre            String,
-            ciudad            String
+            categoria_negocio LowCardinality(String),
+            pais              LowCardinality(String),
+            ciudad            LowCardinality(String)
         ) ENGINE = MergeTree()
         ORDER BY comercio_id
     '''
@@ -61,8 +60,8 @@ def crear_tablas(client):
     tablas['canal_pago'] = '''
         CREATE TABLE IF NOT EXISTS canal_pago (
             canal_id    UInt32,
-            comercio_id UInt32,  
-            tipo        String,
+            comercio_id UInt32,                  
+            tipo        LowCardinality(String),  
             ubicacion   String
         ) ENGINE = MergeTree()
         ORDER BY canal_id
@@ -71,9 +70,9 @@ def crear_tablas(client):
     tablas['dispositivo'] = '''
         CREATE TABLE IF NOT EXISTS dispositivo (
             dispositivo_id     UInt32,
-            tipo               String,
-            modelo             String,
-            sistema_operativo  String
+            tipo               LowCardinality(String),
+            modelo             LowCardinality(String),
+            sistema_operativo  LowCardinality(String)
         ) ENGINE = MergeTree()
         ORDER BY dispositivo_id
     '''
@@ -88,80 +87,86 @@ def crear_tablas(client):
         ORDER BY patron_id
     '''
  
+    
  
     tablas['cliente_dispositivo'] = '''
         CREATE TABLE IF NOT EXISTS cliente_dispositivo (
-            cliente_id     UInt32,   
-            dispositivo_id UInt32    
+            cliente_id     UInt32, 
+            dispositivo_id UInt32,  
         ) ENGINE = MergeTree()
         ORDER BY (cliente_id, dispositivo_id)
     '''
-
+ 
  
     tablas['sesion'] = '''
         CREATE TABLE IF NOT EXISTS sesion (
             sesion_id           UInt32,
-            cliente_id          UInt32,   
-            dispositivo_id      UInt32,   
+            cliente_id          UInt32,                  
+            dispositivo_id      UInt32,                 
             ip_sesion           String,
-            ip_pais             String,
+            ip_pais             LowCardinality(String),
             proxy_vpn           Bool,
             num_intentos_login  UInt8,
-            resultado_login     String,
+            resultado_login     LowCardinality(String),
             timestamp           DateTime
         ) ENGINE = MergeTree()
-        ORDER BY (timestamp, sesion_id)
+        ORDER BY (cliente_id, timestamp)
     '''
  
     tablas['evento'] = '''
         CREATE TABLE IF NOT EXISTS evento (
             evento_id  UInt32,
-            sesion_id  UInt32,   
-            tipo       String,
+            sesion_id  UInt32,                 
+            tipo       LowCardinality(String),
             timestamp  DateTime,
             detalle    String
         ) ENGINE = MergeTree()
-        ORDER BY (timestamp, evento_id)
+        ORDER BY (sesion_id, timestamp)
     '''
  
     tablas['transaccion'] = '''
         CREATE TABLE IF NOT EXISTS transaccion (
-            transaccion_id      UInt32,
-            metodo_id           UInt32,  
-            canal_id            UInt32,  
-            dispositivo_id      UInt32,   
-            sesion_id           UInt32,   
-            timestamp           DateTime,
-            cantidad            Decimal(10, 2),
-            moneda              String,
-            tipo_operacion      String,
-            metodo_autenticacion String,
-            estado              String
+            transaccion_id       UInt32,
+            metodo_id            UInt32,                          
+            canal_id             UInt32,                          
+            dispositivo_id       Nullable(UInt32),                
+            sesion_id            Nullable(UInt32),                
+            timestamp            DateTime,
+            cantidad             Decimal(10, 2),
+            moneda               LowCardinality(String),
+            tipo_operacion       LowCardinality(String),
+            metodo_autenticacion LowCardinality(String),
+            estado               LowCardinality(String),
+            es_fraude            UInt8,                           
+            tipo_fraude          LowCardinality(Nullable(String)) 
         ) ENGINE = MergeTree()
-        ORDER BY (timestamp, transaccion_id)
+        ORDER BY (metodo_id, timestamp)
     '''
  
     tablas['devolucion'] = '''
         CREATE TABLE IF NOT EXISTS devolucion (
             devolucion_id  UInt32,
-            transaccion_id UInt32, 
-            tipo           String,
-            motivo         String,
+            transaccion_id UInt32,                  
+            tipo           LowCardinality(String),
+            motivo         LowCardinality(String),
             importe        Decimal(10, 2),
             fecha          DateTime,
-            estado         String
+            estado         LowCardinality(String)
         ) ENGINE = MergeTree()
-        ORDER BY (fecha, devolucion_id)
+        ORDER BY (transaccion_id, fecha)
     '''
  
     tablas['alerta'] = '''
         CREATE TABLE IF NOT EXISTS alerta (
-            alerta_id      UInt32,
-            transaccion_id UInt32,  
-            patron_id      UInt32,  
-            nota_riesgo    Float32,
-            fecha          DateTime,
-            estado         String
+            alerta_id       UInt32,
+            transaccion_id  UInt32,                           
+            origen          LowCardinality(String),           
+            patron_id       Nullable(UInt32),                                
+            nota_riesgo     Float32,
+            fecha           DateTime,
+            estado          LowCardinality(String),                           
+            fecha_revision  Nullable(DateTime),
+            veredicto       LowCardinality(Nullable(String))  
         ) ENGINE = MergeTree()
         ORDER BY (fecha, alerta_id)
     '''

@@ -1,0 +1,92 @@
+cliente: 2,000 filas
+comercio: 30 filas
+dispositivo: 2,600 filas
+patron: 9 filas
+metodo_pago: 3,948 filas
+canal_pago: 45 filas
+cliente_dispositivo: 4,019 filas
+sesion: 28,410 filas
+evento: 66,167 filas
+transaccion: 39,742 filas
+devolucion: 445 filas
+alerta: 0 filas
+
+Valores nulos/vacios
+cliente: sin nulos ni vacios
+comercio: sin nulos ni vacios
+dispositivo: sin nulos ni vacios
+patron: sin nulos ni vacios
+
+metodo_pago:
+  limite_credito: 1777 valores NULL -> esperado (tarjetas de débito)
+canal_pago: sin nulos ni vacios
+cliente_dispositivo: sin nulos ni vacios
+sesion: sin nulos ni vacios
+
+evento:
+  detalle: 28892 valores vacio -> esperado (eventos de login sin detalle)
+
+transaccion:
+  dispositivo_id: 8980 valores NULL -> esperado (pagos presenciales (datáfono))
+  sesion_id: 8980 valores NULL -> esperado (pagos presenciales (datáfono))
+  tipo_fraude: 39027 valores NULL -> esperado (transacciones legítimas)
+devolucion: sin nulos ni vacios
+alerta: sin nulos ni vacios
+
+Duplicados por clave primaria
+cliente: sin duplicados
+comercio: sin duplicados
+dispositivo: sin duplicados
+patron: sin duplicados
+metodo_pago: sin duplicados
+canal_pago: sin duplicados
+sesion: sin duplicados
+evento: sin duplicados
+transaccion: sin duplicados
+devolucion: sin duplicados
+alerta: sin duplicados
+cliente_dispositivo: sin duplicados
+
+Formatos inconsistentes
+cliente.email con formato invalido: 0
+transaccion.cantidad <= 0: 0
+devolucion.importe <= 0: 0
+alerta.nota_riesgo fuera de [0,1]: 0
+metodo_pago ya caducados: 0
+transacciones con tarjeta ya caducada en esa fecha: 0
+transacciones anteriores al alta del cliente: 0
+sesiones que empiezan despues de su pago: 0
+devoluciones mayores que la compra: 0
+devoluciones anteriores a la compra: 0
+fraude sin tipo_fraude / legitima con tipo_fraude: 0
+
+Integridad referencial
+  metodo_pago.cliente_id -> cliente: OK
+  canal_pago.comercio_id -> comercio: OK
+  cliente_dispositivo.cliente_id -> cliente: OK
+  cliente_dispositivo.dispositivo_id -> dispositivo: OK
+  sesion.dispositivo_id -> dispositivo: OK
+  evento.sesion_id -> sesion: OK
+  transaccion.dispositivo_id -> dispositivo: OK
+  transaccion.metodo_id -> metodo_pago: OK
+  transaccion.sesion_id -> sesion: OK
+  transaccion.canal_id -> canal_pago: OK
+  sesion.cliente_id -> cliente: OK
+  alerta.transaccion_id -> transaccion: OK
+  alerta.patron_id -> patron: OK
+  devolucion.transaccion_id -> transaccion: OK
+
+ Fechas fuera de rango (futuras) 
+  transaccion.timestamp con fecha futura: OK
+  sesion.timestamp con fecha futura: OK
+  evento.timestamp con fecha futura: OK
+  alerta.fecha con fecha futura: OK
+  devolucion.fecha con fecha futura: OK
+
+Importes atipicos (outliers)
+  Media de importe: 62.02€
+  Desviacion tipica: 332.03€
+  Umbral : 1058.12€
+  Transacciones por encima del umbral: 113
+  Nota: son valores atipicos, NO errores. No se eliminan: en deteccion de fraude
+  los atipicos son justo lo que buscamos. Se analizaran en el Hito 2.
