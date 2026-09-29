@@ -380,7 +380,7 @@ def caso_pico_gasto(fab, rng, c):
     sid = crear_sesion(fab, rng, c["cid"], c["disp"], antes(rng, c["momento"]), pais_ip=c["pais"],
                        proxy_vpn=rng.random() < 0.15, intentos=int(rng.choice([1, 2], p=[0.8, 0.2])))
     crear_evento(fab, sid, "intento_pago", c["momento"], "pago iniciado")
-    cantidad = np.exp(c["mu"]) * float(rng.uniform(4, 20))  # relativo al cliente, no un valor fijo
+    cantidad = np.exp(c["mu"]) * float(rng.uniform(4, 20))  
     crear_transaccion(fab, sid, c["metodo"], c["canal"], c["disp"], c["momento"], cantidad,
                       metodo_auth=auth_online(rng), es_fraude=1)
 
@@ -412,7 +412,7 @@ def caso_smurfing(fab, rng, c):
 
 def caso_account_takeover(fab, rng, c):
     disp = c["disp_nuevo"] if rng.random() < 0.6 else c["disp"]
-    pais = str(rng.choice(PAISES_RAROS)) if rng.random() < 0.6 else c["pais"]  # a veces proxy residencial
+    pais = str(rng.choice(PAISES_RAROS)) if rng.random() < 0.6 else c["pais"]  
     sid = crear_sesion(fab, rng, c["cid"], disp, antes(rng, c["momento"]), pais_ip=pais,
                        proxy_vpn=rng.random() < 0.6, intentos=int(rng.integers(1, 8)))
     t = c["momento"] + timedelta(minutes=float(rng.uniform(0.5, 10)))
@@ -429,7 +429,7 @@ def caso_ip_sospechosa(fab, rng, c):
     sid = crear_sesion(fab, rng, c["cid"], c["disp"], antes(rng, c["momento"]), pais_ip=str(rng.choice(PAISES_RAROS)),
                        proxy_vpn=rng.random() < 0.7)
     crear_evento(fab, sid, "intento_pago", c["momento"], "pago iniciado")
-    cantidad = np.exp(c["mu"]) * float(rng.uniform(1, 6))  # importes normales: difícil
+    cantidad = np.exp(c["mu"]) * float(rng.uniform(1, 6))  
     crear_transaccion(fab, sid, c["metodo"], c["canal"], c["disp"], c["momento"], cantidad,
                       metodo_auth=auth_online(rng), es_fraude=1)
 
@@ -505,8 +505,7 @@ def generar_fraude(fab, rng, fecha_inicio, fecha_fin, clientes_ids, perfiles, me
                 "metodo": int(rng.choice(metodos_por_cliente[cid])),
                 "disp": int(rng.choice(disp_por_cliente[cid])),
                 "disp_nuevo": elegir_dispositivo_nuevo(rng, cid, disp_por_cliente, todos_dispositivos),
-                "canal": int(rng.choice(canales_online)),  # el fraude se genera online
-                # hasta 30 días antes del final: los casos que encadenan compras varios días no se salen del periodo
+                "canal": int(rng.choice(canales_online)),  
                 "momento": hora_fraude(rng, momento_aleatorio(rng, fecha_inicio + timedelta(days=15),
                                                               fecha_fin - timedelta(days=30))),
                 "pais": perfiles[cid]["pais"],
@@ -536,13 +535,13 @@ def cargar_en_clickhouse(fab):
         host=HOST, port=PORT, username=USER, password=PASSWORD, database=DATABASE
     )
     for tabla in ORDEN_INSERCION:
-        client.command(f"TRUNCATE TABLE IF EXISTS {tabla}")  # evita duplicados si se re-ejecuta
+        client.command(f"TRUNCATE TABLE IF EXISTS {tabla}")  
         filas = fab.tablas[tabla]
         if not filas:
             print(f"  {tabla}: vacía")
             continue
         columnas = list(filas[0].keys())
-        datos = [[fila[col] for col in columnas] for fila in filas]  # los None se guardan como NULL
+        datos = [[fila[col] for col in columnas] for fila in filas]  
         client.insert(tabla, datos, column_names=columnas)
         print(f"  {tabla}: {len(filas):,} filas cargadas")
 
