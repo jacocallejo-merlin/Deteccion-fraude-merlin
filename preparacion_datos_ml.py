@@ -1,0 +1,137 @@
+import os
+
+import clickhouse_connect
+import joblib
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
+
+HOST = 'localhost'
+PORT = 8123
+USER = 'default'
+PASSWORD = 'password'
+DATABASE = 'fraude_pagos'
+
+PROPORCION_TRAIN = 0.8      # el 80 % más antiguo para entrenar, el 20 % más reciente para test
+CARPETA_SALIDA = 'datos_ml'
+
+
+def cargar_datos():
+    client = clickhouse_connect.get_client(
+        host=HOST, port=PORT, username=USER, password=PASSWORD, database=DATABASE
+    )
+    df = client.query_df('SELECT * FROM features_transaccion')
+    df = df.sort_values('timestamp').reset_index(drop=True)   
+
+    print(f'Filas: {len(df):,}   Columnas: {len(df.columns)}')
+    print(f'Ordenado por fecha: {df["timestamp"].is_monotonic_increasing}')
+    return df
+
+
+
+# NO entran al modelo, pero se guardan aparte (para dividir por fecha y para evaluar)
+IDENTIFICADORES = ['transaccion_id', 'cliente_id', 'metodo_id', 'timestamp']
+ETIQUETA = ['es_fraude', 'tipo_fraude']
+
+
+# SÍ entran al modelo
+VARIABLES_MODELO = [
+    # importe
+    'log_importe', 'pct_limite_credito',
+    # tiempo
+    'hora', 'dia_semana', 'es_finde', 'es_madrugada', 'dias_desde_alta',
+    # categóricas convertidas a 0/1
+    'es_online', 'canal_app', 'canal_web', 'es_credito', 'rechazada', 'sin_autenticacion',
+    # sesión
+    'proxy_vpn', 'num_intentos_login', 'ip_extranjera', 'dispositivo_nuevo',
+    'n_eventos_sesion', 'cambio_dato_sesion', 'min_seg_entre_eventos',
+    # velocidad de la tarjeta
+    'n_tarjeta_10min', 'importe_tarjeta_10min', 'n_rechazadas_tarjeta_1h',
+    'n_tarjeta_24h', 'seg_desde_anterior_tarjeta',
+    # historial del cliente
+    'n_previas_cliente', 'z_importe_cliente', 'ratio_importe_habitual',
+    'n_devoluciones_30d',
+]
+
+
+def seleccionar_variables(df):
+    X = df[VARIABLES_MODELO].astype(float)
+    info = df[IDENTIFICADORES + ETIQUETA]
+
+    print(f'\nVariables del modelo: {X.shape[1]}')
+    print(f'Columnas guardadas aparte: {list(info.columns)}')
+    usadas = set(VARIABLES_MODELO + IDENTIFICADORES + ETIQUETA)
+    print(f'Columnas descartadas: {[c for c in df.columns if c not in usadas]}')
+    return X, info
+
+
+
+VARIABLES_LOG = ['seg_desde_anterior_tarjeta', 'min_seg_entre_eventos',
+                 'importe_tarjeta_10min', 'ratio_importe_habitual']
+
+
+def transformar(X):
+    X = X.copy()
+
+    for col in VARIABLES_LOG:
+        X[col] = np.log1p(X[col])
+
+    X['hora_sin'] = np.sin(2 * np.pi * X['hora'] / 24)
+    X['hora_cos'] = np.cos(2 * np.pi * X['hora'] / 24)
+    X = X.drop(columns=['hora'])  
+
+    print(f'\nVariables tras transformar: {X.shape[1]}')
+    print(f'Valores infinitos: {np.isinf(X).sum().sum()}   Nulos: {X.isna().sum().sum()}')
+    return X
+
+
+def dividir(X, info):
+    corte = int(len(X) * PROPORCION_TRAIN)
+
+    X_train, X_test = X.iloc[:corte], X.iloc[corte:]
+    info_train, info_test = info.iloc[:corte], info.iloc[corte:]
+
+    print(f'\nTrain: {len(X_train):,} filas, hasta {info_train["timestamp"].max()}')
+    print(f'Test:  {len(X_test):,} filas, desde {info_test["timestamp"].min()}')
+    print(f'Fraude en train: {info_train["es_fraude"].mean() * 100:.2f} % '
+          f'({int(info_train["es_fraude"].sum())} transacciones)')
+    print(f'Fraude en test:  {info_test["es_fraude"].mean() * 100:.2f} % '
+          f'({int(info_test["es_fraude"].sum())} transacciones)')
+    return X_train, X_test, info_train, info_test
+
+
+def escalar(X_train, X_test):
+    escalador = StandardScaler()
+    escalador.fit(X_train)               
+
+    X_train_esc = pd.DataFrame(escalador.transform(X_train), columns=X_train.columns, index=X_train.index)
+    X_test_esc = pd.DataFrame(escalador.transform(X_test), columns=X_test.columns, index=X_test.index)
+
+    # En train la media sale ~0 y la desviación ~1 
+    print(f'\nTrain escalado: media {X_train_esc.values.mean():+.3f}, desviación {X_train_esc.values.std():.3f}')
+    print(f'Test escalado:  media {X_test_esc.values.mean():+.3f}, desviación {X_test_esc.values.std():.3f}')
+    return X_train_esc, X_test_esc, escalador
+
+
+
+def guardar(X_train, X_test, info_train, info_test, escalador):
+    os.makedirs(CARPETA_SALIDA, exist_ok=True)
+    X_train.to_parquet(os.path.join(CARPETA_SALIDA, 'X_train.parquet'))
+    X_test.to_parquet(os.path.join(CARPETA_SALIDA, 'X_test.parquet'))
+    info_train.to_parquet(os.path.join(CARPETA_SALIDA, 'info_train.parquet'))
+    info_test.to_parquet(os.path.join(CARPETA_SALIDA, 'info_test.parquet'))
+    joblib.dump(escalador, os.path.join(CARPETA_SALIDA, 'escalador.joblib')) 
+    print(f'\nGuardado en la carpeta "{CARPETA_SALIDA}/": X_train, X_test, info_train, info_test y escalador')
+
+
+def main():
+    df = cargar_datos()
+    X, info = seleccionar_variables(df)
+    X = transformar(X)
+    X_train, X_test, info_train, info_test = dividir(X, info)
+    X_train, X_test, escalador = escalar(X_train, X_test)
+    guardar(X_train, X_test, info_train, info_test, escalador)
+
+
+if __name__ == '__main__':
+    main()
