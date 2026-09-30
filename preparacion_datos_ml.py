@@ -12,7 +12,7 @@ USER = 'default'
 PASSWORD = 'password'
 DATABASE = 'fraude_pagos'
 
-PROPORCION_TRAIN = 0.8      # el 80 % más antiguo para entrenar, el 20 % más reciente para test
+PROPORCION_TRAIN = 0.7      # el 70 % más antiguo para entrenar, el 30 % más reciente para test
 CARPETA_SALIDA = 'datos_ml'
 
 
@@ -48,6 +48,7 @@ VARIABLES_MODELO = [
     # velocidad de la tarjeta
     'n_tarjeta_10min', 'importe_tarjeta_10min', 'n_rechazadas_tarjeta_1h',
     'n_tarjeta_24h', 'seg_desde_anterior_tarjeta',
+    'n_tarjeta_1h', 'n_tarjetas_cliente_24h',
     # historial del cliente
     'n_previas_cliente', 'z_importe_cliente', 'ratio_importe_habitual',
     'n_devoluciones_30d',

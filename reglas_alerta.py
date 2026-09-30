@@ -22,7 +22,7 @@ REGLAS = [
 ]
  
 
-# Detectar patrnes de smurfing, cuantas compras realizo la misma tarjeta en 24h
+# Detectar patrones de smurfing, cuantas compras realizo la misma tarjeta en 24h
 SQL_BASE = '''
     SELECT *,
            countIf(importe >= 850 AND importe < 1000) OVER (
