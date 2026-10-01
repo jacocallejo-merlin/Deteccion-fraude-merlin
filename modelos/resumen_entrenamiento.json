@@ -1,0 +1,43 @@
+{
+  "iforest": {
+    "params": {
+      "n_estimators": 100,
+      "max_samples": 4096,
+      "max_features": 0.5
+    },
+    "pr_auc_val": 0.48775875067826174,
+    "roc_auc_val": 0.9185823432398775,
+    "recall_top1%_val": 0.2937062937062937,
+    "pr_auc_val_media_semillas": 0.42794816518509987,
+    "pr_auc_val_std_semillas": 0.022438162334825255,
+    "combinaciones_probadas": 18,
+    "test_sobre_p99_train_%": 0.82
+  },
+  "kmeans": {
+    "params": {
+      "k": 2,
+      "distancia": "relativa"
+    },
+    "pr_auc_val": 0.6599398856761738,
+    "roc_auc_val": 0.9680887420613448,
+    "recall_top1%_val": 0.34965034965034963,
+    "pr_auc_val_media_semillas": 0.659982829191906,
+    "pr_auc_val_std_semillas": 3.0365651182148952e-05,
+    "combinaciones_probadas": 16,
+    "test_sobre_p99_train_%": 0.88
+  },
+  "ocsvm": {
+    "params": {
+      "gamma_factor": 1.0,
+      "nu": 0.05,
+      "gamma": 0.022307203078299143
+    },
+    "pr_auc_val": 0.5369371110800998,
+    "roc_auc_val": 0.9450941505736027,
+    "recall_top1%_val": 0.32867132867132864,
+    "pr_auc_val_media_semillas": 0.5227977251267871,
+    "pr_auc_val_std_semillas": 0.006531279702692192,
+    "combinaciones_probadas": 15,
+    "test_sobre_p99_train_%": 0.99
+  }
+}
