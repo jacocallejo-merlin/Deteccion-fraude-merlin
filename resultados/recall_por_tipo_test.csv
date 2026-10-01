@@ -1,0 +1,10 @@
+,n,iforest,kmeans,ocsvm
+dispositivo_nuevo,58,0.0,1.7,3.4
+account_takeover,33,69.7,90.9,63.6
+devolucion_abusiva,15,0.0,13.3,13.3
+bust_out,11,63.6,100.0,36.4
+pico_gasto,5,0.0,0.0,0.0
+smurfing,5,0.0,20.0,40.0
+card_testing,5,100.0,60.0,100.0
+ip_sospechosa,4,0.0,0.0,0.0
+bot,1,0.0,0.0,0.0
