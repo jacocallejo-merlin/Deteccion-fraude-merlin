@@ -1,4 +1,3 @@
-import os
 import clickhouse_connect
 
 HOST = 'localhost'
@@ -7,7 +6,7 @@ USER = 'default'
 PASSWORD = 'password'
 DATABASE = 'fraude_pagos'
 
-SQL_CREAR = '''
+SQL_TRANSACCIONES = '''
 CREATE TABLE transacciones_enriquecidas
 ENGINE = MergeTree()
 ORDER BY (metodo_id, timestamp)
@@ -44,27 +43,67 @@ LEFT JOIN sesion      AS s  ON t.sesion_id      = s.sesion_id
 SETTINGS join_use_nulls = 1
 '''
 
+SQL_ALERTAS = '''
+CREATE OR REPLACE VIEW alertas_enriquecidas AS
+SELECT
+    -- alerta
+    a.alerta_id AS alerta_id, a.fecha AS fecha_alerta, a.origen AS origen,
+    a.nota_riesgo AS nota_riesgo, a.estado AS estado,
+    -- patrón que la disparó (NULL si la genera un modelo)
+    a.patron_id AS patron_id, p.nombre AS patron_nombre,
+    -- revisión humana (NULL mientras está pendiente)
+    a.analista_id AS analista_id, an.nombre AS analista_nombre, an.nivel AS analista_nivel,
+    a.fecha_revision AS fecha_revision,
+    dateDiff('minute', a.fecha, a.fecha_revision) AS minutos_hasta_revision,
+    a.veredicto AS veredicto, a.comentario AS comentario,
+    -- transacción alertada (es_fraude solo para medir aciertos y falsos positivos)
+    a.transaccion_id AS transaccion_id, t.timestamp AS fecha_transaccion,
+    t.cantidad AS cantidad, t.es_fraude AS es_fraude, t.tipo_fraude AS tipo_fraude
+FROM alerta AS a
+LEFT JOIN transaccion AS t  ON a.transaccion_id = t.transaccion_id
+LEFT JOIN patron      AS p  ON a.patron_id      = p.patron_id
+LEFT JOIN analista    AS an ON a.analista_id    = an.analista_id
+SETTINGS join_use_nulls = 1
+'''
+
+
 def main():
     client = clickhouse_connect.get_client(
         host=HOST, port=PORT, username=USER, password=PASSWORD, database=DATABASE
     )
-    client.command('DROP TABLE IF EXISTS transacciones_enriquecidas')
-    client.command(SQL_CREAR)
 
-    n_trans = client.query('SELECT count() FROM transaccion').result_rows[0][0]
-    n_enriq = client.query('SELECT count() FROM transacciones_enriquecidas').result_rows[0][0]
-    sin_cliente = client.query(
-        'SELECT countIf(cliente_id IS NULL) FROM transacciones_enriquecidas').result_rows[0][0]
-    presenciales = client.query(
-        "SELECT countIf(canal_tipo = 'datafono'), countIf(canal_tipo = 'datafono' AND ip_pais IS NULL) "
-        'FROM transacciones_enriquecidas').result_rows[0]
+    client.command('DROP TABLE IF EXISTS transacciones_enriquecidas')
+    client.command(SQL_TRANSACCIONES)
+
+    n_trans = client.command('SELECT count() FROM transaccion')
+    n_enriq = client.command('SELECT count() FROM transacciones_enriquecidas')
+    sin_cliente, sin_comercio, presenciales, presenciales_null, online_sin_sesion = client.query('''
+        SELECT countIf(cliente_id IS NULL),
+               countIf(comercio_id IS NULL),
+               countIf(canal_tipo = 'datafono'),
+               countIf(canal_tipo = 'datafono' AND sesion_id IS NULL AND ip_pais IS NULL),
+               countIf(canal_tipo != 'datafono' AND (sesion_id IS NULL OR ip_pais IS NULL))
+        FROM transacciones_enriquecidas
+    ''').result_rows[0]
 
     print('Tabla "transacciones_enriquecidas" creada.')
-    print(f'  Filas en transaccion:                 {n_trans:,}')
-    print(f'  Filas en transacciones_enriquecidas:  {n_enriq:,}  '
+    print(f'  Filas en transaccion:                  {n_trans:,}')
+    print(f'  Filas en transacciones_enriquecidas:   {n_enriq:,}  '
           f'{"OK" if n_trans == n_enriq else "ERROR: no coinciden"}')
-    print(f'  Transacciones sin cliente (debe ser 0): {sin_cliente}')
-    print(f'  Presenciales: {presenciales[0]:,} (con sesión a NULL: {presenciales[1]:,})')
+    print(f'  Sin cliente (debe ser 0):              {sin_cliente}')
+    print(f'  Sin comercio (debe ser 0):             {sin_comercio}')
+    print(f'  Presenciales: {presenciales:,} (con sesión a NULL: {presenciales_null:,})  '
+          f'{"OK" if presenciales == presenciales_null else "REVISAR"}')
+    print(f'  Online sin sesión (debe ser 0):        {online_sin_sesion}')
+
+    client.command(SQL_ALERTAS)
+    n_alertas = client.command('SELECT count() FROM alerta')
+    n_vista = client.command('SELECT count() FROM alertas_enriquecidas')
+    print('\nVista "alertas_enriquecidas" creada.')
+    print(f'  Filas en alerta: {n_alertas:,} | en la vista: {n_vista:,}  '
+          f'{"OK" if n_alertas == n_vista else "ERROR: no coinciden"}')
+    if n_alertas == 0:
+        print('  (alerta está vacía: se rellenará con las reglas y modelos de los siguientes pasos)')
 
 
 if __name__ == '__main__':

@@ -43,8 +43,6 @@
 - En test baja respecto a validación (0.66 a 0.50). Es en parte normal (al elegir el mejor de varios, su nota de validación sale algo inflada) y en parte las transacciones recientes son algo distintas.
 - Los resultados no dependen del azar interno de los modelos: con distintas semillas salen prácticamente iguales.
 - Las etiquetas no son perfectas: algunas "falsas alarmas" podrían ser fraudes que nadie confirmó, así que la precisión real puede ser algo mayor.
-
-## En el día a día
 - Revisar el 1 % supone unas 1.3 alertas al día.
 - Revisando el 5 % se llegaría al 85 % del fraude, pero solo 20 de cada 100 revisiones serían fraude.
 - En el periodo de test el umbral marcó el 0.62 % en lugar del 1 % previsto: las transacciones recientes son algo distintas y el umbral habría que reajustarlo cada cierto tiempo.
