@@ -8,9 +8,7 @@ DATABASE = 'fraude_pagos'
 
  
 def get_client(database=None):
-    return clickhouse_connect.get_client(
-        host=HOST, port=PORT, username=USER, password=PASSWORD, database=database
-    )
+    return clickhouse_connect.get_client(host=HOST, port=PORT, username=USER, password=PASSWORD, database=database )
  
  
 def crear_base_de_datos():
@@ -165,10 +163,25 @@ def crear_tablas(client):
             nota_riesgo     Float32,
             fecha           DateTime,
             estado          LowCardinality(String),                           
+            analista_id     Nullable(UInt32),
             fecha_revision  Nullable(DateTime),
-            veredicto       LowCardinality(Nullable(String))  
+            veredicto       LowCardinality(Nullable(String)),
+            comentario      Nullable(String)
         ) ENGINE = MergeTree()
         ORDER BY (fecha, alerta_id)
+    '''
+
+    
+    tablas['analista'] = '''
+        CREATE TABLE IF NOT EXISTS analista (
+            analista_id  UInt32,
+            nombre       String,
+            email        String,
+            nivel        LowCardinality(String),
+            fecha_alta   DateTime,
+            activo       Bool
+        ) ENGINE = MergeTree()
+        ORDER BY analista_id
     '''
  
     for nombre, ddl in tablas.items():
