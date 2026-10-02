@@ -53,7 +53,7 @@ class Fabrica:
         self.tablas = {
             "cliente": [], "metodo_pago": [], "comercio": [], "canal_pago": [],
             "dispositivo": [], "patron": [], "cliente_dispositivo": [],
-            "sesion": [], "evento": [], "transaccion": [], "devolucion": [], "alerta": [],
+            "sesion": [], "evento": [], "transaccion": [], "devolucion": [], "analista": [], "alerta": [],
         }
 
     def siguiente_id(self, tabla):
@@ -154,6 +154,20 @@ def generar_patrones(fab):
         fab.tablas["patron"].append({
             "patron_id": fab.siguiente_id("patron"), "nombre": nombre,
             "descripcion": descripcion, "condicion": condicion,
+        })
+
+
+def generar_analistas(fab, rng, fecha_inicio, n=6):
+    for _ in range(n):
+        aid = fab.siguiente_id("analista")
+        nombre = fake.name()
+        fab.tablas["analista"].append({
+            "analista_id": aid,
+            "nombre": nombre,
+            "email": f"{nombre.lower().replace(' ', '.')}@antifraude.com",
+            "nivel": str(rng.choice(["junior", "senior"], p=[0.6, 0.4])),
+            "fecha_alta": fecha_inicio - timedelta(days=int(rng.integers(30, 1000))),
+            "activo": True,
         })
 
 
@@ -526,7 +540,7 @@ def generar_fraude(fab, rng, fecha_inicio, fecha_fin, clientes_ids, perfiles, me
 
 ORDEN_INSERCION = ["cliente", "comercio", "dispositivo", "patron", "metodo_pago",
                    "canal_pago", "cliente_dispositivo", "sesion", "evento",
-                   "transaccion", "devolucion", "alerta"]
+                   "transaccion", "devolucion", "analista", "alerta"]
 
 
 def cargar_en_clickhouse(fab):
@@ -605,14 +619,13 @@ def main():
                    disp_por_cliente, canales_por_comercio, canal_tipo, comercios_ids,
                    todos_dispositivos, proporcion_fraude)
 
+    generar_analistas(fab, rng, fecha_inicio)
+
     resumen(fab)
 
-    if args.dry_run:
-        print("\n--dry-run: no se ha insertado nada en ClickHouse.")
-    else:
-        print("\nCargando en ClickHouse...")
-        cargar_en_clickhouse(fab)
-        print("Listo.")
+    print("\nCargando en ClickHouse...")
+    cargar_en_clickhouse(fab)
+    print("Listo.")
 
 
 if __name__ == "__main__":

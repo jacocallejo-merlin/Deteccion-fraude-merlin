@@ -472,5 +472,7 @@ def main():
         fh.write('# Conclusiones: detección de anomalías con modelos no supervisados\n\n')
         fh.write('\n'.join(lineas) + '\n')
 
+
 if __name__ == '__main__':
     main()
+
