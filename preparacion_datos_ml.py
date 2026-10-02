@@ -12,7 +12,7 @@ USER = 'default'
 PASSWORD = 'password'
 DATABASE = 'fraude_pagos'
 
-PROPORCION_TRAIN = 0.7      # el 70 % más antiguo para entrenar, el 30 % más reciente para test
+PROPORCION_TRAIN = 0.7     
 CARPETA_SALIDA = 'datos_ml'
 
 
@@ -21,7 +21,7 @@ def cargar_datos():
         host=HOST, port=PORT, username=USER, password=PASSWORD, database=DATABASE
     )
     df = client.query_df('SELECT * FROM features_transaccion')
-    df = df.sort_values('timestamp').reset_index(drop=True)   
+    df = df.sort_values('timestamp').reset_index(drop=True)
 
     print(f'Filas: {len(df):,}   Columnas: {len(df.columns)}')
     print(f'Ordenado por fecha: {df["timestamp"].is_monotonic_increasing}')
@@ -29,7 +29,6 @@ def cargar_datos():
 
 
 
-# NO entran al modelo, pero se guardan aparte (para dividir por fecha y para evaluar)
 IDENTIFICADORES = ['transaccion_id', 'cliente_id', 'metodo_id', 'timestamp']
 ETIQUETA = ['es_fraude', 'tipo_fraude']
 
@@ -70,6 +69,8 @@ def seleccionar_variables(df):
 VARIABLES_LOG = ['seg_desde_anterior_tarjeta', 'min_seg_entre_eventos',
                  'importe_tarjeta_10min', 'ratio_importe_habitual']
 
+MIN_COMPRAS_HISTORIAL = 5   
+TOPE_DIAS_ALTA = 90         
 
 def transformar(X):
     X = X.copy()
@@ -79,7 +80,13 @@ def transformar(X):
 
     X['hora_sin'] = np.sin(2 * np.pi * X['hora'] / 24)
     X['hora_cos'] = np.cos(2 * np.pi * X['hora'] / 24)
-    X = X.drop(columns=['hora'])  
+    X['dia_sin'] = np.sin(2 * np.pi * (X['dia_semana'] - 1) / 7)
+    X['dia_cos'] = np.cos(2 * np.pi * (X['dia_semana'] - 1) / 7)
+
+    X['tiene_historial'] = (X['n_previas_cliente'] >= MIN_COMPRAS_HISTORIAL).astype(float)
+    X['dias_desde_alta_tope'] = X['dias_desde_alta'].clip(upper=TOPE_DIAS_ALTA)
+
+    X = X.drop(columns=['hora', 'dia_semana', 'n_previas_cliente', 'dias_desde_alta'])
 
     print(f'\nVariables tras transformar: {X.shape[1]}')
     print(f'Valores infinitos: {np.isinf(X).sum().sum()}   Nulos: {X.isna().sum().sum()}')
@@ -98,19 +105,33 @@ def dividir(X, info):
           f'({int(info_train["es_fraude"].sum())} transacciones)')
     print(f'Fraude en test:  {info_test["es_fraude"].mean() * 100:.2f} % '
           f'({int(info_test["es_fraude"].sum())} transacciones)')
+
+    tipos = pd.DataFrame({'train': info_train['tipo_fraude'].value_counts(),
+                          'test': info_test['tipo_fraude'].value_counts()}).fillna(0).astype(int)
+    print(f'\nTransacciones de cada tipo de fraude:\n{tipos}')
+    faltan = tipos.index[(tipos['train'] == 0) | (tipos['test'] == 0)].tolist()
+    if faltan:
+        print(f'¡OJO! Tipos sin casos en train o en test: {faltan}')
     return X_train, X_test, info_train, info_test
 
 
 def escalar(X_train, X_test):
     escalador = StandardScaler()
-    escalador.fit(X_train)               
+    escalador.fit(X_train)
 
     X_train_esc = pd.DataFrame(escalador.transform(X_train), columns=X_train.columns, index=X_train.index)
     X_test_esc = pd.DataFrame(escalador.transform(X_test), columns=X_test.columns, index=X_test.index)
 
-    # En train la media sale ~0 y la desviación ~1 
+   
     print(f'\nTrain escalado: media {X_train_esc.values.mean():+.3f}, desviación {X_train_esc.values.std():.3f}')
     print(f'Test escalado:  media {X_test_esc.values.mean():+.3f}, desviación {X_test_esc.values.std():.3f}')
+
+    deriva = X_test_esc.mean()
+    deriva = deriva[deriva.abs() > 0.5]
+    if len(deriva):
+        print(f'¡OJO! Variables con deriva entre train y test:\n{deriva.round(2)}')
+    else:
+        print('Sin deriva: ninguna variable se aleja más de 0,5 desviaciones entre train y test')
     return X_train_esc, X_test_esc, escalador
 
 
@@ -121,7 +142,7 @@ def guardar(X_train, X_test, info_train, info_test, escalador):
     X_test.to_parquet(os.path.join(CARPETA_SALIDA, 'X_test.parquet'))
     info_train.to_parquet(os.path.join(CARPETA_SALIDA, 'info_train.parquet'))
     info_test.to_parquet(os.path.join(CARPETA_SALIDA, 'info_test.parquet'))
-    joblib.dump(escalador, os.path.join(CARPETA_SALIDA, 'escalador.joblib')) 
+    joblib.dump(escalador, os.path.join(CARPETA_SALIDA, 'escalador.joblib'))
     print(f'\nGuardado en la carpeta "{CARPETA_SALIDA}/": X_train, X_test, info_train, info_test y escalador')
 
 

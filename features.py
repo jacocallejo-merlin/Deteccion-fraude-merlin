@@ -1,4 +1,3 @@
-import os
 import clickhouse_connect
 
 HOST = 'localhost'
@@ -28,7 +27,9 @@ sesion_hasta_pago AS (
     SELECT t.transaccion_id AS transaccion_id,
            countIf(e.timestamp <= t.timestamp) AS n_eventos_sesion,
            toUInt8(countIf(e.tipo = 'cambio_dato' AND e.timestamp <= t.timestamp) > 0) AS cambio_dato_sesion,
-           minIf(e.seg_desde_evento_anterior, e.n_evento > 1 AND e.timestamp <= t.timestamp)
+           -- minIfOrNull: con un solo evento antes del pago no hay intervalo -> NULL (luego 3600).
+           -- minIf devolvería 0 y la sesión parecería un bot.
+           minIfOrNull(e.seg_desde_evento_anterior, e.n_evento > 1 AND e.timestamp <= t.timestamp)
                AS min_seg_entre_eventos
     FROM transaccion AS t
     INNER JOIN eventos AS e ON t.sesion_id = e.sesion_id
@@ -55,12 +56,12 @@ ventanas AS (
         transaccion_id,
         -- velocidad de la tarjeta (card testing, bots, smurfing)
         count() OVER tarjeta_10min                                   AS n_tarjeta_10min,
-        count() OVER tarjeta_1h                                      AS n_tarjeta_1h,             
+        count() OVER tarjeta_1h                                      AS n_tarjeta_1h,
         sum(toFloat64(cantidad)) OVER tarjeta_10min                  AS importe_tarjeta_10min,
         countIf(estado = 'rechazada') OVER tarjeta_1h                AS n_rechazadas_tarjeta_1h,
         count() OVER tarjeta_24h                                     AS n_tarjeta_24h,
         row_number() OVER tarjeta_orden                              AS n_orden_tarjeta,
-        uniqExact(metodo_id) OVER cliente_24h                        AS n_tarjetas_cliente_24h,  
+        uniqExact(metodo_id) OVER cliente_24h                        AS n_tarjetas_cliente_24h,
         dateDiff('second', lagInFrame(timestamp) OVER tarjeta_orden_hasta_actual, timestamp)
                                                                      AS seg_desde_anterior_bruto,
         -- historial del cliente (pico de gasto): solo transacciones ANTERIORES
@@ -77,28 +78,28 @@ ventanas AS (
                                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
         cliente_previas AS (PARTITION BY cliente_id ORDER BY timestamp
                             ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
-        -- NUEVA: por CLIENTE (no por tarjeta), 24 h anteriores
-        cliente_24h   AS (PARTITION BY cliente_id ORDER BY timestamp RANGE BETWEEN 86400 PRECEDING AND 1 PRECEDING)
+        -- por CLIENTE (no por tarjeta): 24 h anteriores INCLUIDA la transacción actual,
+        -- para que pagar con una 2.ª tarjeta distinta ya cuente 2
+        cliente_24h   AS (PARTITION BY cliente_id ORDER BY timestamp RANGE BETWEEN 86400 PRECEDING AND CURRENT ROW)
 )
 SELECT
     -- identificadores y etiqueta (la etiqueta NUNCA se usa como variable)
     te.transaccion_id AS transaccion_id, te.timestamp AS timestamp,
-    assumeNotNull(te.cliente_id) AS cliente_id, te.metodo_id AS metodo_id,  
+    assumeNotNull(te.cliente_id) AS cliente_id, te.metodo_id AS metodo_id,
     te.es_fraude AS es_fraude, te.tipo_fraude AS tipo_fraude,
- 
+
     -- IMPORTE: tipo Decimal -> Float64 y logaritmo por la asimetría
     toFloat64(te.cantidad)                                    AS importe,
     log1p(toFloat64(te.cantidad))                             AS log_importe,
-    if(te.limite_credito IS NULL, 0, toFloat64(te.cantidad) / toFloat64(te.limite_credito))
-                                                              AS pct_limite_credito,
- 
+    if(te.limite_credito IS NULL, 0, toFloat64(te.cantidad) / toFloat64(te.limite_credito))  AS pct_limite_credito,
+
     -- FECHAS -> variables de tiempo
     toHour(te.timestamp)                                      AS hora,
     toDayOfWeek(te.timestamp)                                 AS dia_semana,
     toUInt8(toDayOfWeek(te.timestamp) >= 6)                   AS es_finde,
     toUInt8(toHour(te.timestamp) < 6)                         AS es_madrugada,
     dateDiff('day', te.fecha_alta, te.timestamp)              AS dias_desde_alta,
- 
+
     -- CATEGÓRICAS -> indicadores 0/1
     -- (CAST a UInt8: las comparaciones sobre columnas LowCardinality heredarían ese tipo)
     toUInt8(te.sesion_id IS NOT NULL)                         AS es_online,
@@ -107,7 +108,7 @@ SELECT
     CAST(ifNull(te.metodo_tipo = 'credito', 0), 'UInt8')                       AS es_credito,
     CAST(ifNull(te.estado = 'rechazada', 0), 'UInt8')                          AS rechazada,
     CAST(ifNull(te.metodo_autenticacion = 'ninguno', 0), 'UInt8')              AS sin_autenticacion,
- 
+
     -- SESIÓN: los NULL de los pagos presenciales pasan a 0 (es_online ya indica que no hay sesión)
     toUInt8(ifNull(te.proxy_vpn, false))                      AS proxy_vpn,
     ifNull(te.num_intentos_login, 0)                          AS num_intentos_login,
@@ -116,16 +117,16 @@ SELECT
     ifNull(s.n_eventos_sesion, 0)                             AS n_eventos_sesion,
     ifNull(s.cambio_dato_sesion, 0)                           AS cambio_dato_sesion,
     ifNull(s.min_seg_entre_eventos, 3600)                     AS min_seg_entre_eventos,
- 
+
     -- VELOCIDAD DE LA TARJETA (transacciones rápidas repetitivas)
     v.n_tarjeta_10min                                         AS n_tarjeta_10min,
-    v.n_tarjeta_1h                                            AS n_tarjeta_1h,             
+    v.n_tarjeta_1h                                            AS n_tarjeta_1h,
     ifNull(v.importe_tarjeta_10min, 0)                        AS importe_tarjeta_10min,
     v.n_rechazadas_tarjeta_1h                                 AS n_rechazadas_tarjeta_1h,
     v.n_tarjeta_24h                                           AS n_tarjeta_24h,
     if(v.n_orden_tarjeta = 1, 2592000, v.seg_desde_anterior_bruto) AS seg_desde_anterior_tarjeta,
-    v.n_tarjetas_cliente_24h                                  AS n_tarjetas_cliente_24h,   
- 
+    v.n_tarjetas_cliente_24h                                  AS n_tarjetas_cliente_24h,
+
     -- HISTORIAL DEL CLIENTE (picos de gasto): z-score del importe respecto a SU historial
     v.n_previas_cliente                                       AS n_previas_cliente,
     -- con menos de 5 compras previas no hay historial fiable -> 0 (neutro).
@@ -134,10 +135,11 @@ SELECT
        (log1p(toFloat64(te.cantidad)) - v.media_log_importe_cliente) / greatest(v.std_log_importe_cliente, 0.25),
        0)                                                     AS z_importe_cliente,
     if(v.n_previas_cliente >= 5,
-       toFloat64(te.cantidad) / exp(v.media_log_importe_cliente),
+       -- exp(x) - 1 deshace el log1p de la media: importe / importe típico (media geométrica)
+       toFloat64(te.cantidad) / greatest(exp(v.media_log_importe_cliente) - 1, 0.01),
        1)                                                     AS ratio_importe_habitual,
     ifNull(dp.n_devoluciones_30d, 0)                          AS n_devoluciones_30d
- 
+
 FROM transacciones_enriquecidas AS te
 LEFT JOIN cliente_dispositivo AS cd
        ON te.cliente_id = cd.cliente_id AND te.dispositivo_id = cd.dispositivo_id
@@ -146,7 +148,7 @@ LEFT JOIN devoluciones_previas AS dp ON te.transaccion_id = dp.transaccion_id
 LEFT JOIN ventanas             AS v  ON te.transaccion_id = v.transaccion_id
 SETTINGS join_use_nulls = 1
 '''
- 
+
 SENALES = {
     'es_madrugada = 1': 'Transacción de madrugada (0-6 h)',
     'ip_extranjera = 1': 'IP de otro país',
@@ -158,22 +160,22 @@ SENALES = {
     'pct_limite_credito >= 0.85': 'Importe >= 85 % del límite',
     'n_devoluciones_30d >= 2': '>= 2 devoluciones en los 30 días previos',
     'cambio_dato_sesion = 1': 'Cambio de datos en la sesión',
-    'n_tarjeta_1h >= 3': '>= 3 pagos de la tarjeta en 1 h antes',            
-    'n_tarjetas_cliente_24h >= 2': '>= 2 tarjetas distintas del cliente en 24 h',  
+    'n_tarjeta_1h >= 3': '>= 3 pagos de la tarjeta en 1 h antes',
+    'n_tarjetas_cliente_24h >= 2': '>= 2 tarjetas distintas del cliente en 24 h',
 }
- 
- 
+
+
 def main():
     client = clickhouse_connect.get_client(
         host=HOST, port=PORT, username=USER, password=PASSWORD, database=DATABASE
     )
     client.command('DROP TABLE IF EXISTS features_transaccion')
     client.command(SQL_FEATURES)
- 
+
     n_trans = client.query('SELECT count() FROM transaccion').result_rows[0][0]
     n_feat = client.query('SELECT count() FROM features_transaccion').result_rows[0][0]
     tasa_global = client.query('SELECT avg(es_fraude) * 100 FROM features_transaccion').result_rows[0][0]
- 
+
     print('Tabla "features_transaccion" creada.')
     print(f'  Filas: {n_feat:,} (transaccion: {n_trans:,}) {"OK" if n_feat == n_trans else "ERROR: no coinciden"}')
     print(f'  Tasa de fraude global: {tasa_global:.2f} %\n')
@@ -184,8 +186,7 @@ def main():
         ).result_rows[0]
         veces = tasa / tasa_global if n else 0
         print(f'  {nombre:<45} {n:>10,} {tasa:>8.2f}% {veces:>7.1f}x')
- 
- 
+
+
 if __name__ == '__main__':
     main()
- 
