@@ -1,0 +1,4 @@
+detector,PR-AUC_val,dif_inf,dif_sup,veredicto
+kmeans,0.6599,0.0,0.0,elegido
+ocsvm,0.5369,0.0648,0.1843,peor
+iforest,0.4878,0.1018,0.2632,peor

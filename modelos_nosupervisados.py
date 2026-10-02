@@ -1,401 +1,512 @@
-import argparse
 import itertools
-import json
 import os
-import time
-
-import joblib
+import json
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from joblib import Parallel, delayed
-from sklearn.cluster import KMeans
-from sklearn.ensemble import IsolationForest
-from sklearn.metrics import average_precision_score, pairwise_distances, roc_auc_score
-from sklearn.svm import OneClassSVM
+from sklearn.metrics import average_precision_score, precision_recall_curve, roc_auc_score
 
 CARPETA_DATOS = 'datos_ml'
 CARPETA_MODELOS = 'modelos'
+CARPETA_RESULTADOS = 'resultados'
+COLUMNA_GRUPO = 'cliente_id'   
 
+MODELOS = ['iforest', 'kmeans', 'ocsvm']
+AGREGACIONES = {'media': np.mean, 'max': np.max}
+PRESUPUESTO_PCT = 1.0
+PORCENTAJES_TOP = [0.5, 1, 2, 5, 10]
+N_BOOTSTRAP = 300
+N_TOP_VALIDACION = 4           
+TOLERANCIA_DERIVA = 1.5        
 SEMILLA = 42
-FRAC_VALIDACION = 0.2
-TOP_PCT = 1.0
-N_JOBS = -1
-SEMILLAS_ESTABILIDAD = [0, 7, 123]
 
-N_BOOTSTRAP = 200             
-N_TOP_BOOTSTRAP = 3             
-NIVELES_PERCENTIL = np.linspace(0, 1, 1001) 
-
-KMEANS_N_INIT = 5
-OCSVM_N_MUESTRA = 10_000
-OCSVM_BLOQUE = 20_000
-
-REJILLAS = {
-    'iforest': {
-        'n_estimators': [100, 300],
-        'max_samples': [256, 1024, 4096],
-        'max_features': [0.5, 0.75, 1.0],
-    },
-    'kmeans': {
-        'k': [2, 3, 4, 5, 6, 8, 10, 12],
-    },
-    'ocsvm': {
-        'gamma_factor': [0.25, 0.5, 1, 2, 4],
-        'nu': [0.005, 0.01, 0.05],
-    },
-}
-
-MODELOS = list(REJILLAS)
-COL_TOP = f'recall_top{TOP_PCT:g}%'
+pd.set_option('display.width', 160)
 
 
-def cargar(sin_fraudes=False):
-    X_train = pd.read_parquet(os.path.join(CARPETA_DATOS, 'X_train.parquet'))
-    X_test = pd.read_parquet(os.path.join(CARPETA_DATOS, 'X_test.parquet'))
+def cargar(carpeta):
     info_train = pd.read_parquet(os.path.join(CARPETA_DATOS, 'info_train.parquet'))
-    ts_test = pd.read_parquet(os.path.join(CARPETA_DATOS, 'info_test.parquet'),
-                              columns=['timestamp'])['timestamp']
+    info_test = pd.read_parquet(os.path.join(CARPETA_DATOS, 'info_test.parquet'))
 
-    if not X_train.index.equals(info_train.index):
-        raise ValueError('X_train e info_train no tienen el mismo índice')
-    if not info_train['timestamp'].is_monotonic_increasing:
-        raise ValueError('info_train no está ordenado por timestamp: el corte '
-                         'entreno/validación no sería temporal')
-    if info_train['timestamp'].iloc[-1] > ts_test.min():
-        raise ValueError(f'Hay transacciones de test ({ts_test.min()}) anteriores al final '
-                         f'del train ({info_train["timestamp"].iloc[-1]})')
+    detectores, idx_val, primero = {}, None, None
+    for m in MODELOS:
+        rutas = {p: os.path.join(carpeta, f'{m}_scores_{p}.parquet') for p in ('val', 'test')}
+        if not all(os.path.exists(r) for r in rutas.values()):
+            print(f'  {m}: sin scores en {carpeta}/, se omite (python modelos_nosupervisados.py {m})')
+            continue
 
-    corte = int(len(X_train) * (1 - FRAC_VALIDACION))
-    y_train = info_train['es_fraude'].astype(int).to_numpy()
-    y_entreno, y_val = y_train[:corte], y_train[corte:]
-    if y_val.sum() == 0:
-        raise ValueError('No hay fraudes en validación: no se puede elegir el modelo')
+        val = pd.read_parquet(rutas['val'])
+        if idx_val is None:
+            idx_val, primero = val.index, m
+        elif not val.index.equals(idx_val):
+            raise ValueError(f'{m}: los scores de validación no tienen las mismas filas que los de '
+                             f'{primero}. Se reentrenó alguno con otros datos?')
 
-    d = {
-        'columnas': list(X_train.columns),
-        'idx_train': X_train.index, 'idx_test': X_test.index,
-        'idx_entreno': X_train.index[:corte], 'idx_val': X_train.index[corte:],
-        'train': np.ascontiguousarray(X_train.to_numpy(np.float64)),
-        'test': np.ascontiguousarray(X_test.to_numpy(np.float64)),
-        'y_val': y_val,
+        test = pd.read_parquet(rutas['test']).reindex(info_test.index)
+        if test['score_norm'].isna().any():
+            raise ValueError(f'{m}: los scores de test no cuadran con info_test')
+
+        detectores[m] = {'val': val['score_norm'].to_numpy(), 'test': test['score_norm'].to_numpy()}
+        if 'cluster' in test.columns:
+            detectores[m]['cluster_test'] = test['cluster'].to_numpy()
+    if not detectores:
+        raise SystemExit(f'No hay ningún modelo entrenado en {carpeta}/')
+
+    faltan = idx_val.difference(info_train.index)
+    if len(faltan):
+        raise ValueError(f'{len(faltan)} filas de validación no están en info_train')
+    info_val = info_train.loc[idx_val]
+
+    grupo = COLUMNA_GRUPO if (COLUMNA_GRUPO in info_train and COLUMNA_GRUPO in info_test) else None
+    datos = {
+        'y_val': info_val['es_fraude'].astype(int).to_numpy(),
+        'y_test': info_test['es_fraude'].astype(int).to_numpy(),
+        'tipo_test': info_test['tipo_fraude'].to_numpy(),
+        'ids_test': info_test['transaccion_id'].to_numpy(),
+        'grupo_val': info_val[grupo].to_numpy() if grupo else None,
+        'grupo_test': info_test[grupo].to_numpy() if grupo else None,
+        'dias_test': max((info_test['timestamp'].max() - info_test['timestamp'].min())
+                         .total_seconds() / 86400, 1),
     }
-    d['entreno'], d['val'] = d['train'][:corte], d['train'][corte:]
+    for parte in ('val', 'test'):
+        if datos[f'y_{parte}'].sum() == 0:
+            raise ValueError(f'No hay fraudes en {parte}: no se pueden calcular las métricas')
 
-    if sin_fraudes:
-        d['ajuste_entreno'] = d['entreno'][y_entreno == 0]
-        d['ajuste_train'] = d['train'][y_train == 0]
-    else:
-        d['ajuste_entreno'], d['ajuste_train'] = d['entreno'], d['train']
-
-    print(f'Variables: {len(d["columnas"])}')
-    print(f'Entreno:    {len(d["entreno"]):>9,} filas   (hasta {info_train["timestamp"].iloc[corte - 1]})')
-    print(f'Validación: {len(d["val"]):>9,} filas   ({y_val.sum()} fraudes, {y_val.mean() * 100:.2f} %)')
-    print(f'Test:       {len(d["test"]):>9,} filas   (no se usa aquí para decidir nada)')
-    if sin_fraudes:
-        print(f'Ajuste SIN fraudes confirmados: se quitan {y_entreno.sum()} de entreno '
-              f'y {y_train.sum()} de train')
-    if y_val.sum() < 20:
-        print('  AVISO: pocos fraudes en validación, la elección de hiperparámetros será ruidosa')
-    return d
-
-def metricas_top(y, s, pct=TOP_PCT):
-    n = max(1, int(round(len(s) * pct / 100)))
-    vp = y[np.argpartition(-s, n - 1)[:n]].sum()
-    prec, rec = vp / n, vp / max(1, y.sum())
-    return rec, prec, 2 * prec * rec / max(1e-12, prec + rec)
+    print(f'Modelos:    {carpeta}/  ({", ".join(detectores)})')
+    print(f'Validación: {len(datos["y_val"]):,} filas, {datos["y_val"].sum()} fraudes')
+    print(f'Test:       {len(datos["y_test"]):,} filas, {datos["y_test"].sum()} fraudes '
+          f'({datos["y_test"].mean() * 100:.2f} %), {datos["dias_test"]:.0f} días')
+    print(f'Bootstrap:  por {"cliente (" + grupo + ")" if grupo else "transacción"}')
+    return detectores, datos
 
 
-def metricas(y, s):
-    rec, prec, f1 = metricas_top(y, s)
-    return {'pr_auc': average_precision_score(y, s),
-            'roc_auc': roc_auc_score(y, s),
-            COL_TOP: rec,
-            'precision_top': prec,
-            'f1_top': f1}
+def anadir_combinaciones(detectores):
+    simples = list(detectores)
+    for r in range(2, len(simples) + 1):
+        for combo in itertools.combinations(simples, r):
+            for nombre_agg, f in AGREGACIONES.items():
+                nombre = f'{nombre_agg}({"+".join(combo)})'
+                detectores[nombre] = {
+                    p: f(np.column_stack([detectores[m][p] for m in combo]), axis=1)
+                    for p in ('val', 'test')}
+    return detectores
 
 
-def referencia(s):
-    return {'cuantiles': np.quantile(s, NIVELES_PERCENTIL),
-            'mediana': float(np.median(s)),
-            'p99': float(np.quantile(s, 0.99))}
+def preparar_grupos(grupos):
+    codigos, _ = pd.factorize(grupos)
+    orden = np.argsort(codigos, kind='stable')
+    tam = np.bincount(codigos)
+    inicio = np.concatenate([[0], np.cumsum(tam)[:-1]])
+    return orden, inicio, tam
 
 
-def percentil(cuantiles, s):
- 
-    return np.interp(s, cuantiles, NIVELES_PERCENTIL)
+def remuestra(rng, n_filas, prep):
+    if prep is None:
+        return rng.integers(0, n_filas, n_filas)
+    orden, inicio, tam = prep
+    g = rng.integers(0, len(tam), len(tam))          
+    t = tam[g]
+    fin = np.cumsum(t)
+    pos = np.repeat(inicio[g], t) + np.arange(fin[-1]) - np.repeat(fin - t, t)
+    return orden[pos]
 
 
-def normalizar(s, mediana, p99):
-    return (s - mediana) / max(p99 - mediana, 1e-12)
-
-def gamma_mediana(X, semilla=SEMILLA):
+def ap_bootstrap(y, lista_scores, n, grupos=None, semilla=SEMILLA):
     rng = np.random.default_rng(semilla)
-    m = X[rng.choice(len(X), min(2000, len(X)), replace=False)]
-    d2 = pairwise_distances(m, metric='sqeuclidean')
-    return 1.0 / np.median(d2[np.triu_indices_from(d2, k=1)])
-
-
-def ajustar(nombre, p, X, semilla=SEMILLA, n_jobs=N_JOBS):
-    art = {'tipo': nombre, 'params': dict(p)}
-
-    if nombre == 'iforest':
-        art['modelo'] = IsolationForest(
-            n_estimators=p['n_estimators'], max_samples=min(p['max_samples'], len(X)),
-            max_features=p['max_features'], random_state=semilla, n_jobs=n_jobs).fit(X)
-
-    elif nombre == 'kmeans':
-        m = KMeans(n_clusters=p['k'], n_init=KMEANS_N_INIT, random_state=semilla).fit(X)
-        dmin = m.transform(X)[np.arange(len(X)), m.labels_]
-        escala = np.array([np.median(dmin[m.labels_ == c]) for c in range(p['k'])])
-        art['modelo'], art['escala'] = m, np.maximum(escala, 1e-9)
-
-    elif nombre == 'ocsvm':
-        rng = np.random.default_rng(semilla)
-        filas = rng.choice(len(X), min(OCSVM_N_MUESTRA, len(X)), replace=False)
-        art['modelo'] = OneClassSVM(kernel='rbf', nu=p['nu'], gamma=p['gamma'],
-                                    cache_size=1000).fit(X[filas])
-    else:
-        raise ValueError(nombre)
-    return art
-
-
-def puntuar(art, X, n_jobs=1):
-    m, tipo = art['modelo'], art['tipo']
-
-    if tipo == 'iforest':
-        return -m.score_samples(X)
-
-    if tipo == 'kmeans':
-        d = m.transform(X)
-        c = d.argmin(axis=1)
-        dmin = d[np.arange(len(X)), c]
-        return dmin / art['escala'][c] if art['params']['distancia'] == 'relativa' else dmin
-
-    if tipo == 'ocsvm':
-        if n_jobs == 1 or len(X) <= OCSVM_BLOQUE:
-            return -m.decision_function(X)
-        bloques = Parallel(n_jobs=n_jobs)(
-            delayed(m.decision_function)(X[i:i + OCSVM_BLOQUE])
-            for i in range(0, len(X), OCSVM_BLOQUE))
-        return -np.concatenate(bloques)
-
-    raise ValueError(tipo)
-
-
-def combinaciones(rejilla):
-    claves = list(rejilla)
-    return [dict(zip(claves, v)) for v in itertools.product(*rejilla.values())]
-
-
-def evaluar_config(nombre, p, X_aj, X_val, y_val, n_jobs):
-    inicio = time.perf_counter()
-    art = ajustar(nombre, p, X_aj, n_jobs=n_jobs)
-    variantes = ([dict(p, distancia=d) for d in ('absoluta', 'relativa')]
-                 if nombre == 'kmeans' else [p])
-    filas = []
-    for v in variantes:
-        art['params'] = v
-        s = puntuar(art, X_val, n_jobs=n_jobs)
-        filas.append({**v, **metricas(y_val, s), 'segundos': time.perf_counter() - inicio})
-    return filas
-
-
-def buscar(nombre, d, rejilla):
-    configs = combinaciones(rejilla)
-    X_aj = d['ajuste_entreno']
-
-    if nombre == 'ocsvm':
-        g = gamma_mediana(X_aj)
-        print(f'  gamma base: {g:.5f}')
-        configs = [dict(c, gamma=c['gamma_factor'] * g) for c in configs]
-        resultados = Parallel(n_jobs=N_JOBS, verbose=0)(
-            delayed(evaluar_config)(nombre, c, X_aj, d['val'], d['y_val'], 1)
-            for c in configs)
-    else:
-        resultados = []
-        for i, c in enumerate(configs, 1):
-            resultados.append(evaluar_config(nombre, c, X_aj, d['val'], d['y_val'], N_JOBS))
-            print(f'  [{i}/{len(configs)}] {c}  PR-AUC={max(f["pr_auc"] for f in resultados[-1]):.3f}')
-
-    tabla = (pd.DataFrame([f for filas in resultados for f in filas])
-             .sort_values(['pr_auc', COL_TOP], ascending=False)
-             .reset_index(drop=True))
-    base = d['y_val'].mean()
-    tabla['lift_pr'] = tabla['pr_auc'] / base
-
-    print(f'\n  {len(tabla)} combinaciones probadas. Mejores 5 en validación '
-          f'(base rate {base * 100:.2f} %):')
-    print(tabla.head(5).round(4).to_string(index=False))
-    return tabla
-
-
-def params_fila(tabla, nombre, rejilla, fila=0):
-    claves = list(rejilla) + {'kmeans': ['distancia'], 'ocsvm': ['gamma']}.get(nombre, [])
-    r = tabla.iloc[[fila]].to_dict('records')[0]
-    return {k: (r[k].item() if isinstance(r[k], np.generic) else r[k]) for k in claves}
-
-
-def estabilidad(nombre, p, d):
-    aps = [average_precision_score(d['y_val'],
-                                   puntuar(ajustar(nombre, p, d['ajuste_entreno'], semilla=s),
-                                           d['val'], N_JOBS))
-           for s in SEMILLAS_ESTABILIDAD]
-    print(f'  Estabilidad (PR-AUC val con {len(aps)} semillas): '
-          f'{np.mean(aps):.3f} ± {np.std(aps):.3f}   [{min(aps):.3f} - {max(aps):.3f}]')
-    return float(np.mean(aps)), float(np.std(aps))
-
-
-def remuestras_bootstrap(y, n, semilla=SEMILLA):
-    rng = np.random.default_rng(semilla)
-    res = []
-    while len(res) < n:
-        i = rng.integers(0, len(y), len(y))
-        if y[i].any():
-            res.append(i)
+    prep = preparar_grupos(grupos) if grupos is not None else None
+    res = np.empty((n, len(lista_scores)))
+    b = 0
+    while b < n:
+        i = remuestra(rng, len(y), prep)
+        if not y[i].any():
+            continue
+        res[b] = [average_precision_score(y[i], s[i]) for s in lista_scores]
+        b += 1
     return res
 
 
-def bootstrap_val(nombre, tabla, rejilla, d, n_boot=N_BOOTSTRAP, n_top=N_TOP_BOOTSTRAP):
-    n_top = min(n_top, len(tabla))
-    y = d['y_val']
-    params = [params_fila(tabla, nombre, rejilla, i) for i in range(n_top)]
-    scores = [puntuar(ajustar(nombre, p, d['ajuste_entreno']), d['val'], N_JOBS) for p in params]
-
-    remuestras = remuestras_bootstrap(y, n_boot)
-    aps = np.array([[average_precision_score(y[i], s[i]) for s in scores]
-                    for i in remuestras])              
-
+def bootstrap_eleccion(tabla, detectores, datos, n, n_top=N_TOP_VALIDACION):
+    nombres = tabla['detector'].head(n_top).tolist()
+    aps = ap_bootstrap(datos['y_val'], [detectores[x]['val'] for x in nombres], n,
+                       datos['grupo_val'])
     filas = []
-    for j in range(n_top):
-        dif = aps[:, 0] - aps[:, j]
-        dif_inf, dif_sup = np.percentile(dif, [2.5, 97.5])
+    for j, nombre in enumerate(nombres):
+        dif_inf, dif_sup = np.percentile(aps[:, 0] - aps[:, j], [2.5, 97.5])
         if j == 0:
-            veredicto = 'ganadora'
+            veredicto = 'elegido'
         elif dif_inf > 0:
             veredicto = 'peor'
         elif dif_sup < 0:
-            veredicto = 'mejor (!)'
+            veredicto = 'mejor'
         else:
             veredicto = 'empate'
-        ic_inf, ic_sup = np.percentile(aps[:, j], [2.5, 97.5])
-        filas.append({'posicion': j + 1, 'params': json.dumps(params[j], ensure_ascii=False),
-                      'pr_auc': float(tabla['pr_auc'].iloc[j]),
-                      'ic95_inf': float(ic_inf), 'ic95_sup': float(ic_sup),
-                      'dif_inf': float(dif_inf), 'dif_sup': float(dif_sup),
-                      'veredicto': veredicto})
-    res = pd.DataFrame(filas)
-
-    print(f'\n  Bootstrap pareado en validación ({n_boot} remuestras, '
-          f'dif = PR-AUC ganadora - PR-AUC fila):')
-    print(res.round(4).to_string(index=False))
-    n_empates = (res['veredicto'] == 'empate').sum()
-    if n_empates:
-        print(f'  {n_empates} combinación(es) empatan con la ganadora')
-    return res
+        filas.append({'detector': nombre, 'PR-AUC_val': tabla['PR-AUC_val'].iloc[j],
+                      'dif_inf': dif_inf, 'dif_sup': dif_sup, 'veredicto': veredicto})
+    return pd.DataFrame(filas)
 
 
-
-def guardar_scores(carpeta, nombre, parte, indice, s, ref, art=None, X=None):
-    df = pd.DataFrame({'score': s,
-                       'score_norm': normalizar(s, ref['mediana'], ref['p99']),
-                       'percentil': percentil(ref['cuantiles'], s)}, index=indice)
-    if art is not None and art['tipo'] == 'kmeans':
-        df['cluster'] = art['modelo'].predict(X)
-    df.to_parquet(os.path.join(carpeta, f'{nombre}_scores_{parte}.parquet'))
+def umbral_presupuesto(s_val, pct):
+    return np.quantile(s_val, 1 - pct / 100)
 
 
-def entrenar_modelo(nombre, d, rejilla, carpeta, n_boot):
-    print('\n' + '=' * 78)
-    print(f'{nombre.upper()}  -  búsqueda de hiperparámetros')
-    print('=' * 78)
-    inicio = time.perf_counter()
+def umbral_f1(y_val, s_val):
+    p, r, u = precision_recall_curve(y_val, s_val)
+    f1 = 2 * p[:-1] * r[:-1] / np.clip(p[:-1] + r[:-1], 1e-12, None)
+    return u[np.argmax(f1)]
 
-    tabla = buscar(nombre, d, rejilla)
-    tabla.to_csv(os.path.join(carpeta, f'{nombre}_busqueda.csv'), index=False)
-    params = params_fila(tabla, nombre, rejilla, 0)
-    print(f'\n  Ganadora: {params}')
-    media, desv = estabilidad(nombre, params, d)
 
-    empates = []
-    if n_boot:
-        boot = bootstrap_val(nombre, tabla, rejilla, d, n_boot=n_boot)
-        boot.to_csv(os.path.join(carpeta, f'{nombre}_bootstrap.csv'), index=False)
-        empates = [json.loads(p) for p in boot.loc[boot['veredicto'] == 'empate', 'params']]
+def punto_operacion(y, marcadas, dias):
+    vp = int((marcadas & (y == 1)).sum())
+    n = int(marcadas.sum())
+    prec = vp / n if n else 0.0
+    rec = vp / max(1, y.sum())
+    return {'marcadas_%': marcadas.mean() * 100, 'alertas_dia': n / dias,
+            'precision_%': prec * 100, 'recall_%': rec * 100,
+            'f1_%': 200 * prec * rec / (prec + rec) if prec + rec else 0.0}
 
-    art_aj = ajustar(nombre, params, d['ajuste_entreno'])
-    ref_aj = referencia(puntuar(art_aj, d['ajuste_entreno'], N_JOBS))
-    guardar_scores(carpeta, nombre, 'val', d['idx_val'], puntuar(art_aj, d['val'], N_JOBS),
-                   ref_aj, art_aj, d['val'])
 
-    art = ajustar(nombre, params, d['ajuste_train'])
-    s_train = puntuar(art, d['train'], N_JOBS)
-    s_test = puntuar(art, d['test'], N_JOBS)
-    s_ref = s_train if d['ajuste_train'] is d['train'] else puntuar(art, d['ajuste_train'], N_JOBS)
-    ref = referencia(s_ref)
-    guardar_scores(carpeta, nombre, 'train', d['idx_train'], s_train, ref, art, d['train'])
-    guardar_scores(carpeta, nombre, 'test', d['idx_test'], s_test, ref, art, d['test'])
+def evaluar_detector(nombre, det, datos):
+    y_val, y = datos['y_val'], datos['y_test']
+    s_val, s = det['val'], det['test']
 
-    art.update(referencia=ref, columnas=d['columnas'])
-    joblib.dump(art, os.path.join(carpeta, f'{nombre}.joblib'))
+    det['marca_presupuesto'] = s >= umbral_presupuesto(s_val, PRESUPUESTO_PCT)
+    det['marca_f1'] = s >= umbral_f1(y_val, s_val)
 
-    sobre_p99 = (s_test > ref['p99']).mean() * 100
-    print(f'  Test por encima del p99 del train: {sobre_p99:.2f} %  (≈1 % si no hay deriva)')
-    print(f'  Tiempo total: {time.perf_counter() - inicio:.0f} s')
+    pr = average_precision_score(y, s)
+    fila = {'detector': nombre,
+            'PR-AUC_val': average_precision_score(y_val, s_val),
+            'PR-AUC': pr, 'ROC-AUC': roc_auc_score(y, s), 'lift': pr / y.mean()}
+    for clave, marcas in (('pres', det['marca_presupuesto']), ('f1', det['marca_f1'])):
+        for k, v in punto_operacion(y, marcas, datos['dias_test']).items():
+            fila[f'{clave}_{k}'] = v
+    return fila
 
-    mejor = tabla.iloc[0]
-    return {'params': params, 'pr_auc_val': float(mejor['pr_auc']),
-            'roc_auc_val': float(mejor['roc_auc']), COL_TOP + '_val': float(mejor[COL_TOP]),
-            'pr_auc_val_media_semillas': media, 'pr_auc_val_std_semillas': desv,
-            'bootstrap_n': n_boot, 'bootstrap_empates_con_ganadora': empates,
-            'combinaciones_probadas': len(tabla), 'test_sobre_p99_train_%': round(sobre_p99, 2)}
+
+def tabla_top_k(y, s):
+    orden = np.argsort(-s)
+    filas = []
+    for pct in PORCENTAJES_TOP:
+        n = max(1, int(round(len(s) * pct / 100)))
+        vp = int(y[orden[:n]].sum())
+        filas.append({'top_%': pct, 'revisadas': n, 'fraudes': vp,
+                      'precision_%': round(vp / n * 100, 1),
+                      'recall_%': round(vp / max(1, y.sum()) * 100, 1),
+                      'techo_recall_%': round(min(n, y.sum()) / max(1, y.sum()) * 100, 1),
+                      'lift': round(vp / n / y.mean(), 1)})
+    return pd.DataFrame(filas)
+
+
+def recall_por_tipo(marcas, datos):
+    y, tipos = datos['y_test'], datos['tipo_test']
+    fraude = y == 1
+    total = pd.Series(tipos[fraude]).value_counts()
+    tabla = pd.DataFrame({'n': total})
+    for nombre, m in marcas.items():
+        detectados = pd.Series(tipos[fraude & m]).value_counts()
+        tabla[nombre] = (detectados.reindex(total.index).fillna(0) / total * 100).round(1)
+    return tabla.sort_values('n', ascending=False)
+
+
+def marcas_reglas(datos):
+    import clickhouse_connect
+    from BD_VACIAS import DATABASE, HOST, PASSWORD, PORT, USER
+    cliente = clickhouse_connect.get_client(host=HOST, port=PORT, username=USER,
+                                            password=PASSWORD, database=DATABASE)
+    ids = {r[0] for r in cliente.query(
+        "SELECT DISTINCT transaccion_id FROM alerta WHERE origen = 'regla'").result_rows}
+    return np.isin(datos['ids_test'], list(ids))
+
+
+def grafico_pr(detectores, a_dibujar, datos, reglas, carpeta):
+    y = datos['y_test']
+    fig, ax = plt.subplots(figsize=(8, 6))
+    for nombre in a_dibujar:
+        p, r, _ = precision_recall_curve(y, detectores[nombre]['test'])
+        ax.plot(r, p, label=f'{nombre} (PR-AUC {average_precision_score(y, detectores[nombre]["test"]):.3f})',
+                lw=2.2 if '(' in nombre else 1.4)
+    if reglas is not None:
+        op = punto_operacion(y, reglas, datos['dias_test'])
+        ax.scatter(op['recall_%'] / 100, op['precision_%'] / 100, marker='*', s=250,
+                   c='black', zorder=5, label='reglas')
+    ax.axhline(y.mean(), ls='--', c='grey', lw=1, label=f'azar ({y.mean() * 100:.2f} %)')
+    ax.set(xlabel='Recall', ylabel='Precisión', title='Curvas precisión-recall en test',
+           xlim=(0, 1), ylim=(0, 1.02))
+    ax.legend(fontsize=8)
+    ax.grid(alpha=.3)
+    ruta = os.path.join(carpeta, 'curvas_pr_test.png')
+    fig.tight_layout()
+    fig.savefig(ruta, dpi=130)
+    plt.close(fig)
+    return ruta
+
+INFO_MODELOS = {
+    'iforest': ('Isolation Forest',
+                'separa cada transacción del resto haciendo cortes al azar en las variables; '
+                'las que quedan aisladas con muy pocos cortes son las más raras'),
+    'kmeans': ('KMeans',
+               'agrupa las transacciones en perfiles típicos (clusters) y marca como sospechosas '
+               'las que quedan lejos de todos los perfiles'),
+    'ocsvm': ('One-Class SVM',
+              'dibuja una frontera alrededor de las transacciones normales y marca lo que queda fuera'),
+}
+
+TIPOS_FRAUDE = {
+    'bust_out': ('el cliente se comporta con normalidad un tiempo y de golpe agota todo el crédito',
+                 'la evolución del gasto del cliente frente a su propio historial'),
+    'account_takeover': ('alguien roba el acceso a una cuenta y opera con ella',
+                         'cambios de dispositivo, IP u horarios respecto a lo habitual del cliente'),
+    'card_testing': ('muchas compras pequeñas seguidas para comprobar si una tarjeta robada funciona',
+                     'número de transacciones pequeñas por tarjeta en pocos minutos'),
+    'smurfing': ('una cantidad grande repartida en muchas pequeñas para no llamar la atención',
+                 'número e importe acumulado de transacciones en las últimas horas'),
+    'devolucion_abusiva': ('devoluciones o contracargos fraudulentos',
+                           'historial de devoluciones del cliente'),
+    'dispositivo_nuevo': ('operaciones desde un dispositivo que el cliente no había usado nunca',
+                          'si el dispositivo es nuevo para ese cliente'),
+    'pico_gasto': ('un gasto mucho mayor de lo habitual para ese cliente',
+                   'el importe comparado con la media del propio cliente (z-score por cliente)'),
+    'ip_sospechosa': ('operaciones desde una IP o ubicación sospechosa',
+                      'variables de IP: país, si es nueva para el cliente, cuántos clientes la usan'),
+    'bot': ('transacciones automáticas, muy rápidas y repetitivas',
+            'tiempo desde la transacción anterior y número de transacciones por minuto'),
+}
+
+
+def lista(xs):
+    xs = list(xs)
+    return xs[0] if len(xs) == 1 else ', '.join(xs[:-1]) + ' y ' + xs[-1]
+
+
+def nombre_detector(det):
+    if det in INFO_MODELOS:
+        return INFO_MODELOS[det][0]
+    agg, resto = det.split('(')
+    partes = [INFO_MODELOS.get(p, (p,))[0] for p in resto.rstrip(')').split('+')]
+    return f'{"la media" if agg == "media" else "el máximo"} de {lista(partes)}'
+
+
+def conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resumen):
+    f = tabla.set_index('detector')
+    e = f.loc[elegido]
+    nom = nombre_detector(elegido)
+    Nom = nom[0].upper() + nom[1:]
+    base = datos['y_test'].mean()
+    rec, prec, alertas = e['pres_recall_%'], e['pres_precision_%'], e['pres_alertas_dia']
+
+    col = elegido if elegido in por_tipo else f'{elegido} *'
+    rec_tipo = por_tipo[col] if len(por_tipo) else pd.Series(dtype=float)
+    buenos = rec_tipo[rec_tipo >= 60].index.tolist()
+    malos = rec_tipo[rec_tipo < 30].index.tolist()
+    L = []
+
+    L.append('## En pocas palabras')
+    L.append(f'- El mejor detector es {nom}.')
+    L.append(f'- Si el equipo revisa el {PRESUPUESTO_PCT:g} % de las transacciones que el modelo ve más '
+             f'sospechosas, encuentra el {rec:.0f} % del fraude, y {prec:.0f} de cada 100 '
+             f'revisiones son fraude real.')
+    if buenos:
+        L.append(f'- Detecta bien {lista(buenos)}.')
+    if malos:
+        L.append(f'- Se le escapan casi por completo {lista(malos)}.')
+
+    L.append('\n## Cómo se ha elegido')
+    L.append(f'- Se probaron 3 modelos de detección de anomalías, cada uno con varias '
+             f'configuraciones, y combinaciones entre ellos: {len(f)} candidatos en total.')
+    L.append('- Los modelos aprenden sin etiquetas: solo ven cómo son las transacciones y buscan '
+             'las raras. Las etiquetas de fraude solo se usan para elegir el mejor y medirlo.')
+    L.append('- El mejor se eligió con un periodo de datos (validación) y se comprobó en el periodo '
+             'más reciente (test), que no se usó para nada antes. Así la medida es honesta.')
+
+    L.append('\n## El mejor modelo y por qué')
+    if elegido in INFO_MODELOS:
+        L.append(f'- {nom} {INFO_MODELOS[elegido][1]}.')
+    else:
+        L.append(f'- Combina varios modelos: la puntuación de cada transacción es {nom}.')
+        if elegido.startswith('max'):
+            L.append('- Con el máximo, una transacción es sospechosa si lo es para cualquiera de los '
+                     'modelos, así que se suman los fraudes que encuentra cada uno.')
+        else:
+            L.append('- Con la media, los errores de un modelo se compensan con los aciertos de los '
+                     'otros.')
+    L.append(f'- Para comparar se usa la PR-AUC: si se ordenan las transacciones de más a menos '
+             f'sospechosa, mide cuánto fraude queda arriba. Va de 0 a 1, y un modelo al azar '
+             f'sacaría {base:.3f} (la proporción de fraude). {Nom} saca {e["PR-AUC"]:.2f}, '
+             f'unas {e["lift"]:.0f} veces más que el azar.')
+    orden = f.loc[simples, 'PR-AUC'].sort_values(ascending=False)
+    L.append('- Cada modelo por separado: '
+             + ', '.join(f'{INFO_MODELOS[m][0]} {v:.2f}' for m, v in orden.items()) + '.')
+
+    if len(por_tipo):
+        n = por_tipo['n']
+        cols = [c for c in por_tipo.columns if c != 'n']
+        detectados = {c: int(round((por_tipo[c] / 100 * n).sum())) for c in cols}
+        partes = [f'{nombre_detector(c.rstrip(" *"))} {detectados[c]}' for c in cols]
+        L.append(f'- Revisando el {PRESUPUESTO_PCT:g} % de las transacciones, fraudes detectados de '
+                 f'{int(n.sum())}: {lista(partes)}.')
+        otros = por_tipo[[c for c in cols if c != col]]
+        if len(otros.columns):
+            ventaja = rec_tipo - otros.max(axis=1)
+            mejor_en = ventaja[ventaja >= 10].index.tolist()
+            if mejor_en:
+                L.append(f'- La razón principal de que gane es que detecta claramente mejor que el '
+                         f'resto {lista(mejor_en)}.')
+            else:
+                L.append('- Gana porque en total encuentra algo más de fraude, no porque destaque '
+                         'mucho en un tipo concreto.')
+    if 'ocsvm' in simples and orden.index[-1] == 'ocsvm':
+        L.append('- One-Class SVM queda el último: se entrena con una muestra de 10.000 '
+                 'transacciones (es muy lento con más) y es muy sensible a sus parámetros.')
+    empatan = eleccion.loc[eleccion['veredicto'] == 'empate', 'detector'].tolist()
+    if empatan:
+        L.append(f'- Ojo: en validación empata con {lista(nombre_detector(x) for x in empatan)}. '
+                 f'No se puede asegurar que sea mejor, solo que no es peor.')
+
+    if len(por_tipo):
+        L.append('\n## Qué fraudes detecta y cuáles no')
+        for tipo, fila in por_tipo.sort_values('n', ascending=False).iterrows():
+            desc = TIPOS_FRAUDE.get(tipo, ('', ''))[0]
+            L.append(f'- {tipo} ({int(fila["n"])} casos{": " + desc if desc else ""}): '
+                     f'detecta el {fila[col]:.0f} %.')
+        if malos:
+            L.append('- Los que se escapan no se arreglan cambiando de modelo: las variables '
+                     'actuales no recogen lo que los hace distintos. Habría que añadir:')
+            for tipo in malos:
+                if tipo in TIPOS_FRAUDE:
+                    L.append(f'  - {tipo}: {TIPOS_FRAUDE[tipo][1]}.')
+
+    L.append('\n## ¿Cuánto podemos fiarnos?')
+    L.append(f'- Con los datos disponibles, la PR-AUC real estaría entre {e["IC95_inf"]:.2f} y '
+             f'{e["IC95_sup"]:.2f} (intervalo de confianza del 95 %).')
+    dif = e['PR-AUC'] - e['PR-AUC_val']
+    if dif < -0.05:
+        L.append(f'- En test baja respecto a validación ({e["PR-AUC_val"]:.2f} a {e["PR-AUC"]:.2f}). '
+                 f'Es en parte normal (al elegir el mejor de varios, su nota de validación sale algo '
+                 f'inflada) y en parte las transacciones recientes son algo distintas.')
+    else:
+        L.append(f'- Da resultados parecidos en validación y test ({e["PR-AUC_val"]:.2f} y '
+                 f'{e["PR-AUC"]:.2f}): funciona igual con datos nuevos.')
+    if resumen and all(r['pr_auc_val_std_semillas'] <= 0.1 * r['pr_auc_val_media_semillas']
+                       for r in resumen.values()):
+        L.append('- Los resultados no dependen del azar interno de los modelos: con distintas '
+                 'semillas salen prácticamente iguales.')
+    n_val = int(datos['y_val'].sum())
+    if n_val < 50:
+        L.append(f'- Solo hay {n_val} fraudes en validación, así que las decisiones tienen bastante '
+                 f'margen de error.')
+    L.append('- Las etiquetas no son perfectas: algunas "falsas alarmas" podrían ser fraudes que '
+             'nadie confirmó, así que la precisión real puede ser algo mayor.')
+
+    L.append('\n## En el día a día')
+    t5 = top.set_index('top_%').loc[5]
+    L.append(f'- Revisar el {PRESUPUESTO_PCT:g} % supone unas {alertas:.0f} alertas al día.' if alertas >= 10 else
+             f'- Revisar el {PRESUPUESTO_PCT:g} % supone unas {alertas:.1f} alertas al día.')
+    L.append(f'- Revisando el 5 % se llegaría al {t5["recall_%"]:.0f} % del fraude, pero solo '
+             f'{t5["precision_%"]:.0f} de cada 100 revisiones serían fraude.')
+    marc = e['pres_marcadas_%']
+    deriva = not (PRESUPUESTO_PCT / TOLERANCIA_DERIVA <= marc <= PRESUPUESTO_PCT * TOLERANCIA_DERIVA)
+    if deriva:
+        L.append(f'- En el periodo de test el umbral marcó el {marc:.2f} % en lugar del '
+                 f'{PRESUPUESTO_PCT:g} % previsto: las transacciones recientes son algo distintas y '
+                 f'el umbral habría que reajustarlo cada cierto tiempo.')
+    else:
+        L.append(f'- El umbral fijado en validación marcó el {marc:.2f} % en test, cerca de lo '
+                 f'previsto: se puede usar tal cual.')
+
+    return L
+
+
+class Secciones:
+    def __init__(self):
+        self.n = 0
+
+    def __call__(self, titulo):
+        self.n += 1
+        print('\n' + '=' * 100)
+        print(f'{self.n}. {titulo}')
+        print('=' * 100)
 
 
 def main():
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('modelos', nargs='*', help=f'cualquiera de {MODELOS} (por defecto, todos)')
-    parser.add_argument('--rapido', action='store_true', help='rejillas reducidas')
-    parser.add_argument('--sin-fraudes', action='store_true',
-                        help='quitar los fraudes confirmados de los datos de ajuste')
-    parser.add_argument('--bootstrap', type=int, default=N_BOOTSTRAP,
-                        help=f'remuestras del bootstrap en validación (0 = no hacerlo; '
-                             f'por defecto {N_BOOTSTRAP})')
-    args = parser.parse_args()
-    desconocidos = set(args.modelos) - set(MODELOS)
-    if desconocidos:
-        parser.error(f'modelos desconocidos: {sorted(desconocidos)}. Opciones: {MODELOS}')
-    args.modelos = args.modelos or MODELOS
-    rejillas = REJILLAS_RAPIDAS if args.rapido else REJILLAS
+    os.makedirs(CARPETA_RESULTADOS, exist_ok=True)
+    seccion = Secciones()
+    detectores, datos = cargar(CARPETA_MODELOS)    
+    simples = list(detectores)
+    detectores = anadir_combinaciones(detectores)
 
-    carpeta = (CARPETA_MODELOS + ('_rapido' if args.rapido else '')
-               + ('_sinfraude' if args.sin_fraudes else ''))
-    os.makedirs(carpeta, exist_ok=True)
-    print(f'Salidas en: {carpeta}/')
+    filas = [evaluar_detector(n, d, datos) for n, d in detectores.items()]
+    tabla = pd.DataFrame(filas).sort_values('PR-AUC_val', ascending=False).reset_index(drop=True)
+    elegido = tabla.loc[0, 'detector']
+    principales = simples + ([elegido] if elegido not in simples else [])
 
-    d = cargar(sin_fraudes=args.sin_fraudes)
+    aps = ap_bootstrap(datos['y_test'], [detectores[n]['test'] for n in principales],
+                       N_BOOTSTRAP, datos['grupo_test'])
+    inf, sup = np.percentile(aps, [2.5, 97.5], axis=0)
+    tabla = tabla.merge(pd.DataFrame({'detector': principales, 'IC95_inf': inf, 'IC95_sup': sup}),
+                        on='detector', how='left')
+    tabla.insert(1, 'elegido', np.where(tabla['detector'] == elegido, '<--', ''))
+    tabla.round(4).to_csv(os.path.join(CARPETA_RESULTADOS, 'comparativa_test.csv'), index=False)
 
-    ruta_resumen = os.path.join(carpeta, 'resumen_entrenamiento.json')
+    seccion('CALIDAD DEL RANKING EN TEST   (ordenado por PR-AUC de validación)')
+    cols = ['detector', 'elegido', 'PR-AUC_val', 'PR-AUC', 'IC95_inf', 'IC95_sup', 'ROC-AUC', 'lift']
+    print(tabla[cols].round(3).to_string(index=False))
+    print(f'  Base rate test: {datos["y_test"].mean():.4f} (PR-AUC de un score aleatorio).')
+    print(f'  El detector elegido es "{elegido}": mejor PR-AUC en validación.')
+    print('  La PR-AUC_val del elegido es optimista (es la mejor de varias); es normal que baje en test.')
+
+    seccion('¿EL ELEGIDO GANA DE VERDAD?   (bootstrap pareado en validación, '
+            'dif = PR-AUC elegido - PR-AUC fila)')
+    eleccion = bootstrap_eleccion(tabla, detectores, datos, N_BOOTSTRAP)
+    print(eleccion.round(4).to_string(index=False))
+    eleccion.round(4).to_csv(os.path.join(CARPETA_RESULTADOS, 'bootstrap_eleccion_val.csv'),
+                             index=False)
+
+    seccion('PUNTOS DE OPERACIÓN EN TEST   (umbrales fijados en validación)')
+    for clave, titulo in (('pres', f'Presupuesto de revisión: {PRESUPUESTO_PCT:g} % de transacciones'),
+                          ('f1', 'Umbral de F1 máximo en validación (ruidoso con pocos fraudes)')):
+        print(f'\n{titulo}')
+        sub = tabla[['detector'] + [c for c in tabla if c.startswith(clave + '_')]].copy()
+        sub.columns = [c[len(clave) + 1:] if c.startswith(clave + '_') else c for c in sub.columns]
+        print(sub.round(1).to_string(index=False))
+    marcadas = tabla.set_index('detector')['pres_marcadas_%']
+    fuera = marcadas[(marcadas > PRESUPUESTO_PCT * TOLERANCIA_DERIVA)
+                     | (marcadas < PRESUPUESTO_PCT / TOLERANCIA_DERIVA)]
+    if len(fuera):
+        print(f'\n  AVISO de deriva: marcan en test lejos del {PRESUPUESTO_PCT:g} % previsto -> '
+              + ', '.join(f'{n} ({v:.2f} %)' for n, v in fuera.items()))
+
+    marcas = {n: detectores[n]['marca_presupuesto'] for n in simples}
+    if elegido not in simples:
+        marcas[f'{elegido} *'] = detectores[elegido]['marca_presupuesto']
+    seccion(f'RECALL % POR TIPO DE FRAUDE (presupuesto {PRESUPUESTO_PCT:g} %; elegido: {elegido})')
+    por_tipo = recall_por_tipo(marcas, datos)
+    print(por_tipo.to_string())
+    por_tipo.to_csv(os.path.join(CARPETA_RESULTADOS, 'recall_por_tipo_test.csv'))
+
+    seccion(f'DETALLE DEL ELEGIDO: {elegido} - si se revisara solo el top k % del test')
+    top = tabla_top_k(datos['y_test'], detectores[elegido]['test'])
+    print(top.to_string(index=False))
+
+    if 'kmeans' in simples and 'cluster_test' in detectores['kmeans']:
+        cl = pd.DataFrame({'cluster': detectores['kmeans']['cluster_test'], 'fraude': datos['y_test']})
+        print('\nKMeans - tasa de fraude por cluster (test):')
+        print(cl.groupby('cluster')['fraude'].agg(n='size', fraudes='sum', tasa_pct='mean')
+              .assign(tasa_pct=lambda t: (t['tasa_pct'] * 100).round(2)).to_string())
+
+    grafico_pr(detectores, principales, datos, reglas=None, carpeta=CARPETA_RESULTADOS)
+
+    ruta_resumen = os.path.join(CARPETA_MODELOS, 'resumen_entrenamiento.json')
     resumen = {}
     if os.path.exists(ruta_resumen):
-        with open(ruta_resumen, encoding='utf-8') as f:
-            resumen = json.load(f)
+        with open(ruta_resumen, encoding='utf-8') as fh:
+            resumen = {m: r for m, r in json.load(fh).items() if m in simples}
 
-    for nombre in args.modelos:
-        resumen[nombre] = entrenar_modelo(nombre, d, rejillas[nombre], carpeta, args.bootstrap)
-        resumen[nombre].update(rejilla='rapida' if args.rapido else 'completa',
-                               sin_fraudes=args.sin_fraudes)
-        with open(ruta_resumen, 'w', encoding='utf-8') as f:
-            json.dump(resumen, f, indent=2, ensure_ascii=False)
-
-    print('\n' + '=' * 78)
-    print('RESUMEN (validación)')
-    print('=' * 78)
-    print(pd.DataFrame({m: {'PR-AUC': r['pr_auc_val'], 'ROC-AUC': r['roc_auc_val'],
-                            COL_TOP: r[COL_TOP + '_val'],
-                            'empates': len(r.get('bootstrap_empates_con_ganadora', [])),
-                            'params': r['params']}
-                        for m, r in resumen.items()}).T.to_string())
-
+    seccion('CONCLUSIONES')
+    lineas = conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resumen)
+    print('\n'.join(lineas))
+    with open(os.path.join(CARPETA_RESULTADOS, 'conclusiones.md'), 'w', encoding='utf-8') as fh:
+        fh.write('# Conclusiones: detección de anomalías con modelos no supervisados\n\n')
+        fh.write('\n'.join(lineas) + '\n')
 
 if __name__ == '__main__':
     main()

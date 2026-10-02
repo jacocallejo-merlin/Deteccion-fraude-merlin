@@ -1,15 +1,8 @@
-"""
-Proyecto: Herramienta Antifraude para la Detección de Anomalías en Transacciones Comerciales
-Hito 3: Feature Engineering para Detección de Anomalías (Versión Corregida)
-"""
-
 import clickhouse_connect
 import numpy as np
 import pandas as pd
 
-# ==============================================================================
 # 1. CONFIGURACIÓN Y CONEXIÓN A CLICKHOUSE
-# ==============================================================================
 HOST = "localhost"
 PORT = 8123
 USER = "default"
@@ -18,17 +11,13 @@ DATABASE = "fraude_pagos"
 
 
 def obtener_cliente_clickhouse():
-    """Establece conexión nativa con la base de datos ClickHouse."""
     return clickhouse_connect.get_client(
         host=HOST, port=PORT, username=USER, password=PASSWORD, database=DATABASE
     )
 
-
-# ==============================================================================
 # 2. EXTRACCIÓN DE DATOS DE LA TABLA ENRIQUECIDA
-# ==============================================================================
+
 def extraer_datos_base(client) -> pd.DataFrame:
-    """Extrae las transacciones con información de cliente, sesión y tarjeta."""
     query = """
         SELECT
             transaccion_id,
@@ -49,7 +38,6 @@ def extraer_datos_base(client) -> pd.DataFrame:
     """
     df = client.query_df(query)
 
-    # Conversión de tipos de datos
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df["cantidad"] = df["cantidad"].astype(float)
     df["limite_credito"] = df["limite_credito"].astype(float)
@@ -59,30 +47,22 @@ def extraer_datos_base(client) -> pd.DataFrame:
     return df
 
 
-# ==============================================================================
 # 3. PIPELINE DE FEATURE ENGINEERING
-# ==============================================================================
 def construir_caracteristicas(df: pd.DataFrame) -> pd.DataFrame:
-    """Calcula y agrega variables de comportamiento temporal, de importe y de usuario."""
     df_feat = df.copy()
 
-    # 1. Orden cronológico estricto por cliente
     df_feat = df_feat.sort_values(by=["cliente_id", "timestamp"]).reset_index(
         drop=True
     )
 
-    # --------------------------------------------------------------------------
     # A. Diferencia de tiempo entre transacciones consecutivas del cliente
-    # --------------------------------------------------------------------------
     df_feat["diff_tiempo_seg"] = (
         df_feat.groupby("cliente_id")["timestamp"].diff().dt.total_seconds()
     )
     # -1 representa la primera transacción histórica observada del cliente
     df_feat["diff_tiempo_seg"] = df_feat["diff_tiempo_seg"].fillna(-1)
 
-    # --------------------------------------------------------------------------
     # B. Variables temporales y de velocidad (Transacciones en última hora)
-    # --------------------------------------------------------------------------
     df_feat["hora_dia"] = df_feat["timestamp"].dt.hour
 
     # Cálculo vectorizado robusto: cuenta transacciones en ventana móvil de 3600s
@@ -97,9 +77,7 @@ def construir_caracteristicas(df: pd.DataFrame) -> pd.DataFrame:
 
     df_feat["tx_ultimas_1h"] = tx_1h
 
-    # --------------------------------------------------------------------------
     # C. Tarjetas distintas por cliente
-    # --------------------------------------------------------------------------
     tarjetas_unicas = (
         df_feat.groupby("cliente_id")["metodo_id"]
         .nunique()
@@ -107,9 +85,7 @@ def construir_caracteristicas(df: pd.DataFrame) -> pd.DataFrame:
     )
     df_feat = df_feat.merge(tarjetas_unicas, on="cliente_id", how="left")
 
-    # --------------------------------------------------------------------------
     # D. Z-Score del importe (cantidad) a nivel de cliente
-    # --------------------------------------------------------------------------
     stats_cliente = df_feat.groupby("cliente_id")["cantidad"].agg(
         media_cantidad="mean",
         std_cantidad=lambda x: x.std(ddof=0) if len(x) > 1 else 0.0,
@@ -130,9 +106,7 @@ def construir_caracteristicas(df: pd.DataFrame) -> pd.DataFrame:
         .round(4)
     )
 
-    # --------------------------------------------------------------------------
     # E. Ratios contextuales y de riesgo de negocio
-    # --------------------------------------------------------------------------
     df_feat["ratio_cantidad_limite"] = np.where(
         (df_feat["limite_credito"].notnull()) & (df_feat["limite_credito"] > 0),
         df_feat["cantidad"] / df_feat["limite_credito"],
@@ -148,11 +122,9 @@ def construir_caracteristicas(df: pd.DataFrame) -> pd.DataFrame:
     return df_feat
 
 
-# ==============================================================================
 # 4. INSPECCIÓN Y VALIDACIÓN DEL DATASET RESULTANTE
-# ==============================================================================
+
 def generar_reporte_features(df_features: pd.DataFrame):
-    """Muestra un resumen estadístico y de estructura del conjunto de características."""
     columnas_ingenieria = [
         "transaccion_id",
         "cliente_id",
@@ -177,10 +149,10 @@ def generar_reporte_features(df_features: pd.DataFrame):
     print(f"Total de registros procesados: {len(df_subset):,}")
     print(f"Total de características generadas: {len(columnas_ingenieria)}")
 
-    print("\n--- Vista preliminar de las primeras 5 filas ---")
+    print("\nVista preliminar de las primeras 5 filas")
     print(df_subset.head().to_string(index=False))
 
-    print("\n--- Estadísticas descriptivas de las nuevas variables ---")
+    print("\nEstadísticas descriptivas de las nuevas variables ")
     stats_cols = [
         "diff_tiempo_seg",
         "tx_ultimas_1h",
@@ -190,15 +162,13 @@ def generar_reporte_features(df_features: pd.DataFrame):
     ]
     print(df_subset[stats_cols].describe().round(2).to_string())
 
-    print("\n--- Comprobación de valores nulos ---")
+    print("\nComprobación de valores nulos")
     nulos = df_subset.isnull().sum()
     print(nulos[nulos > 0] if nulos.sum() > 0 else "0 valores nulos detectados.")
     print("=" * 80 + "\n")
 
 
-# ==============================================================================
 # 5. EJECUCIÓN PRINCIPAL
-# ==============================================================================
 if __name__ == "__main__":
     client = obtener_cliente_clickhouse()
     print(f"Conectado a ClickHouse en '{DATABASE}'. Extrayendo datos...")
@@ -211,7 +181,6 @@ if __name__ == "__main__":
 
     generar_reporte_features(df_resultado)
 
-    # Exportamos la matriz final a Parquet para usarla directamente en el entrenamiento
     archivo_salida = "dataset_features_hito3.parquet"
     df_resultado.to_parquet(archivo_salida, index=False)
     print(f"Matriz de características guardada con éxito en '{archivo_salida}'.")
