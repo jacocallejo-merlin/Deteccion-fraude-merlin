@@ -146,8 +146,19 @@ def guardar(X_train, X_test, info_train, info_test, escalador):
     print(f'\nGuardado en la carpeta "{CARPETA_SALIDA}/": X_train, X_test, info_train, info_test y escalador')
 
 
+DIAS_CALENTAMIENTO = 30  
+
+def quitar_calentamiento(df):
+    inicio = df['timestamp'].min() + pd.Timedelta(days=DIAS_CALENTAMIENTO)
+    quitadas = df[df['timestamp'] < inicio]
+    print(f'\nDescartados los primeros {DIAS_CALENTAMIENTO} días: {len(quitadas):,} transacciones '
+          f'({int(quitadas["es_fraude"].sum())} fraudes)')
+    return df[df['timestamp'] >= inicio].reset_index(drop=True)
+
+
 def main():
     df = cargar_datos()
+    df = quitar_calentamiento(df)
     X, info = seleccionar_variables(df)
     X = transformar(X)
     X_train, X_test, info_train, info_test = dividir(X, info)

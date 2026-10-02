@@ -34,6 +34,9 @@ PAISES_HABITUALES_PESOS = [0.50, 0.10, 0.09, 0.07, 0.07, 0.06, 0.04, 0.03, 0.02,
 PAISES_RAROS = ["Rusia", "Nigeria", "Vietnam", "Ucrania", "Indonesia", "Filipinas",
                 "China", "Pakistán", "Brasil", "India", "Sudáfrica", "Egipto"]
 
+DIAS_SIN_FRAUDE = 30
+MARGEN_FINAL_DIAS = {"devolucion_abusiva": 25}
+
 MOTIVOS_DEVOLUCION = ["producto no conforme", "producto no recibido", "talla incorrecta",
                       "cargo duplicado", "cancelación del pedido"]
 
@@ -520,8 +523,9 @@ def generar_fraude(fab, rng, fecha_inicio, fecha_fin, clientes_ids, perfiles, me
                 "disp": int(rng.choice(disp_por_cliente[cid])),
                 "disp_nuevo": elegir_dispositivo_nuevo(rng, cid, disp_por_cliente, todos_dispositivos),
                 "canal": int(rng.choice(canales_online)),  
-                "momento": hora_fraude(rng, momento_aleatorio(rng, fecha_inicio + timedelta(days=15),
-                                                              fecha_fin - timedelta(days=30))),
+                "momento": hora_fraude(rng, momento_aleatorio(
+                    rng, fecha_inicio + timedelta(days=DIAS_SIN_FRAUDE),
+                    fecha_fin - timedelta(days=MARGEN_FINAL_DIAS.get(tipo, 1)))),
                 "pais": perfiles[cid]["pais"],
                 "mu": perfiles[cid]["mu"],
             }
@@ -581,7 +585,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="No conecta a ClickHouse, solo genera y resume")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--dias", type=int, default=180)
-    parser.add_argument("--proporciones", choices=["igual", "aleatoria"], default="aleatoria")
+    parser.add_argument("--proporciones", choices=["igual", "aleatoria"], default="igual")
     args = parser.parse_args()
 
     rng = np.random.default_rng(args.seed)
