@@ -6,6 +6,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score, precision_recall_curve, roc_auc_score
+from config import CONFIG
+from artefactos import guardar, ultimo_run
 
 CARPETA_DATOS = 'datos_ml'
 CARPETA_MODELOS = 'modelos'
@@ -18,7 +20,7 @@ PORCENTAJES_TOP = [0.5, 1, 2, 5, 10]
 N_BOOTSTRAP = 300
 N_TOP_VALIDACION = 3           
 TOLERANCIA_DERIVA = 1.5        
-SEMILLA = 42
+SEMILLA = CONFIG['semilla'] 
 
 pd.set_option('display.width', 160)
 
@@ -472,6 +474,10 @@ def main():
     if os.path.exists(ruta_resumen):
         with open(ruta_resumen, encoding='utf-8') as fh:
             resumen = {m: r for m, r in json.load(fh).items() if m in simples}
+            run_id = ultimo_run()
+    if run_id:
+        guardar(CARPETA_RESULTADOS, run_id)
+        print(f'\nResultados copiados también en historico/{run_id}/resultados/')
 
     seccion('CONCLUSIONES')
     lineas = conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resumen)

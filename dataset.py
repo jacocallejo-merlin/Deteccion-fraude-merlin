@@ -7,8 +7,7 @@ import numpy as np
 from faker import Faker
 
 fake = Faker("es_ES")
-from config import HOST, PORT, USER, PASSWORD, DATABASE
-
+from config import CONFIG, HOST, PORT, USER, PASSWORD, DATABASE
 
 N_CLIENTES = 2000
 N_COMERCIOS = 30
@@ -580,7 +579,7 @@ def resumen(fab):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="No conecta a ClickHouse, solo genera y resume")
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=CONFIG['semilla'])
     parser.add_argument("--dias", type=int, default=180)
     parser.add_argument("--proporciones", choices=["igual", "aleatoria"], default="igual")
     args = parser.parse_args()

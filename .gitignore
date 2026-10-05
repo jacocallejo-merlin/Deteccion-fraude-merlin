@@ -1,0 +1,9 @@
+venv/
+.env
+datos_ml/
+modelos/
+resultados/
+historico/
+informe_limpieza_*.txt
+__pycache__/
+*.pyc

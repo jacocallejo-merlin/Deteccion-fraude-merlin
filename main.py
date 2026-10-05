@@ -6,7 +6,7 @@ from pathlib import Path
 CARPETA = Path(__file__).resolve().parent
 sys.path.insert(0, str(CARPETA))
 
-from BD_VACIAS import DATABASE, HOST, PASSWORD, PORT, USER  
+from config import DATABASE, HOST, PASSWORD, PORT, USER  
 
 PASOS = [
     ('BD_VACIAS.py',                      'Crea la base de datos y las tablas vacías'),

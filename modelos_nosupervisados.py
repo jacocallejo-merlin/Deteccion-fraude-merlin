@@ -3,7 +3,7 @@ import itertools
 import json
 import os
 from datetime import datetime
-from config import CONFIG
+from config import CONFIG, fijar_semillas
 import joblib
 import numpy as np
 import pandas as pd
@@ -11,6 +11,7 @@ from sklearn.cluster import KMeans
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import average_precision_score
 from sklearn.svm import OneClassSVM
+from artefactos import crear_carpeta_run, guardar, marcar_ultimo_run
 
 CARPETA_DATOS = 'datos_ml'
 CARPETA_MODELOS = 'modelos'
@@ -245,15 +246,23 @@ def main():
     parser.add_argument('--sin-clickhouse', action='store_true',
                         help='no guardar los scores en anomaly_scores')
     args = parser.parse_args()
+    fijar_semillas()
     elegidos = MODELOS if 'todos' in args.modelos else list(dict.fromkeys(args.modelos))
 
     run_id = f'clasicos_{datetime.now():%Y%m%d_%H%M%S}'   # el mismo para toda la ejecución
     print(f'run_id: {run_id}')
     client = None if args.sin_clickhouse else conectar_clickhouse()
+    carpeta_run = crear_carpeta_run(run_id)
 
     X_train, X_test, X_fit, X_val, y_val, ids = cargar()
     for nombre in elegidos:
         procesar(nombre, X_train, X_test, X_fit, X_val, y_val, ids, run_id, client)
+        guardar(os.path.join(CARPETA_MODELOS, f'{nombre}.joblib'), run_id)
+
+    guardar(os.path.join(CARPETA_DATOS, 'escalador.joblib'), run_id)
+    guardar(os.path.join(CARPETA_MODELOS, 'resumen_entrenamiento.json'), run_id)
+    marcar_ultimo_run(run_id)
+    print(f'Histórico de esta ejecución en "{carpeta_run}"')
 
 
 if __name__ == '__main__':

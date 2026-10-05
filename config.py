@@ -1,6 +1,8 @@
 import os
+import random
 from pathlib import Path
 
+import numpy as np
 import yaml
 from dotenv import load_dotenv
 
@@ -24,6 +26,18 @@ def cargar_config(ruta=RUTA_CONFIG):
     ch['port'] = int(os.getenv('CLICKHOUSE_PORT', ch['port']))
     return config
 
+def fijar_semillas(semilla=None):
+    """Fija la semilla de random, numpy y (si está instalado) PyTorch.
+    Sin argumento usa la del config.yaml. Devuelve la semilla usada."""
+    semilla = CONFIG['semilla'] if semilla is None else semilla
+    random.seed(semilla)
+    np.random.seed(semilla)
+    try:
+        import torch
+        torch.manual_seed(semilla)
+    except ImportError:
+        pass   # PyTorch solo lo usa el autoencoder
+    return semilla
 
 CONFIG = cargar_config()
 
