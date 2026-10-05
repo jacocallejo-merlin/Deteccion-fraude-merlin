@@ -12,7 +12,7 @@ CARPETA_MODELOS = 'modelos'
 CARPETA_RESULTADOS = 'resultados'
 COLUMNA_GRUPO = 'cliente_id'   
 
-MODELOS = ['iforest', 'kmeans', 'ocsvm']
+MODELOS = ['iforest', 'kmeans', 'ocsvm', 'autoencoder']   # se omite el que no tenga scores
 PRESUPUESTO_PCT = 1.0
 PORCENTAJES_TOP = [0.5, 1, 2, 5, 10]
 N_BOOTSTRAP = 300
@@ -31,7 +31,8 @@ def cargar(carpeta):
     for m in MODELOS:
         rutas = {p: os.path.join(carpeta, f'{m}_scores_{p}.parquet') for p in ('val', 'test')}
         if not all(os.path.exists(r) for r in rutas.values()):
-            print(f'  {m}: sin scores en {carpeta}/, se omite (python modelos_nosupervisados.py {m})')
+            script = 'entrenar_autoencoder.py' if m == 'autoencoder' else f'modelos_nosupervisados.py {m}'
+            print(f'  {m}: sin scores en {carpeta}/, se omite (python {script})')
             continue
 
         val = pd.read_parquet(rutas['val'])
@@ -220,6 +221,9 @@ INFO_MODELOS = {
                'las que quedan lejos de todos los perfiles'),
     'ocsvm': ('One-Class SVM',
               'dibuja una frontera alrededor de las transacciones normales y marca lo que queda fuera'),
+    'autoencoder': ('Autoencoder',
+                    'es una red neuronal que aprende a comprimir y reconstruir las transacciones '
+                    'normales; las que reconstruye mal son las más raras'),
 }
 
 TIPOS_FRAUDE = {
@@ -279,16 +283,20 @@ def conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resume
     L.append('\n## Cómo se ha elegido')
     probadas = {m: r['combinaciones_probadas'] for m, r in resumen.items()}
     if probadas:
-        L.append('- Se probaron 3 modelos de detección de anomalías, cada uno con muchas '
+        L.append(f'- Se probaron {len(simples)} modelos de detección de anomalías, cada uno con muchas '
                  'configuraciones distintas (' + lista(f'{nombre_detector(m)} {n}'
                                                        for m, n in probadas.items())
-                 + '). De cada modelo se quedó la mejor y luego se compararon los 3.')
+                 + f'). De cada modelo se quedó la mejor y luego se compararon los {len(simples)}.')
     else:
-        L.append('- Se probaron 3 modelos de detección de anomalías, cada uno con muchas '
+        L.append(f'- Se probaron {len(simples)} modelos de detección de anomalías, cada uno con muchas '
                  'configuraciones distintas. De cada modelo se quedó la mejor y luego se '
-                 'compararon los 3.')
+                 f'compararon los {len(simples)}.')
     L.append('- Los modelos aprenden sin etiquetas: solo ven cómo son las transacciones y buscan '
              'las raras. Las etiquetas de fraude solo se usan para elegir el mejor y medirlo.')
+    if 'autoencoder' in simples:
+        L.append('- Excepción: el autoencoder es semi-supervisado (se entrena solo con transacciones '
+                 'legítimas, así que usa la etiqueta para elegir sus datos de entrenamiento). '
+                 'La comparación con los demás no es del todo en igualdad de condiciones.')
     L.append('- El mejor se eligió con un periodo de datos (validación) y se comprobó en el periodo '
              'más reciente (test), que no se usó para nada antes. Así la medida es honesta.')
 
@@ -475,4 +483,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

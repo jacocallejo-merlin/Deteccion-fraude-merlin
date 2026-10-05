@@ -9,13 +9,15 @@ sys.path.insert(0, str(CARPETA))
 from BD_VACIAS import DATABASE, HOST, PASSWORD, PORT, USER  
 
 PASOS = [
-    ('BD_VACIAS.py',               'Crea la base de datos y las tablas vacías'),
-    ('dataset.py',                 'Genera el dataset sintético y lo carga'),
-    ('crear_tabla_enriquecida.py', 'Une las tablas en transacciones_enriquecidas'),
-    ('features.py',                'Calcula features_transaccion'),
-    ('reglas_alerta.py',           'Genera las alertas por reglas'),
-    ('informe_limpieza.py',        'Informe de calidad de datos'),
-    ('preparacion_datos_ml.py',    'Train/test, escalado y parquets en datos_ml/'),
+    ('BD_VACIAS.py',                      'Crea la base de datos y las tablas vacías'),
+    ('dataset.py',                        'Genera el dataset sintético y lo carga'),
+    ('crear_tabla_enriquecida.py',        'Une las tablas en transacciones_enriquecidas'),
+    ('features.py',                       'Calcula features_transaccion'),
+    ('reglas_alerta.py',                  'Genera las alertas por reglas'),
+    ('informe_limpieza.py',               'Informe de calidad de datos'),
+    ('preparacion_datos_ml.py',           'Train/test, escalado y parquets en datos_ml/'),
+    ('modelos_nosupervisados.py',         'Entrena IF, KMeans y OCSVM y guarda scores'),
+    ('evaluar_modelos_nosupervisados.py', 'Compara los modelos y saca conclusiones'),
 ]
 
 
@@ -71,9 +73,10 @@ def main():
     print('PIPELINE COMPLETADO')
     print('=' * 78)
     for script, segundos in tiempos:
-        print(f'  {script:<30} {segundos:>8.1f} s')
-    print(f'  {"TOTAL":<30} {time.perf_counter() - inicio_total:>8.1f} s')
+        print(f'  {script:<36} {segundos:>8.1f} s')
+    print(f'  {"TOTAL":<36} {time.perf_counter() - inicio_total:>8.1f} s')
     print('\nDatos listos en "datos_ml/", preparados para el entrenamiento.')
+    print('\nModelos en "modelos/", resultados en "resultados/" y scores en anomaly_scores.')
 
 
 if __name__ == '__main__':

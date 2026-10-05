@@ -1,72 +1,59 @@
 {
   "iforest": {
-    "params": {
-      "n_estimators": 100,
-      "max_samples": 4096,
+    "mejores_parametros": {
+      "n_estimators": 200,
+      "max_samples": 1024,
       "max_features": 0.5
     },
-    "pr_auc_val": 0.48775875067826174,
-    "roc_auc_val": 0.9185823432398775,
-    "recall_top1%_val": 0.2937062937062937,
-    "pr_auc_val_media_semillas": 0.42794816518509987,
-    "pr_auc_val_std_semillas": 0.022438162334825255,
-    "bootstrap_empates_con_ganadora": [
-      {
-        "n_estimators": 300,
-        "max_samples": 4096,
-        "max_features": 1.0
-      }
-    ],
-    "combinaciones_probadas": 18,
-    "test_sobre_p99_train_%": 0.82
+    "combinaciones_probadas": 8,
+    "pr_auc_val": 0.3084549910346452,
+    "pr_auc_val_media_semillas": 0.2831299572242995,
+    "pr_auc_val_std_semillas": 0.012631389690381812,
+    "referencia_normalizacion": {
+      "mediana": 0.4128093363745578,
+      "p99": 0.5707655095122296
+    },
+    "proporcion_val": 0.15,
+    "filas_ajuste": 19700,
+    "filas_validacion": 3477,
+    "semilla": 42,
+    "run_id": "clasicos_20261005_093929"
   },
   "kmeans": {
-    "params": {
-      "k": 2,
-      "distancia": "relativa"
+    "mejores_parametros": {
+      "k": 3
     },
-    "pr_auc_val": 0.6599398856761738,
-    "roc_auc_val": 0.9680887420613448,
-    "recall_top1%_val": 0.34965034965034963,
-    "pr_auc_val_media_semillas": 0.659982829191906,
-    "pr_auc_val_std_semillas": 3.0365651182148952e-05,
-    "bootstrap_empates_con_ganadora": [
-      {
-        "k": 3,
-        "distancia": "absoluta"
-      },
-      {
-        "k": 2,
-        "distancia": "absoluta"
-      }
-    ],
-    "combinaciones_probadas": 16,
-    "test_sobre_p99_train_%": 0.88
+    "combinaciones_probadas": 5,
+    "pr_auc_val": 0.43830723114927617,
+    "pr_auc_val_media_semillas": 0.4380320064876761,
+    "pr_auc_val_std_semillas": 0.0005504493232000752,
+    "referencia_normalizacion": {
+      "mediana": 4.097222163015585,
+      "p99": 12.694595339701394
+    },
+    "proporcion_val": 0.15,
+    "filas_ajuste": 19700,
+    "filas_validacion": 3477,
+    "semilla": 42,
+    "run_id": "clasicos_20261005_093929"
   },
   "ocsvm": {
-    "params": {
-      "gamma_factor": 1.0,
+    "mejores_parametros": {
       "nu": 0.05,
-      "gamma": 0.022307203078299143
+      "gamma": 0.01
     },
-    "pr_auc_val": 0.5369371110800998,
-    "roc_auc_val": 0.9450941505736027,
-    "recall_top1%_val": 0.32867132867132864,
-    "pr_auc_val_media_semillas": 0.5227977251267871,
-    "pr_auc_val_std_semillas": 0.006531279702692192,
-    "bootstrap_empates_con_ganadora": [
-      {
-        "gamma_factor": 0.5,
-        "nu": 0.05,
-        "gamma": 0.011153601539149571
-      },
-      {
-        "gamma_factor": 0.25,
-        "nu": 0.05,
-        "gamma": 0.005576800769574786
-      }
-    ],
-    "combinaciones_probadas": 15,
-    "test_sobre_p99_train_%": 0.99
+    "combinaciones_probadas": 4,
+    "pr_auc_val": 0.32137861608306856,
+    "pr_auc_val_media_semillas": 0.32454538564654883,
+    "pr_auc_val_std_semillas": 0.002028888649258242,
+    "referencia_normalizacion": {
+      "mediana": -27.226243670624825,
+      "p99": 27.14974536838686
+    },
+    "proporcion_val": 0.15,
+    "filas_ajuste": 19700,
+    "filas_validacion": 3477,
+    "semilla": 42,
+    "run_id": "clasicos_20261005_093929"
   }
 }
