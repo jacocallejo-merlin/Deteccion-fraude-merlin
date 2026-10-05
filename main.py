@@ -17,7 +17,9 @@ PASOS = [
     ('pipeline/informe_limpieza.py',               'Informe de calidad de datos'),
     ('pipeline/preparacion_datos_ml.py',           'Train/test, escalado y parquets en datos_ml/'),
     ('pipeline/modelos_nosupervisados.py',         'Entrena IF, KMeans y OCSVM y guarda scores'),
-    ('pipeline/evaluar_modelos_nosupervisados.py', 'Compara los modelos y saca conclusiones'),
+    ('pipeline/entrenar_autoencoder.py',           'Entrena el autoencoder y guarda scores'),
+    ('pipeline/evaluar_modelos_nosupervisados.py', 'Compara los 4 modelos y saca conclusiones'),
+    ('pipeline/evaluar_autoencoders.py',           'Análisis detallado del autoencoder'),
 ]
 
 def preparar_base_de_datos():

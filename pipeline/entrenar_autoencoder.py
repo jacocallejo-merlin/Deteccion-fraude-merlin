@@ -5,6 +5,11 @@ import numpy as np
 import pandas as pd
 import torch
 from torch import nn
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   
+
+from config import CONFIG, fijar_semillas
 
 CARPETA_DATOS = 'datos_ml'
 CARPETA_MODELOS = 'modelos'
@@ -20,8 +25,8 @@ EPOCAS = 2000
 BATCH = 256
 LR = 1e-3
 PACIENCIA = 20       
-VALIDACION = 0.15    
-SEMILLA = 42
+VALIDACION = CONFIG['modelos']['proporcion_val']  
+SEMILLA = CONFIG['semilla']
 
 
 def cargar():
@@ -165,7 +170,8 @@ def guardar(modelo, conjuntos, errores, scores, n_entrada, columnas):
                 os.path.join(CARPETA_MODELOS, 'autoencoder_referencia.joblib'))
 
     for parte in ('train', 'val', 'test'):
-        pd.DataFrame({'error': errores[parte], 'score': scores[parte]},
+        pd.DataFrame({'error': errores[parte], 'score': scores[parte],
+                      'score_norm': errores[parte]},
                      index=conjuntos[parte].index).to_parquet(
             os.path.join(CARPETA_MODELOS, f'autoencoder_scores_{parte}.parquet'))
 
@@ -175,6 +181,7 @@ def guardar(modelo, conjuntos, errores, scores, n_entrada, columnas):
 
 
 def main():
+    fijar_semillas()
     X_train, X_test, X_fit, X_val, X_val_completo = cargar()
     modelo = entrenar(X_fit, X_val)
 

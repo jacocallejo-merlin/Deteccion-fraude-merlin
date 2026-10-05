@@ -6,18 +6,19 @@
 - Se le escapan casi por completo ip_sospechosa, pico_gasto, devolucion_abusiva y smurfing.
 
 ## Cómo se ha elegido
-- Se probaron 3 modelos de detección de anomalías, cada uno con muchas configuraciones distintas (Isolation Forest 8, KMeans 5 y One-Class SVM 4). De cada modelo se quedó la mejor y luego se compararon los 3.
+- Se probaron 4 modelos de detección de anomalías, cada uno con muchas configuraciones distintas (Isolation Forest 8, KMeans 5 y One-Class SVM 4). De cada modelo se quedó la mejor y luego se compararon los 4.
 - Los modelos aprenden sin etiquetas: solo ven cómo son las transacciones y buscan las raras. Las etiquetas de fraude solo se usan para elegir el mejor y medirlo.
+- Excepción: el autoencoder es semi-supervisado (se entrena solo con transacciones legítimas, así que usa la etiqueta para elegir sus datos de entrenamiento). La comparación con los demás no es del todo en igualdad de condiciones.
 - El mejor se eligió con un periodo de datos (validación) y se comprobó en el periodo más reciente (test), que no se usó para nada antes. Así la medida es honesta.
 
 ## El mejor modelo y por qué
 - KMeans agrupa las transacciones en perfiles típicos (clusters) y marca como sospechosas las que quedan lejos de todos los perfiles.
 - Para comparar se usa la PR-AUC: si se ordenan las transacciones de más a menos sospechosa, mide cuánto fraude queda arriba. Va de 0 a 1, y un modelo al azar sacaría 0.022 (la proporción de fraude). KMeans saca 0.65, unas 29 veces más que el azar.
-- Cada modelo por separado: KMeans 0.65, One-Class SVM 0.55, Isolation Forest 0.45.
-- Se eligió porque es el que mejor separa el fraude en validación (PR-AUC KMeans 0.44, One-Class SVM 0.32 y Isolation Forest 0.31).
-- Revisando el 1 % de las transacciones del test, fraudes encontrados de 222: Isolation Forest 60, KMeans 106 y One-Class SVM 89.
+- Cada modelo por separado: KMeans 0.65, Autoencoder 0.58, One-Class SVM 0.55, Isolation Forest 0.45.
+- Se eligió porque es el que mejor separa el fraude en validación (PR-AUC KMeans 0.44, Autoencoder 0.36, One-Class SVM 0.32 y Isolation Forest 0.31).
+- Revisando el 1 % de las transacciones del test, fraudes encontrados de 222: Isolation Forest 60, KMeans 106, One-Class SVM 89 y Autoencoder 104.
 - El test lo confirma: KMeans es el que más fraude encuentra.
-- Donde más destaca sobre los otros es en dispositivo_nuevo y bot.
+- Donde más destaca sobre los otros es en bot.
 
 ## Qué fraudes detecta y cuáles no
 - card_testing (32 casos: muchas compras pequeñas seguidas para comprobar si una tarjeta robada funciona): detecta el 88 %.
