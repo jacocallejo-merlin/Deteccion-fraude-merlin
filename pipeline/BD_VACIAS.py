@@ -1,7 +1,11 @@
+import clickhouse_connect 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import clickhouse_connect
- 
 from config import HOST, PORT, USER, PASSWORD, DATABASE
- 
+
 def get_client(database=None):
     return clickhouse_connect.get_client(host=HOST, port=PORT, username=USER, password=PASSWORD, database=database )
  

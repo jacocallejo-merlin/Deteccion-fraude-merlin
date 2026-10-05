@@ -1,11 +1,11 @@
 import clickhouse_connect
 from datetime import datetime
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-HOST = "localhost"
-PORT = 8123
-USER = "default"
-PASSWORD = "password"
-DATABASE = "fraude_pagos"
+from config import HOST, PORT, USER, PASSWORD, DATABASE
+
 
 TABLAS = ["cliente", "comercio", "dispositivo", "patron", "analista", "metodo_pago", "canal_pago",
           "cliente_dispositivo", "sesion", "evento", "transaccion", "devolucion", "alerta"]

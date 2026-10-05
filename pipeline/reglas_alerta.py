@@ -1,6 +1,8 @@
 import os
 import clickhouse_connect
- 
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import HOST, PORT, USER, PASSWORD, DATABASE
 
 # No usamos ni es_fraude ni tipo_fraude. La etiqueta solo se usa al final para evaluar.

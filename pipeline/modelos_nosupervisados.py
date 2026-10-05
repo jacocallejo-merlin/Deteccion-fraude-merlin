@@ -2,8 +2,10 @@ import argparse
 import itertools
 import json
 import os
+import sys
 from datetime import datetime
-from config import CONFIG, fijar_semillas
+from pathlib import Path
+
 import joblib
 import numpy as np
 import pandas as pd
@@ -11,6 +13,11 @@ from sklearn.cluster import KMeans
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import average_precision_score
 from sklearn.svm import OneClassSVM
+
+# Raíz del proyecto, donde están config.py y artefactos.py
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from config import CONFIG, fijar_semillas
 from artefactos import crear_carpeta_run, guardar, marcar_ultimo_run
 
 CARPETA_DATOS = 'datos_ml'

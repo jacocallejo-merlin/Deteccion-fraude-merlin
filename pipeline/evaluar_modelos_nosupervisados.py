@@ -1,11 +1,18 @@
 import os
 import json
+import sys
+from pathlib import Path
+
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score, precision_recall_curve, roc_auc_score
+
+# Raíz del proyecto, donde están config.py y artefactos.py
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 from config import CONFIG
 from artefactos import guardar, ultimo_run
 

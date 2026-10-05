@@ -9,17 +9,16 @@ sys.path.insert(0, str(CARPETA))
 from config import DATABASE, HOST, PASSWORD, PORT, USER  
 
 PASOS = [
-    ('BD_VACIAS.py',                      'Crea la base de datos y las tablas vacías'),
-    ('dataset.py',                        'Genera el dataset sintético y lo carga'),
-    ('crear_tabla_enriquecida.py',        'Une las tablas en transacciones_enriquecidas'),
-    ('features.py',                       'Calcula features_transaccion'),
-    ('reglas_alerta.py',                  'Genera las alertas por reglas'),
-    ('informe_limpieza.py',               'Informe de calidad de datos'),
-    ('preparacion_datos_ml.py',           'Train/test, escalado y parquets en datos_ml/'),
-    ('modelos_nosupervisados.py',         'Entrena IF, KMeans y OCSVM y guarda scores'),
-    ('evaluar_modelos_nosupervisados.py', 'Compara los modelos y saca conclusiones'),
+    ('pipeline/BD_VACIAS.py',                      'Crea la base de datos y las tablas vacías'),
+    ('pipeline/dataset.py',                        'Genera el dataset sintético y lo carga'),
+    ('pipeline/crear_tabla_enriquecida.py',        'Une las tablas en transacciones_enriquecidas'),
+    ('pipeline/features.py',                       'Calcula features_transaccion'),
+    ('pipeline/reglas_alerta.py',                  'Genera las alertas por reglas'),
+    ('pipeline/informe_limpieza.py',               'Informe de calidad de datos'),
+    ('pipeline/preparacion_datos_ml.py',           'Train/test, escalado y parquets en datos_ml/'),
+    ('pipeline/modelos_nosupervisados.py',         'Entrena IF, KMeans y OCSVM y guarda scores'),
+    ('pipeline/evaluar_modelos_nosupervisados.py', 'Compara los modelos y saca conclusiones'),
 ]
-
 
 def preparar_base_de_datos():
     import logging
