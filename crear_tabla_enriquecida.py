@@ -1,10 +1,5 @@
 import clickhouse_connect
-
-HOST = 'localhost'
-PORT = 8123
-USER = 'default'
-PASSWORD = 'password'
-DATABASE = 'fraude_pagos'
+from config import HOST, PORT, USER, PASSWORD, DATABASE
 
 SQL_TRANSACCIONES = '''
 CREATE TABLE transacciones_enriquecidas

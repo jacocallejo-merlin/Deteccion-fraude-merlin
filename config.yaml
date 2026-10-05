@@ -1,0 +1,32 @@
+clickhouse:
+  host: localhost        # se puede cambiar sin tocar este fichero con CLICKHOUSE_HOST en .env (útil en Docker)
+  port: 8123
+  user: default
+  database: fraude_pagos
+
+# Semilla única para todo el proyecto (dataset, modelos, evaluación)
+semilla: 42
+
+# preparacion_datos_ml.py
+preparacion:
+  proporcion_train: 0.7        # partición temporal: el 70 % más antiguo es train
+  dias_calentamiento: 30       # se descartan los primeros días (sin historial fiable)
+  carpeta_salida: datos_ml
+
+# modelos_nosupervisados.py
+modelos:
+  proporcion_val: 0.15         # validación = 15 % más reciente del train. IGUAL para todos los modelos
+  semillas_estabilidad: [0, 1, 2, 3, 4]
+  ocsvm_max_filas: 10000       # OCSVM es muy lento con más filas
+  kmeans_n_init: 10
+  partes_a_clickhouse: [test]  # qué scores se guardan en anomaly_scores
+  rejillas:                    # configuraciones que se prueban de cada modelo
+    iforest:
+      n_estimators: [200, 400]
+      max_samples: [256, 1024]
+      max_features: [0.5, 1.0]
+    kmeans:
+      k: [2, 3, 5, 8, 12]
+    ocsvm:
+      nu: [0.01, 0.05]
+      gamma: [scale, 0.01]

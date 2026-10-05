@@ -3,7 +3,7 @@ import itertools
 import json
 import os
 from datetime import datetime
-
+from config import CONFIG
 import joblib
 import numpy as np
 import pandas as pd
@@ -15,25 +15,34 @@ from sklearn.svm import OneClassSVM
 CARPETA_DATOS = 'datos_ml'
 CARPETA_MODELOS = 'modelos'
 
+
+# Los VALORES están en config.yaml (sección "modelos"); aquí se explica para qué sirve cada uno.
+_cfg = CONFIG['modelos']
+
 # Validación = el tramo MÁS RECIENTE del train (partición temporal, igual que el autoencoder).
 # Tiene que ser el mismo valor para TODOS los modelos: la evaluación exige las mismas filas.
-PROPORCION_VAL = 0.15
+PROPORCION_VAL = _cfg['proporcion_val']
 
-SEMILLA = 42
-SEMILLAS_ESTABILIDAD = [0, 1, 2, 3, 4]   # para comprobar que el resultado no depende del azar
-OCSVM_MAX_FILAS = 10_000                 # OCSVM es muy lento con más filas
-KMEANS_N_INIT = 10
+# Semilla común a todo el proyecto: con la misma semilla, el resultado sale siempre igual.
+SEMILLA = CONFIG['semilla']
 
-# Configuraciones que se prueban de cada modelo (se elige la de mejor PR-AUC en validación)
-REJILLAS = {
-    'iforest': {'n_estimators': [200, 400], 'max_samples': [256, 1024], 'max_features': [0.5, 1.0]},
-    'kmeans': {'k': [2, 3, 5, 8, 12]},
-    'ocsvm': {'nu': [0.01, 0.05], 'gamma': ['scale', 0.01]},
-}
+# Se reentrena el modelo elegido con varias semillas para comprobar que el resultado
+# no depende del azar (si la PR-AUC apenas cambia, el modelo es estable).
+SEMILLAS_ESTABILIDAD = _cfg['semillas_estabilidad']
+
+# OCSVM es muy lento con muchas filas: se entrena con una muestra de este tamaño.
+OCSVM_MAX_FILAS = _cfg['ocsvm_max_filas']
+
+# Veces que KMeans repite el agrupamiento con centros iniciales distintos (se queda con el mejor).
+KMEANS_N_INIT = _cfg['kmeans_n_init']
+
+# Configuraciones que se prueban de cada modelo. Se entrenan todas SIN etiquetas
+# y se elige la de mejor PR-AUC en validación (la etiqueta solo sirve para elegir).
+REJILLAS = _cfg['rejillas']
 MODELOS = list(REJILLAS)
 
-# Qué partes se guardan en anomaly_scores (la evaluación sigue leyendo los parquets)
-PARTES_A_CLICKHOUSE = ['test']
+# Qué scores se guardan en la tabla común anomaly_scores (la evaluación lee los parquets).
+PARTES_A_CLICKHOUSE = _cfg['partes_a_clickhouse']
 
 
 

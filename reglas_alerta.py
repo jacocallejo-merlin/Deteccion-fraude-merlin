@@ -1,11 +1,7 @@
 import os
 import clickhouse_connect
  
-HOST = 'localhost'
-PORT = 8123
-USER = 'default'
-PASSWORD = "password"
-DATABASE = 'fraude_pagos'
+from config import HOST, PORT, USER, PASSWORD, DATABASE
 
 # No usamos ni es_fraude ni tipo_fraude. La etiqueta solo se usa al final para evaluar.
 # (patron_id, nombre, tipo_fraude al que apunta, nota_riesgo, condición SQL)

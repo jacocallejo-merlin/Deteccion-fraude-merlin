@@ -6,15 +6,11 @@ import numpy as np
 import pandas as pd
 from sklearn.preprocessing import StandardScaler
 
-HOST = 'localhost'
-PORT = 8123
-USER = 'default'
-PASSWORD = 'password'
-DATABASE = 'fraude_pagos'
+from config import CONFIG, HOST, PORT, USER, PASSWORD, DATABASE
 
-PROPORCION_TRAIN = 0.7     
-CARPETA_SALIDA = 'datos_ml'
 
+PROPORCION_TRAIN = CONFIG['preparacion']['proporcion_train']
+CARPETA_SALIDA = CONFIG['preparacion']['carpeta_salida']
 
 def cargar_datos():
     client = clickhouse_connect.get_client(
@@ -146,7 +142,7 @@ def guardar(X_train, X_test, info_train, info_test, escalador):
     print(f'\nGuardado en la carpeta "{CARPETA_SALIDA}/": X_train, X_test, info_train, info_test y escalador')
 
 
-DIAS_CALENTAMIENTO = 30  
+DIAS_CALENTAMIENTO = CONFIG['preparacion']['dias_calentamiento']
 
 def quitar_calentamiento(df):
     inicio = df['timestamp'].min() + pd.Timedelta(days=DIAS_CALENTAMIENTO)

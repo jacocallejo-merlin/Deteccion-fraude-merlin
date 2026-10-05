@@ -17,7 +17,7 @@
     "filas_ajuste": 19700,
     "filas_validacion": 3477,
     "semilla": 42,
-    "run_id": "clasicos_20261005_093929"
+    "run_id": "clasicos_20261005_101201"
   },
   "kmeans": {
     "mejores_parametros": {
@@ -35,7 +35,7 @@
     "filas_ajuste": 19700,
     "filas_validacion": 3477,
     "semilla": 42,
-    "run_id": "clasicos_20261005_093929"
+    "run_id": "clasicos_20261005_101201"
   },
   "ocsvm": {
     "mejores_parametros": {
@@ -54,6 +54,6 @@
     "filas_ajuste": 19700,
     "filas_validacion": 3477,
     "semilla": 42,
-    "run_id": "clasicos_20261005_093929"
+    "run_id": "clasicos_20261005_101201"
   }
 }

@@ -1,11 +1,6 @@
 import clickhouse_connect
  
-HOST = 'localhost'
-PORT = 8123
-USER = 'default'
-PASSWORD = 'password'  
-DATABASE = 'fraude_pagos'
-
+from config import HOST, PORT, USER, PASSWORD, DATABASE
  
 def get_client(database=None):
     return clickhouse_connect.get_client(host=HOST, port=PORT, username=USER, password=PASSWORD, database=database )

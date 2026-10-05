@@ -3,11 +3,8 @@ import numpy as np
 import pandas as pd
 
 # 1. CONFIGURACIÓN Y CONEXIÓN A CLICKHOUSE
-HOST = "localhost"
-PORT = 8123
-USER = "default"
-PASSWORD = "password"
-DATABASE = "fraude_pagos"
+from config import HOST, PORT, USER, PASSWORD, DATABASE
+
 
 
 def obtener_cliente_clickhouse():

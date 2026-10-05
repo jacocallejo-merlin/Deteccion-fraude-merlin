@@ -1,10 +1,6 @@
 import clickhouse_connect
 
-HOST = 'localhost'
-PORT = 8123
-USER = 'default'
-PASSWORD = 'password'
-DATABASE = 'fraude_pagos'
+from config import HOST, PORT, USER, PASSWORD, DATABASE
 
 SQL_FEATURES = '''
 CREATE TABLE features_transaccion

@@ -7,11 +7,8 @@ import numpy as np
 from faker import Faker
 
 fake = Faker("es_ES")
-HOST = "localhost"
-PORT = 8123
-USER = "default"
-PASSWORD = "password"
-DATABASE = "fraude_pagos"
+from config import HOST, PORT, USER, PASSWORD, DATABASE
+
 
 N_CLIENTES = 2000
 N_COMERCIOS = 30
