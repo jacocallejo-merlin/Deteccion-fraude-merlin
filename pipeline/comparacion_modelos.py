@@ -1,10 +1,15 @@
 """
 Script: comparacion_modelos.py
 Objetivo Hito 4: Comparación de autoencoders con métodos clásicos.
+
+Todos los modelos (IF, KMeans, OCSVM y autoencoder) se comparan en igualdad de condiciones:
+- el GANADOR se elige con la PR-AUC de VALIDACIÓN (las mismas filas para todos los modelos);
+- el TEST solo se usa para medir, nunca para elegir.
 """
 
 import os
-import json
+import sys
+from pathlib import Path
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
@@ -12,19 +17,25 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import average_precision_score, precision_recall_curve, roc_auc_score
 
+# Raíz del proyecto, donde está config.py
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from config import CONFIG
+
 CARPETA_DATOS = 'datos_ml'
 CARPETA_MODELOS = 'modelos'
 CARPETA_RESULTADOS = 'resultados'
 COLUMNA_GRUPO = 'cliente_id'   
 
-# Se incluye el autoencoder explícitamente en la lista base
 MODELOS = ['iforest', 'kmeans', 'ocsvm', 'autoencoder']
 PRESUPUESTO_PCT = 1.0
 PORCENTAJES_TOP = [0.5, 1, 2, 5, 10]
 N_BOOTSTRAP = 300
-N_TOP_VALIDACION = 4           
-TOLERANCIA_DERIVA = 1.5        
-SEMILLA = 42
+SEMILLA = CONFIG['semilla']   # semilla del bootstrap (valor en config.yaml)
+
+SCRIPT_DE = {'iforest': 'modelos_nosupervisados.py', 'kmeans': 'modelos_nosupervisados.py',
+             'ocsvm': 'modelos_nosupervisados.py', 'autoencoder': 'entrenar_autoencoder.py'}
+NOMBRES = {'iforest': 'Isolation Forest', 'kmeans': 'KMeans',
+           'ocsvm': 'One-Class SVM', 'autoencoder': 'Autoencoder'}
 
 pd.set_option('display.width', 160)
 
@@ -39,21 +50,16 @@ def cargar(carpeta):
     info_train = pd.read_parquet(os.path.join(CARPETA_DATOS, 'info_train.parquet'))
     info_test = pd.read_parquet(os.path.join(CARPETA_DATOS, 'info_test.parquet'))
 
-    detectores, idx_val_ref = {}, None
-    
+    detectores, idx_val_ref, primero = {}, None, None
+
     for m in MODELOS:
-        # El Autoencoder guarda en 'train' y 'test', los clásicos en 'val' y 'test'
-        particion_ref = 'val'
+        # Todos los modelos guardan validación y test con el mismo formato
         ruta_ref = os.path.join(carpeta, f'{m}_scores_val.parquet')
-        
-        if m == 'autoencoder' and not os.path.exists(ruta_ref):
-            ruta_ref = os.path.join(carpeta, f'{m}_scores_train.parquet')
-            particion_ref = 'train'
-            
         ruta_test = os.path.join(carpeta, f'{m}_scores_test.parquet')
-        
+
         if not (os.path.exists(ruta_ref) and os.path.exists(ruta_test)):
-            print(f'  {m}: sin scores completos en {carpeta}/, se omite.')
+            print(f'  {m}: sin scores de val y test en {carpeta}/, se omite '
+                  f'(python pipeline/{SCRIPT_DE[m]})')
             continue
 
         ref_df = pd.read_parquet(ruta_ref)
@@ -65,17 +71,16 @@ def cargar(carpeta):
         if test_df[col_test].isna().any():
             raise ValueError(f'{m}: los scores de test no cuadran con info_test')
 
-        if m != 'autoencoder':
-            if idx_val_ref is None:
-                idx_val_ref = ref_df.index
-            elif not ref_df.index.equals(idx_val_ref):
-                raise ValueError(f'{m}: filas de validación discordantes entre modelos clásicos.')
+        # La comparación solo es justa si TODOS validan con las mismas filas
+        if idx_val_ref is None:
+            idx_val_ref, primero = ref_df.index, m
+        elif not ref_df.index.equals(idx_val_ref):
+            raise ValueError(f'{m}: sus filas de validación no coinciden con las de {primero}. '
+                             f'Revisa que todos usen proporcion_val del config.yaml.')
 
         detectores[m] = {
             'ref': ref_df[col_ref].to_numpy(dtype=float),
             'test': test_df[col_test].to_numpy(dtype=float),
-            'idx_ref': ref_df.index,
-            'particion_ref': particion_ref
         }
         
     if not detectores:
@@ -83,18 +88,21 @@ def cargar(carpeta):
 
     grupo = COLUMNA_GRUPO if (COLUMNA_GRUPO in info_train and COLUMNA_GRUPO in info_test) else None
     
+    info_val = info_train.loc[idx_val_ref]
     datos = {
-        'y_train': info_train['es_fraude'].astype(int),
+        'y_val': info_val['es_fraude'].astype(int).to_numpy(),
+        'grupo_val': info_val[grupo].to_numpy() if grupo else None,
         'y_test': info_test['es_fraude'].astype(int).to_numpy(),
         'tipo_test': info_test['tipo_fraude'].to_numpy(),
         'ids_test': info_test['transaccion_id'].to_numpy(),
-        'grupo_train': info_train[grupo] if grupo else None,
         'grupo_test': info_test[grupo].to_numpy() if grupo else None,
         'dias_test': max((info_test['timestamp'].max() - info_test['timestamp'].min())
                          .total_seconds() / 86400, 1),
     }
     
     print(f'Modelos cargados: {", ".join(detectores)}')
+    print(f'Validación: {len(datos["y_val"]):,} filas, {datos["y_val"].sum()} fraudes  (para ELEGIR)')
+    print(f'Test:       {len(datos["y_test"]):,} filas, {datos["y_test"].sum()} fraudes  (para MEDIR)')
     return detectores, datos
 
 # --------------------------------------------------------------------------- bootstrap
@@ -128,13 +136,12 @@ def ap_bootstrap_test(y, lista_scores, n, grupos=None, semilla=SEMILLA):
         b += 1
     return res
 
-def bootstrap_eleccion_test(tabla, detectores, datos, n):
-    # Como el autoencoder no usa 'val', compararemos la significancia estadística
-    # directamente en la métrica de TEST. (En producción pura, esto es trampa, pero 
-    # en la fase de I+D y evaluación cruzada final, es necesario para ver si la ventaja 
-    # del AE sobre iForest es real o ruido).
+def bootstrap_eleccion_val(tabla, detectores, datos, n):
+    # ¿El ganador lo es de verdad o es ruido? Bootstrap pareado en VALIDACIÓN,
+    # que es donde se ha elegido (el test no se usa para decidir nada).
     nombres = tabla['detector'].tolist()
-    aps = ap_bootstrap_test(datos['y_test'], [detectores[x]['test'] for x in nombres], n, datos['grupo_test'])
+    aps = ap_bootstrap_test(datos['y_val'], [detectores[x]['ref'] for x in nombres], n,
+                            datos['grupo_val'])
     
     filas = []
     for j, nombre in enumerate(nombres):
@@ -144,11 +151,11 @@ def bootstrap_eleccion_test(tabla, detectores, datos, n):
         elif dif_inf > 0:
             veredicto = 'peor'
         elif dif_sup < 0:
-            veredicto = 'mejor (anómalo)'
+            veredicto = 'mejor'
         else:
             veredicto = 'empate técnico'
             
-        filas.append({'detector': nombre, 'PR-AUC_test': tabla['PR-AUC'].iloc[j],
+        filas.append({'detector': nombre, 'PR-AUC_val': tabla['PR-AUC_val'].iloc[j],
                       'dif_inf': dif_inf, 'dif_sup': dif_sup, 'veredicto': veredicto})
     return pd.DataFrame(filas)
 
@@ -166,15 +173,13 @@ def evaluar_detector(nombre, det, datos):
     y_test = datos['y_test']
     s_test = det['test']
     
-    y_ref = datos['y_train'].loc[det['idx_ref']].to_numpy()
-    
-    # Fijar umbral en referencia
+    # Umbral fijado en validación (no en test)
     umbral = np.quantile(det['ref'], 1 - PRESUPUESTO_PCT / 100)
     det['marca_presupuesto'] = s_test >= umbral
 
     pr = average_precision_score(y_test, s_test)
     fila = {'detector': nombre,
-            'PR-AUC_ref': average_precision_score(y_ref, det['ref']),
+            'PR-AUC_val': average_precision_score(datos['y_val'], det['ref']),
             'PR-AUC': pr, 'ROC-AUC': roc_auc_score(y_test, s_test), 'lift': pr / y_test.mean()}
             
     for k, v in punto_operacion(y_test, det['marca_presupuesto'], datos['dias_test']).items():
@@ -224,33 +229,39 @@ def generar_markdown(tabla, eleccion, por_tipo):
     f = tabla.set_index('detector')
     mejor = f.index[0]
     
-    L = ["# Hito 4: Comparativa Final (Deep Learning vs Clásicos)\n"]
+    L = ["Comparativa Final (Deep Learning vs Clásicos)\n"]
     L.append(f"Tras entrenar la arquitectura de Autoencoder, se evaluó su rendimiento contra "
-             f"los baselines del Hito 3 (Isolation Forest, KMeans, OCSVM).\n")
+             f"los baselines Isolation Forest, KMeans, OCSVM.\n")
              
-    L.append(f"- **El modelo con mejor PR-AUC en Test es: `{mejor}`** ({f.loc[mejor, 'PR-AUC']:.3f}).")
+    L.append(f"- **El mejor modelo es `{mejor}`**: elegido por su PR-AUC en validación "
+             f"({f.loc[mejor, 'PR-AUC_val']:.3f}) y medido en test ({f.loc[mejor, 'PR-AUC']:.3f}).")
+    L.append("- PR-AUC en test de cada modelo: "
+             + ", ".join(f"{NOMBRES.get(d, d)} {v:.3f}" for d, v in f['PR-AUC'].items()) + ".")
     if mejor == 'autoencoder':
         L.append("- El enfoque semi-supervisado con deep learning logró superar a los métodos puramente no supervisados.")
     else:
-        L.append("- Pese al esfuerzo, el Autoencoder no logró superar a los algoritmos clásicos de detección.")
+        L.append("- El Autoencoder no logró superar a los algoritmos clásicos de detección.")
+    if 'autoencoder' in f.index:
+        L.append("- Ojo: el Autoencoder es semi-supervisado (se entrena solo con transacciones "
+                 "legítimas, así que usa la etiqueta para elegir sus datos de entrenamiento). "
+                 "Los clásicos no usan etiquetas para entrenar: no es del todo igualdad de condiciones.")
         
-    L.append("\n## Análisis Estadístico (Bootstrap en Test)")
+    L.append("\n## Análisis Estadístico (Bootstrap en Validación)")
     empatan = eleccion.loc[eleccion['veredicto'] == 'empate técnico', 'detector'].tolist()
     if empatan:
         L.append(f"- Estadísticamente (IC 95%), el ganador EMPATA TÉCNICAMENTE con: {', '.join(empatan)}.")
         
     L.append(f"\n## Desempeño Operativo al {PRESUPUESTO_PCT}% de Revisión")
     rec, prec, alertas = f.loc[mejor, 'pres_recall_%'], f.loc[mejor, 'pres_precision_%'], f.loc[mejor, 'pres_alertas_dia']
-    L.append(f"- El mejor modelo encuentra el **{rec:.0f}% del fraude** revisando solo el {PRESUPUESTO_PCT}% de las transacciones.")
-    L.append(f"- La precisión es del **{prec:.0f}%** ({prec:.0f} de cada 100 alertas revisadas son fraude real), generando {alertas:.0f} alertas diarias.")
+    L.append(f"- El mejor modelo encuentra el {rec:.0f}% del fraude revisando solo el {PRESUPUESTO_PCT}% de las transacciones.")
+    L.append(f"- La precisión es del {prec:.0f}% ({prec:.0f} de cada 100 alertas revisadas son fraude real), generando {alertas:.0f} alertas diarias.")
     
     if len(por_tipo):
         L.append('\n## Capacidades de Detección por Tipo')
         for tipo, fila in por_tipo.sort_values('n', ascending=False).iterrows():
-             L.append(f"- **{tipo}** (n={int(fila['n'])}): Autoencoder capta {fila.get('autoencoder', 0):.0f}%, "
-                      f"iForest {fila.get('iforest', 0):.0f}%, KMeans {fila.get('kmeans', 0):.0f}%.")
-                      
-    L.append("\n*Con esto cerramos los objetivos del Hito 4, listos para la contenerización en Airflow/Argo (Hito 5).*")
+            L.append(f"- **{tipo}** (n={int(fila['n'])}): "
+                     + ", ".join(f"{NOMBRES.get(m, m)} {fila[m]:.0f}%"
+                                 for m in por_tipo.columns if m != 'n') + ".")
     return L
 
 
@@ -271,7 +282,8 @@ def main():
     detectores, datos = cargar(CARPETA_MODELOS)
     
     filas = [evaluar_detector(n, d, datos) for n, d in detectores.items()]
-    tabla = pd.DataFrame(filas).sort_values('PR-AUC', ascending=False).reset_index(drop=True)
+    # Se ordena (y se elige) por VALIDACIÓN; el test solo mide
+    tabla = pd.DataFrame(filas).sort_values('PR-AUC_val', ascending=False).reset_index(drop=True)
     mejor = tabla.loc[0, 'detector']
     
     # Calcular IC95 de Test para todos
@@ -283,12 +295,12 @@ def main():
     
     tabla.insert(1, 'ganador', np.where(tabla['detector'] == mejor, '★', ''))
     
-    seccion('COMPARATIVA FINAL PR-AUC (TEST)')
-    cols = ['detector', 'ganador', 'PR-AUC_ref', 'PR-AUC', 'IC95_inf', 'IC95_sup', 'ROC-AUC']
+    seccion('COMPARATIVA FINAL  (elegido por PR-AUC de validación, medido en test)')
+    cols = ['detector', 'ganador', 'PR-AUC_val', 'PR-AUC', 'IC95_inf', 'IC95_sup', 'ROC-AUC']
     print(tabla[cols].round(3).to_string(index=False))
     
-    seccion('EVALUACIÓN ESTADÍSTICA CONTRA EL GANADOR')
-    eleccion = bootstrap_eleccion_test(tabla, detectores, datos, N_BOOTSTRAP)
+    seccion('¿EL GANADOR GANA DE VERDAD?  (bootstrap pareado en validación)')
+    eleccion = bootstrap_eleccion_val(tabla, detectores, datos, N_BOOTSTRAP)
     print(eleccion.round(4).to_string(index=False))
     
     seccion(f'RECALL % POR TIPO DE FRAUDE (presupuesto {PRESUPUESTO_PCT:g} %)')
@@ -303,8 +315,7 @@ def main():
     with open(ruta_md, 'w', encoding='utf-8') as fh:
         fh.write('\n'.join(lineas) + '\n')
     
-    print(f'\n\n--> Proceso Finalizado. Markdown generado en: {ruta_md}')
-    print('--> Siguiente paso según hoja de ruta: Hito 5 (Orquestación con Airflow y Docker).')
+    print(f'\n\nProceso Finalizado. Markdown generado en: {ruta_md}')
 
 if __name__ == '__main__':
     main()

@@ -20,6 +20,7 @@ PASOS = [
     ('pipeline/entrenar_autoencoder.py',           'Entrena el autoencoder y guarda scores'),
     ('pipeline/evaluar_modelos_nosupervisados.py', 'Compara los 4 modelos y saca conclusiones'),
     ('pipeline/evaluar_autoencoders.py',           'Análisis detallado del autoencoder'),
+    ('pipeline/comparacion_modelos.py',            'Comparativa final (4 modelos)'),
 ]
 
 def preparar_base_de_datos():
