@@ -8,12 +8,10 @@ from sklearn.preprocessing import StandardScaler
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from config import CONFIG, HOST, PORT, USER, PASSWORD, DATABASE
-
+from config import CONFIG, HOST, PORT, USER, PASSWORD, DATABASE, CARPETA_DATOS
+CARPETA_SALIDA = CARPETA_DATOS
 
 PROPORCION_TRAIN = CONFIG['preparacion']['proporcion_train']
-CARPETA_SALIDA = CONFIG['preparacion']['carpeta_salida']
-
 def cargar_datos():
     client = clickhouse_connect.get_client(
         host=HOST, port=PORT, username=USER, password=PASSWORD, database=DATABASE
@@ -132,7 +130,14 @@ def escalar(X_train, X_test):
         print('Sin deriva: ninguna variable se aleja más de 0,5 desviaciones entre train y test')
     return X_train_esc, X_test_esc, escalador
 
-
+def preparar_features(df, escalador):
+    """Convierte filas de features_transaccion en la matriz que entra a los modelos.
+    Mismas variables, mismas transformaciones y mismo escalado que en el entrenamiento.
+    Se usa al puntuar transacciones nuevas (no ajusta nada, solo aplica)."""
+    X, info = seleccionar_variables(df)
+    X = transformar(X)
+    X_esc = pd.DataFrame(escalador.transform(X), columns=X.columns, index=X.index)
+    return X_esc, info
 
 def guardar(X_train, X_test, info_train, info_test, escalador):
     os.makedirs(CARPETA_SALIDA, exist_ok=True)

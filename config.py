@@ -8,7 +8,9 @@ from dotenv import load_dotenv
 
 CARPETA = Path(__file__).resolve().parent
 RUTA_CONFIG = CARPETA / 'config.yaml'
-
+CARPETA_DATOS = CARPETA / 'datos_ml'
+CARPETA_MODELOS = CARPETA / 'modelos'
+CARPETA_RESULTADOS = CARPETA / 'resultados'
 
 def cargar_config(ruta=RUTA_CONFIG):
     with open(ruta, encoding='utf-8') as fh:
@@ -22,6 +24,7 @@ def cargar_config(ruta=RUTA_CONFIG):
 
     ch = config['clickhouse']
     ch['password'] = password
+    ch['user'] = os.getenv('CLICKHOUSE_USER', ch['user'])
     ch['host'] = os.getenv('CLICKHOUSE_HOST', ch['host'])      # en Docker será otro host
     ch['port'] = int(os.getenv('CLICKHOUSE_PORT', ch['port']))
     return config

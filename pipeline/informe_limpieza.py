@@ -4,8 +4,7 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import HOST, PORT, USER, PASSWORD, DATABASE
-
+from config import HOST, PORT, USER, PASSWORD, DATABASE, CARPETA_RESULTADOS
 
 TABLAS = ["cliente", "comercio", "dispositivo", "patron", "analista", "metodo_pago", "canal_pago",
           "cliente_dispositivo", "sesion", "evento", "transaccion", "devolucion", "alerta"]
@@ -186,8 +185,8 @@ def importes_atipicos(client):
 
 
 if __name__ == "__main__":
-    f_out = f"informe_limpieza_{datetime.now():%Y%m%d_%H%M}.txt"
-
+    CARPETA_RESULTADOS.mkdir(exist_ok=True)
+    f_out = CARPETA_RESULTADOS / f"informe_limpieza_{datetime.now():%Y%m%d_%H%M}.txt"
     with open(f_out, "w", encoding="utf-8") as f:
         def log(msg=""):
             print(msg)

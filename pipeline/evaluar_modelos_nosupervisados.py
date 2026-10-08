@@ -13,12 +13,10 @@ from sklearn.metrics import average_precision_score, precision_recall_curve, roc
 # Raíz del proyecto, donde están config.py y artefactos.py
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import CONFIG
+from config import CONFIG, CARPETA_DATOS, CARPETA_MODELOS, CARPETA_RESULTADOS
 from artefactos import guardar, ultimo_run
 
-CARPETA_DATOS = 'datos_ml'
-CARPETA_MODELOS = 'modelos'
-CARPETA_RESULTADOS = 'resultados'
+
 COLUMNA_GRUPO = 'cliente_id'   
 
 MODELOS = ['iforest', 'kmeans', 'ocsvm', 'autoencoder']   # se omite el que no tenga scores
@@ -478,6 +476,7 @@ def main():
 
     ruta_resumen = os.path.join(CARPETA_MODELOS, 'resumen_entrenamiento.json')
     resumen = {}
+    run_id = None
     if os.path.exists(ruta_resumen):
         with open(ruta_resumen, encoding='utf-8') as fh:
             resumen = {m: r for m, r in json.load(fh).items() if m in simples}

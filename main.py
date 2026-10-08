@@ -18,9 +18,12 @@ PASOS = [
     ('pipeline/preparacion_datos_ml.py',           'Train/test, escalado y parquets en datos_ml/'),
     ('pipeline/modelos_nosupervisados.py',         'Entrena IF, KMeans y OCSVM y guarda scores'),
     ('pipeline/entrenar_autoencoder.py',           'Entrena el autoencoder y guarda scores'),
+    ('pipeline/puntuar_nosupervisados.py',         'Puntúa las transacciones pendientes con los clásicos'),
+    ('pipeline/puntuar_autoencoder.py',            'Puntúa las transacciones pendientes con el autoencoder'),
     ('pipeline/evaluar_modelos_nosupervisados.py', 'Compara los 4 modelos y saca conclusiones'),
     ('pipeline/evaluar_autoencoders.py',           'Análisis detallado del autoencoder'),
     ('pipeline/comparacion_modelos.py',            'Comparativa final (4 modelos)'),
+    ('pipeline/validacion_reproducibilidad_consistencia.py', 'Valida reproducibilidad y consistencia'),
 ]
 
 def preparar_base_de_datos():

@@ -19,11 +19,7 @@ from sklearn.metrics import average_precision_score, precision_recall_curve, roc
 
 # Raíz del proyecto, donde está config.py
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from config import CONFIG
-
-CARPETA_DATOS = 'datos_ml'
-CARPETA_MODELOS = 'modelos'
-CARPETA_RESULTADOS = 'resultados'
+from config import CONFIG, CARPETA_DATOS, CARPETA_MODELOS, CARPETA_RESULTADOS
 COLUMNA_GRUPO = 'cliente_id'   
 
 MODELOS = ['iforest', 'kmeans', 'ocsvm', 'autoencoder']

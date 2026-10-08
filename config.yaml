@@ -11,7 +11,6 @@ semilla: 42
 preparacion:
   proporcion_train: 0.7        # partición temporal: el 70 % más antiguo es train
   dias_calentamiento: 30       # se descartan los primeros días (sin historial fiable)
-  carpeta_salida: datos_ml
 
 # modelos_nosupervisados.py
 modelos:

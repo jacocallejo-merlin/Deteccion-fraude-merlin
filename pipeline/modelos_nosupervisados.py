@@ -17,12 +17,8 @@ from sklearn.svm import OneClassSVM
 # Raíz del proyecto, donde están config.py y artefactos.py
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from config import CONFIG, fijar_semillas
+from config import CONFIG, fijar_semillas, CARPETA_DATOS, CARPETA_MODELOS
 from artefactos import crear_carpeta_run, guardar, marcar_ultimo_run
-
-CARPETA_DATOS = 'datos_ml'
-CARPETA_MODELOS = 'modelos'
-
 
 # Los VALORES están en config.yaml (sección "modelos"); aquí se explica para qué sirve cada uno.
 _cfg = CONFIG['modelos']
@@ -115,6 +111,9 @@ def normalizar(s, mediana, p99):
     """0 = transacción típica, 1 = percentil 99 del ajuste. No cambia el orden (ni la PR-AUC)."""
     return (s - mediana) / max(p99 - mediana, 1e-12)
 
+def percentil(s, referencia_ordenada):
+    """Fracción de transacciones del ajuste con score <= s."""
+    return np.searchsorted(referencia_ordenada, s, side='right') / len(referencia_ordenada)
 
 def combinaciones(rejilla):
     claves = list(rejilla)
@@ -163,7 +162,7 @@ def guardar_scores(nombre, modelo, partes, ref):
 
 def conectar_clickhouse():
     import clickhouse_connect
-    from BD_VACIAS import DATABASE, HOST, PASSWORD, PORT, USER
+    from config import DATABASE, HOST, PASSWORD, PORT, USER
     try:
         client = clickhouse_connect.get_client(host=HOST, port=PORT, username=USER,
                                                password=PASSWORD, database=DATABASE)
@@ -188,14 +187,17 @@ def conectar_clickhouse():
     return client
 
 
-def guardar_en_clickhouse(client, nombre, scores, ids, run_id):
+def guardar_en_clickhouse(client, nombre, scores, ids, run_id, ref_ordenada):
+    # Al reentrenar, los scores del modelo anterior dejan de valer: se borran
+    client.command('ALTER TABLE anomaly_scores DELETE WHERE model = {modelo:String} '
+                   'SETTINGS mutations_sync = 2', parameters={'modelo': nombre})
     for parte in PARTES_A_CLICKHOUSE:
         df = scores[parte]
         tabla = pd.DataFrame({
             'transaccion_id': ids.loc[df.index].to_numpy(dtype=np.uint32),
             'model': nombre,
             'score': df['score'].to_numpy(dtype=np.float64),
-            'score_pct': df['score'].rank(pct=True).to_numpy(dtype=np.float32),
+            'score_pct': percentil(df['score'].to_numpy(), ref_ordenada).astype(np.float32),
             'run_id': run_id,
         })
         client.insert_df('anomaly_scores', tabla)
@@ -224,10 +226,13 @@ def procesar(nombre, X_train, X_test, X_fit, X_val, y_val, ids, run_id, client):
     media, std = estabilidad(nombre, mejor_p, A_fit, A_val, y_val)
 
     modelo = entrenar(nombre, mejor_p, A_fit, SEMILLA)
-    ref = referencia(puntuar(nombre, modelo, A_fit)[0])
-
+    s_fit = puntuar(nombre, modelo, A_fit)[0]
+    ref = referencia(s_fit)
+    ref_ordenada = np.sort(s_fit)
+                           
     os.makedirs(CARPETA_MODELOS, exist_ok=True)
     joblib.dump(modelo, os.path.join(CARPETA_MODELOS, f'{nombre}.joblib'))
+    joblib.dump(ref_ordenada, os.path.join(CARPETA_MODELOS, f'{nombre}_referencia.joblib'))
     scores = guardar_scores(nombre, modelo, {'train': X_train, 'val': X_val, 'test': X_test}, ref)
     actualizar_resumen(nombre, {
         'mejores_parametros': mejor_p,
@@ -244,8 +249,7 @@ def procesar(nombre, X_train, X_test, X_fit, X_val, y_val, ids, run_id, client):
     })
     print(f'Guardado en "{CARPETA_MODELOS}/": {nombre}.joblib y {nombre}_scores_train/val/test.parquet')
     if client is not None:
-        guardar_en_clickhouse(client, nombre, scores, ids, run_id)
-
+        guardar_en_clickhouse(client, nombre, scores, ids, run_id, ref_ordenada)
 
 def main():
     parser = argparse.ArgumentParser(description='Entrena los modelos no supervisados clásicos')
@@ -265,7 +269,7 @@ def main():
     for nombre in elegidos:
         procesar(nombre, X_train, X_test, X_fit, X_val, y_val, ids, run_id, client)
         guardar(os.path.join(CARPETA_MODELOS, f'{nombre}.joblib'), run_id)
-
+        guardar(os.path.join(CARPETA_MODELOS, f'{nombre}_referencia.joblib'), run_id)
     guardar(os.path.join(CARPETA_DATOS, 'escalador.joblib'), run_id)
     guardar(os.path.join(CARPETA_MODELOS, 'resumen_entrenamiento.json'), run_id)
     marcar_ultimo_run(run_id)
