@@ -235,8 +235,8 @@ if __name__ == "__main__":
             else:
                 log(f"{t}: OK")
 
-            n = duplicados_contenido(client)
-            log(f"transaccion (mismo metodo_id, timestamp y cantidad): {'OK' if n == 0 else f'REVISAR ({n})'}")
+        n = duplicados_contenido(client)
+        log(f"transaccion (mismo metodo_id, timestamp y cantidad): {'OK' if n == 0 else f'REVISAR ({n})'}")
 
         log("\n FORMATOS Y COHERENCIA ")
         for desc, cant in formatos_inconsistentes(client):
