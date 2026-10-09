@@ -110,6 +110,9 @@ def formatos_inconsistentes(client):
         ("sesiones que empiezan despues de su pago",
          "SELECT count() FROM transaccion t JOIN sesion s ON t.sesion_id = s.sesion_id "
          "WHERE s.timestamp > t.timestamp"),
+        ("eventos anteriores al inicio de su sesion",
+         "SELECT count() FROM evento e JOIN sesion s ON e.sesion_id = s.sesion_id "
+         "WHERE e.timestamp < s.timestamp"),
         ("devoluciones mayores que la compra",
          "SELECT count() FROM devolucion d JOIN transaccion t ON d.transaccion_id = t.transaccion_id "
          "WHERE d.importe > t.cantidad"),
@@ -174,9 +177,13 @@ def fechas_futuras(client):
         ("cliente", "fecha_alta"),
         ("analista", "fecha_alta"),
     ]
-    # se compara con el final del periodo de datos (última transacción), no con now():
-    # así el resultado no depende del día en que se ejecute el informe
-    fin_periodo = client.query("SELECT max(timestamp) FROM transaccion").result_rows[0][0]
+    # se compara con el final del periodo de datos, no con now(): así el resultado no depende
+    # del día en que se ejecute el informe. El periodo acaba al terminar el día de la última
+    # transacción (00:00 del día siguiente), igual que en dataset.py (fecha_fin), que corta ahí
+    # las devoluciones. Con max(timestamp) una devolución a las 23:00 tras una última compra
+    # a las 21:44 saldría como REVISAR sin serlo.
+    fin_periodo = client.query(
+        "SELECT toStartOfDay(max(timestamp)) + INTERVAL 1 DAY FROM transaccion").result_rows[0][0]
     resultados = []
     for tabla, columna in checks:
         n = client.query(f"SELECT count() FROM {tabla} WHERE {columna} > %(fin)s",
@@ -250,7 +257,7 @@ if __name__ == "__main__":
 
         log("\n FECHAS FUTURAS ")
         resultados_fechas, fin_periodo = fechas_futuras(client)
-        log(f"  Final del periodo (última transacción): {fin_periodo}")
+        log(f"  Final del periodo (fin del día de la última transacción): {fin_periodo}")
         for desc, cant in resultados_fechas:
             st = "OK" if cant == 0 else f"REVISAR ({cant})"
             log(f"  {desc}: {st}")

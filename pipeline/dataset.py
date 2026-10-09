@@ -50,6 +50,7 @@ P_DISPOSITIVO_FAMILIAR_LEGIT = 0.05   # clientes que comparten un dispositivo co
 # Dispositivos de estafadores: el mismo móvil/ordenador se reutiliza contra varias cuentas víctima
 N_DISPOSITIVOS_ESTAFADOR = 15
 P_USA_DISPOSITIVO_ESTAFADOR = 0.6     # en account takeover, card testing y dispositivo nuevo
+P_RECHAZO_FRAUDE = 0.08               # fraudes (salvo card testing) que el banco rechaza; legítimas: 4 %
 
 
 class Fabrica:
@@ -255,7 +256,8 @@ def crear_sesion(fab, rng, cliente_id, dispositivo_id, momento, pais_ip,
         "ip_sesion": ip_aleatoria(rng), "ip_pais": pais_ip, "proxy_vpn": bool(proxy_vpn),
         "num_intentos_login": int(intentos), "resultado_login": resultado, "timestamp": momento,
     })
-    t = momento - timedelta(seconds=int(intentos) * 8)
+    # los logins empiezan al abrir la sesión (8 s entre intentos), nunca antes
+    t = momento
     for _ in range(int(intentos) - 1):
         crear_evento(fab, sid, "login_fallido", t, "credenciales incorrectas")
         t += timedelta(seconds=8)
@@ -311,12 +313,16 @@ def momento_aleatorio(rng, fecha_inicio, fecha_fin):
     return fecha_inicio + timedelta(seconds=float(rng.uniform(0, delta)))
 
 
-def elegir_dispositivo_nuevo(rng, cid, disp_por_cliente, todos_dispositivos):
-    propios = set(disp_por_cliente[cid])
-    while True:
-        did = int(rng.choice(todos_dispositivos))
-        if did not in propios:
-            return did
+def estado_aleatorio(rng):
+    return "aprobada" if rng.random() < 0.96 else "rechazada"
+
+
+def elegir_dispositivo_nuevo(rng, libres):
+    """Saca un dispositivo sin dueño SIN reemplazo: cada "dispositivo nuevo" lo usa una sola
+    persona. Así solo los dispositivos de estafador se repiten entre clientes sin relación."""
+    if not libres:
+        raise ValueError("No quedan dispositivos sin dueño: sube N_DISPOSITIVOS")
+    return int(libres.pop(int(rng.integers(len(libres)))))
 
 
 def generar_transacciones_normales(fab, rng, fecha_inicio, fecha_fin, clientes_ids, perfiles,
@@ -345,7 +351,7 @@ def generar_transacciones_normales(fab, rng, fecha_inicio, fecha_fin, clientes_i
             cantidad = float(rng.lognormal(perfil["mu"], perfil["sigma"]))
             if rng.random() < P_COMPRA_GRANDE_LEGIT:
                 cantidad *= float(rng.uniform(5, 15))
-            estado = "aprobada" if rng.random() < 0.96 else "rechazada"
+            estado = estado_aleatorio(rng)
 
             if canal_tipo[canal_id] == "datafono":
                 crear_transaccion(fab, None, metodo_id, canal_id, None, momento, cantidad, estado=estado,
@@ -353,7 +359,7 @@ def generar_transacciones_normales(fab, rng, fecha_inicio, fecha_fin, clientes_i
                 continue
 
             if rng.random() < P_DISPOSITIVO_NUEVO_LEGIT:
-                dispositivo_id = elegir_dispositivo_nuevo(rng, cid, disp_por_cliente, todos_dispositivos)
+                dispositivo_id = elegir_dispositivo_nuevo(rng, todos_dispositivos)
             else:
                 dispositivo_id = int(rng.choice(disp_por_cliente[cid]))
 
@@ -369,30 +375,40 @@ def generar_transacciones_normales(fab, rng, fecha_inicio, fecha_fin, clientes_i
             sesion_id = crear_sesion(fab, rng, cid, dispositivo_id, momento - timedelta(minutes=float(rng.uniform(1, 15))),
                                      pais_ip=pais_ip, proxy_vpn=vpn, intentos=intentos)
             if rng.random() < P_CAMBIO_DATO_LEGIT:
-                crear_evento(fab, sesion_id, "cambio_dato", momento - timedelta(minutes=1), "cambio de contraseña")
-            crear_evento(fab, sesion_id, "intento_pago", momento, "pago iniciado")
+                # después de los logins (acaban como mucho 40 s tras abrir la sesión, que empieza >= 1 min antes)
+                crear_evento(fab, sesion_id, "cambio_dato", momento - timedelta(seconds=float(rng.uniform(5, 15))),
+                             "cambio de contraseña")
+            # doble clic: el clic repetido va ANTES del pago para que cuente en sus features
+            # (features.py solo mira los eventos de la sesión hasta el momento del pago)
             if rng.random() < P_DOBLE_CLIC_LEGIT:
-                crear_evento(fab, sesion_id, "intento_pago", momento + timedelta(seconds=float(rng.uniform(1, 3))),
+                crear_evento(fab, sesion_id, "intento_pago", momento - timedelta(seconds=float(rng.uniform(1, 3))),
                              "pago iniciado")
+            crear_evento(fab, sesion_id, "intento_pago", momento, "pago iniciado")
             crear_transaccion(fab, sesion_id, metodo_id, canal_id, dispositivo_id, momento, cantidad,
                               estado=estado, metodo_auth=auth_online(rng))
 
+            # compras extra en la misma sesión: se cortan al final del periodo (no han ocurrido aún)
             if rng.random() < P_VARIAS_COMPRAS_LEGIT:
                 t = momento
                 for _ in range(int(rng.integers(1, 3))):
                     t += timedelta(minutes=float(rng.uniform(1, 20)))
+                    if t >= fecha_fin:
+                        break
                     crear_evento(fab, sesion_id, "intento_pago", t, "pago iniciado")
                     crear_transaccion(fab, sesion_id, metodo_id, canal_id, dispositivo_id, t,
                                       float(rng.lognormal(perfil["mu"], perfil["sigma"])),
-                                      metodo_auth=auth_online(rng))
+                                      estado=estado_aleatorio(rng), metodo_auth=auth_online(rng))
 
             if rng.random() < P_RAFAGA_PEQUENA_LEGIT:
                 t = momento
                 for _ in range(int(rng.integers(2, 5))):
                     t += timedelta(seconds=float(rng.uniform(20, 400)))
+                    if t >= fecha_fin:
+                        break
                     crear_evento(fab, sesion_id, "intento_pago", t, "pago iniciado")
                     crear_transaccion(fab, sesion_id, metodo_id, canal_id, dispositivo_id, t,
-                                      float(rng.uniform(1, 6)), metodo_auth=auth_online(rng))
+                                      float(rng.uniform(1, 6)), estado=estado_aleatorio(rng),
+                                      metodo_auth=auth_online(rng))
 
     aprobadas = [t for t in fab.tablas["transaccion"] if t["estado"] == "aprobada" and t["cantidad"] > 30]
     n_devol = int(len(aprobadas) * 0.02)
@@ -485,7 +501,8 @@ def caso_devolucion_abusiva(fab, rng, c):
         crear_evento(fab, sid, "intento_pago", t, "pago iniciado")
         crear_transaccion(fab, sid, c["metodo"], c["canal"], c["disp"], t,
                           float(rng.uniform(50, 400)), metodo_auth=auth_online(rng), es_fraude=1)
-        crear_devolucion(fab, rng, fab.tablas["transaccion"][-1], horas_min=6, horas_max=5 * 24)
+        crear_devolucion(fab, rng, fab.tablas["transaccion"][-1], horas_min=6, horas_max=5 * 24,
+                         fecha_max=c["fecha_fin"])
         t += timedelta(days=float(rng.uniform(1, 6)))
 
 
@@ -548,13 +565,14 @@ def generar_fraude(fab, rng, fecha_inicio, fecha_fin, clientes_ids, perfiles, me
                 # el dispositivo del atacante: a menudo uno que ya ha usado contra otras víctimas
                 "disp_nuevo": (int(rng.choice(dispositivos_estafador))
                                if rng.random() < P_USA_DISPOSITIVO_ESTAFADOR
-                               else elegir_dispositivo_nuevo(rng, cid, disp_por_cliente, todos_dispositivos)),
+                               else elegir_dispositivo_nuevo(rng, todos_dispositivos)),
                 "canal": int(rng.choice(canales_online)),  
                 "momento": hora_fraude(rng, momento_aleatorio(
                     rng, fecha_inicio + timedelta(days=DIAS_SIN_FRAUDE),
                     fecha_fin - timedelta(days=MARGEN_FINAL_DIAS.get(tipo, 1)))),
                 "pais": perfiles[cid]["pais"],
                 "mu": perfiles[cid]["mu"],
+                "fecha_fin": fecha_fin,
             }
             n_antes = len(fab.tablas["transaccion"])
             if tipo == "bust_out":
@@ -566,6 +584,11 @@ def generar_fraude(fab, rng, fecha_inicio, fecha_fin, clientes_ids, perfiles, me
             for t in fab.tablas["transaccion"][n_antes:]:
                 if t["es_fraude"] == 1:
                     t["tipo_fraude"] = tipo
+                    # el banco también frena parte del resto de fraudes, no solo el card testing
+                    # (que ya trae sus rechazos). En devolución abusiva no: la compra se devuelve,
+                    # así que tuvo que aprobarse
+                    if tipo not in ("card_testing", "devolucion_abusiva") and rng.random() < P_RECHAZO_FRAUDE:
+                        t["estado"] = "rechazada"
 
 ORDEN_INSERCION = ["cliente", "comercio", "dispositivo", "patron", "metodo_pago",
                    "canal_pago", "cliente_dispositivo", "sesion", "evento",
