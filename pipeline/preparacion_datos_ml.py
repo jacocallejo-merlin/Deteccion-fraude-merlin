@@ -38,12 +38,14 @@ VARIABLES_MODELO = [
     # categóricas convertidas a 0/1
     'es_online', 'canal_app', 'canal_web', 'es_credito', 'rechazada', 'sin_autenticacion',
     # sesión
-    'proxy_vpn', 'num_intentos_login', 'ip_extranjera', 'dispositivo_nuevo',
+    'proxy_vpn', 'num_intentos_login', 'ip_extranjera', 'dispositivo_nuevo', 'n_clientes_dispositivo',
     'n_eventos_sesion', 'cambio_dato_sesion', 'min_seg_entre_eventos',
     # velocidad de la tarjeta
     'n_tarjeta_10min', 'importe_tarjeta_10min', 'n_rechazadas_tarjeta_1h',
     'n_tarjeta_24h', 'seg_desde_anterior_tarjeta',
     'n_tarjeta_1h', 'n_tarjetas_cliente_24h',
+    # velocidad del cliente (todas sus tarjetas)
+    'n_cliente_1h', 'seg_desde_anterior_cliente',
     # historial del cliente
     'n_previas_cliente', 'z_importe_cliente', 'ratio_importe_habitual',
     'n_devoluciones_30d',
@@ -62,7 +64,7 @@ def seleccionar_variables(df):
 
 
 
-VARIABLES_LOG = ['seg_desde_anterior_tarjeta', 'min_seg_entre_eventos',
+VARIABLES_LOG = ['seg_desde_anterior_tarjeta', 'seg_desde_anterior_cliente', 'min_seg_entre_eventos',
                  'importe_tarjeta_10min', 'ratio_importe_habitual']
 
 MIN_COMPRAS_HISTORIAL = 5   

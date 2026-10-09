@@ -39,11 +39,11 @@ def valores_nulos(client, tabla):
     columnas = client.query(f"DESCRIBE TABLE {tabla}").result_rows
     hallazgos = []
     for nombre_col, tipo_col, *_ in columnas:
-        if "Nullable" in tipo_col: 
+        if "Nullable" in tipo_col:
             n = client.query(f"SELECT count() FROM {tabla} WHERE {nombre_col} IS NULL").result_rows[0][0]
             if n > 0:
                 hallazgos.append((nombre_col, "NULL", n))
-        elif "String" in tipo_col: 
+        if "String" in tipo_col:   
             n = client.query(f"SELECT count() FROM {tabla} WHERE {nombre_col} = ''").result_rows[0][0]
             if n > 0:
                 hallazgos.append((nombre_col, "vacio", n))
@@ -166,11 +166,15 @@ def fechas_futuras(client):
         ("cliente", "fecha_alta"),
         ("analista", "fecha_alta"),
     ]
+    # se compara con el final del periodo de datos (última transacción), no con now():
+    # así el resultado no depende del día en que se ejecute el informe
+    fin_periodo = client.query("SELECT max(timestamp) FROM transaccion").result_rows[0][0]
     resultados = []
     for tabla, columna in checks:
-        n = client.query(f"SELECT count() FROM {tabla} WHERE {columna} > now()").result_rows[0][0]
-        resultados.append((f"{tabla}.{columna} con fecha futura", n))
-    return resultados
+        n = client.query(f"SELECT count() FROM {tabla} WHERE {columna} > %(fin)s",
+                         parameters={"fin": fin_periodo}).result_rows[0][0]
+        resultados.append((f"{tabla}.{columna} posterior al final del periodo", n))
+    return resultados, fin_periodo
 
 
 def importes_atipicos(client):
@@ -232,7 +236,9 @@ if __name__ == "__main__":
             log(f"  {desc}: {st}")
 
         log("\n FECHAS FUTURAS ")
-        for desc, cant in fechas_futuras(client):
+        resultados_fechas, fin_periodo = fechas_futuras(client)
+        log(f"  Final del periodo (última transacción): {fin_periodo}")
+        for desc, cant in resultados_fechas:
             st = "OK" if cant == 0 else f"REVISAR ({cant})"
             log(f"  {desc}: {st}")
 

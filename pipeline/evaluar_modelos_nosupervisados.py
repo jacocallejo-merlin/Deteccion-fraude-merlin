@@ -19,7 +19,7 @@ from artefactos import guardar, ultimo_run
 
 COLUMNA_GRUPO = 'cliente_id'   
 
-MODELOS = ['iforest', 'kmeans', 'ocsvm', 'autoencoder']   # se omite el que no tenga scores
+MODELOS = ['iforest', 'kmeans', 'dbscan', 'ocsvm', 'autoencoder']   # se omite el que no tenga scores
 PRESUPUESTO_PCT = 1.0
 PORCENTAJES_TOP = [0.5, 1, 2, 5, 10]
 N_BOOTSTRAP = 300
@@ -226,6 +226,9 @@ INFO_MODELOS = {
     'kmeans': ('KMeans',
                'agrupa las transacciones en perfiles típicos (clusters) y marca como sospechosas '
                'las que quedan lejos de todos los perfiles'),
+    'dbscan': ('DBSCAN',
+               'busca zonas densas de transacciones parecidas; las que no caen cerca de ninguna '
+               'zona densa son ruido, y cuanto más lejos quedan, más raras'),
     'ocsvm': ('One-Class SVM',
               'dibuja una frontera alrededor de las transacciones normales y marca lo que queda fuera'),
     'autoencoder': ('Autoencoder',
@@ -233,25 +236,26 @@ INFO_MODELOS = {
                     'normales; las que reconstruye mal son las más raras'),
 }
 
+# Para cada tipo: (descripción, variables que YA tiene el modelo para detectarlo)
 TIPOS_FRAUDE = {
     'bust_out': ('el cliente se comporta con normalidad un tiempo y de golpe agota todo el crédito',
-                 'la evolución del gasto del cliente frente a su propio historial'),
+                 'pct_limite_credito, z_importe_cliente'),
     'account_takeover': ('alguien roba el acceso a una cuenta y opera con ella',
-                         'cambios de dispositivo, IP u horarios respecto a lo habitual del cliente'),
+                         'dispositivo_nuevo, ip_extranjera, num_intentos_login, cambio_dato_sesion'),
     'card_testing': ('muchas compras pequeñas seguidas para comprobar si una tarjeta robada funciona',
-                     'número de transacciones pequeñas por tarjeta en pocos minutos'),
+                     'n_tarjeta_10min, n_rechazadas_tarjeta_1h'),
     'smurfing': ('una cantidad grande repartida en muchas pequeñas para no llamar la atención',
-                 'número e importe acumulado de transacciones en las últimas horas'),
+                 'n_tarjeta_1h, n_tarjeta_24h, importe_tarjeta_10min, n_cliente_1h'),
     'devolucion_abusiva': ('devoluciones o contracargos fraudulentos',
-                           'historial de devoluciones del cliente'),
+                           'n_devoluciones_30d'),
     'dispositivo_nuevo': ('operaciones desde un dispositivo que el cliente no había usado nunca',
-                          'si el dispositivo es nuevo para ese cliente'),
+                          'dispositivo_nuevo'),
     'pico_gasto': ('un gasto mucho mayor de lo habitual para ese cliente',
-                   'el importe comparado con la media del propio cliente (z-score por cliente)'),
+                   'z_importe_cliente, ratio_importe_habitual'),
     'ip_sospechosa': ('operaciones desde una IP o ubicación sospechosa',
-                      'variables de IP: país, si es nueva para el cliente, cuántos clientes la usan'),
+                      'ip_extranjera, proxy_vpn'),
     'bot': ('transacciones automáticas, muy rápidas y repetitivas',
-            'tiempo desde la transacción anterior y número de transacciones por minuto'),
+            'min_seg_entre_eventos, seg_desde_anterior_tarjeta, seg_desde_anterior_cliente'),
 }
 
 
@@ -290,12 +294,12 @@ def conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resume
     L.append('\n## Cómo se ha elegido')
     probadas = {m: r['combinaciones_probadas'] for m, r in resumen.items()}
     if probadas:
-        L.append(f'- Se probaron {len(simples)} modelos de detección de anomalías, cada uno con muchas '
+        L.append(f'- Se probaron {len(simples)} modelos de detección de anomalías, cada uno con varias '
                  'configuraciones distintas (' + lista(f'{nombre_detector(m)} {n}'
                                                        for m, n in probadas.items())
                  + f'). De cada modelo se quedó la mejor y luego se compararon los {len(simples)}.')
     else:
-        L.append(f'- Se probaron {len(simples)} modelos de detección de anomalías, cada uno con muchas '
+        L.append(f'- Se probaron {len(simples)} modelos de detección de anomalías, cada uno con varias '
                  'configuraciones distintas. De cada modelo se quedó la mejor y luego se '
                  f'compararon los {len(simples)}.')
     L.append('- Los modelos aprenden sin etiquetas: solo ven cómo son las transacciones y buscan '
@@ -353,11 +357,17 @@ def conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resume
             L.append(f'- {tipo} ({int(fila["n"])} casos{": " + desc if desc else ""}): '
                      f'detecta el {fila[col]:.0f} %.')
         if malos:
-            L.append('- Los que se escapan no se arreglan cambiando de modelo: las variables '
-                     'actuales no recogen lo que los hace distintos. Habría que añadir:')
+            L.append('- Los que se escapan no es por falta de variables: el modelo ya tiene '
+                     'variables que los distinguen. El problema es que los detectores de anomalías '
+                     'puntúan lo rara que es la transacción en conjunto, mirando todas las variables '
+                     'a la vez. Un fraude que solo se sale de lo normal en una o dos variables (por '
+                     'ejemplo, una IP de otro país con todo lo demás normal) no queda en el '
+                     f'{PRESUPUESTO_PCT:g} % más raro. Variables que ya los recogen:')
             for tipo in malos:
                 if tipo in TIPOS_FRAUDE:
                     L.append(f'  - {tipo}: {TIPOS_FRAUDE[tipo][1]}.')
+            L.append('- Para estos casos funcionan mejor reglas sobre esas variables concretas '
+                     '(reglas_alerta.py) que un detector de anomalías global.')
 
     L.append('\n## ¿Cuánto podemos fiarnos?')
     L.append(f'- Con los datos disponibles, la PR-AUC real estaría entre {e["IC95_inf"]:.2f} y '
@@ -367,6 +377,12 @@ def conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resume
         L.append(f'- En test baja respecto a validación ({e["PR-AUC_val"]:.2f} a {e["PR-AUC"]:.2f}). '
                  f'Es en parte normal (al elegir el mejor de varios, su nota de validación sale algo '
                  f'inflada) y en parte las transacciones recientes son algo distintas.')
+    elif dif > 0.05:
+        L.append(f'- En test sube respecto a validación ({e["PR-AUC_val"]:.2f} a {e["PR-AUC"]:.2f}). '
+                 f'No es que el modelo mejore con datos nuevos: validación solo tiene '
+                 f'{int(datos["y_val"].sum())} fraudes y la PR-AUC depende mucho de qué tipos de fraude '
+                 f'caigan en cada periodo (unos se detectan mucho mejor que otros). La cifra de '
+                 f'referencia es la de test, con su intervalo de confianza.')
     else:
         L.append(f'- Da resultados parecidos en validación y test ({e["PR-AUC_val"]:.2f} y '
                  f'{e["PR-AUC"]:.2f}): funciona igual con datos nuevos.')
@@ -378,8 +394,6 @@ def conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resume
     if n_val < 50:
         L.append(f'- Solo hay {n_val} fraudes en validación, así que las decisiones tienen bastante '
                  f'margen de error.')
-    L.append('- Las etiquetas no son perfectas: algunas "falsas alarmas" podrían ser fraudes que '
-             'nadie confirmó, así que la precisión real puede ser algo mayor.')
 
     t5 = top.set_index('top_%').loc[5]
     L.append(f'- Revisar el {PRESUPUESTO_PCT:g} % supone unas {alertas:.0f} alertas al día.' if alertas >= 10 else
@@ -481,9 +495,6 @@ def main():
         with open(ruta_resumen, encoding='utf-8') as fh:
             resumen = {m: r for m, r in json.load(fh).items() if m in simples}
             run_id = ultimo_run()
-    if run_id:
-        guardar(CARPETA_RESULTADOS, run_id)
-        print(f'\nResultados copiados también en historico/{run_id}/resultados/')
 
     seccion('CONCLUSIONES')
     lineas = conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resumen)
@@ -491,6 +502,11 @@ def main():
     with open(os.path.join(CARPETA_RESULTADOS, 'conclusiones.md'), 'w', encoding='utf-8') as fh:
         fh.write('# Conclusiones: detección de anomalías con modelos no supervisados\n\n')
         fh.write('\n'.join(lineas) + '\n')
+
+    # Al final, para que el histórico se lleve también el conclusiones.md de ESTA ejecución
+    if run_id:
+        guardar(CARPETA_RESULTADOS, run_id)
+        print(f'\nResultados copiados también en historico/{run_id}/resultados/')
 
 
 if __name__ == '__main__':

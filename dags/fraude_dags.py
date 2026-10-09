@@ -3,7 +3,7 @@ DAGs de Airflow del proyecto antifraude
 
 Tres DAGs, todos lanzan los scripts de pipeline/ con BashOperator:
   fraude_setup          (manual, una vez)   borra la BD -> crea tablas -> dataset inicial
-  fraude_entrenamiento  (manual o semanal)  ETL -> entrena los 4 modelos -> puntúa -> evalúa -> valida
+  fraude_entrenamiento  (manual o semanal)  ETL -> entrena los 5 modelos -> puntúa -> evalúa -> valida
   fraude_scoring        (periódico)         lote nuevo -> ETL -> puntúa con los modelos guardados -> valida
 Los scripts de puntuar son idempotentes (solo puntúan lo pendiente), así que se pueden
 reintentar sin duplicar nada. La validación sale con error si algo falla: la tarea queda en rojo.
@@ -69,7 +69,7 @@ with DAG(
 # -------------------------------------------------------------------- entrenamiento
 with DAG(
     dag_id='fraude_entrenamiento',
-    description='ETL, entrenamiento de los 4 modelos, scoring, evaluación y validación',
+    description='ETL, entrenamiento de los 5 modelos, scoring, evaluación y validación',
     schedule=None,                         # a mano; para semanal: '@weekly'
     start_date=INICIO,
     catchup=False,
@@ -104,7 +104,7 @@ with DAG(
     clasicos >> puntuar_clasicos
     autoencoder >> puntuar_ae
     autoencoder >> eval_ae
-    # Las comparativas leen los scores de los 4 modelos: esperan a los dos entrenamientos
+    # Las comparativas leen los scores de los 5 modelos: esperan a los dos entrenamientos
     [clasicos, autoencoder] >> eval_clasicos
     [clasicos, autoencoder] >> comparacion
     [puntuar_clasicos, puntuar_ae, eval_clasicos, eval_ae, comparacion] >> validacion

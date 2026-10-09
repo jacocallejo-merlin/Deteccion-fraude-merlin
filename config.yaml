@@ -17,6 +17,7 @@ modelos:
   proporcion_val: 0.15         # validación = 15 % más reciente del train. IGUAL para todos los modelos
   semillas_estabilidad: [0, 1, 2, 3, 4]
   ocsvm_max_filas: 10000       # OCSVM es muy lento con más filas
+  dbscan_max_filas: 10000      # DBSCAN también se entrena con una muestra
   kmeans_n_init: 10
   partes_a_clickhouse: [test]  # qué scores se guardan en anomaly_scores
   rejillas:                    # configuraciones que se prueban de cada modelo
@@ -29,3 +30,29 @@ modelos:
     ocsvm:
       nu: [0.01, 0.05]
       gamma: [scale, 0.01]
+    dbscan:                    # eps elegido mirando la distancia al k-ésimo vecino en el ajuste
+      eps: [2.0, 3.0, 4.0, 5.0, 6.0]  # (mediana ~2, percentil 95 ~5 con k = 5-20)
+      min_samples: [5, 10, 20, 50]
+
+# entrenar_autoencoder.py (usa también modelos.proporcion_val: mismas filas de validación)
+# La semilla del entrenamiento es la global (semilla: 42, arriba)
+autoencoder:
+  capas: [24, 16]              # capas ocultas del codificador (el decodificador es simétrico)
+  cuello: 8                    # -> 36 -> 24 -> 16 -> 8 -> 16 -> 24 -> 36 (cada capa más estrecha)
+  ruido: 0.0                   # sigma del ruido gaussiano en la entrada (0 = autoencoder normal)
+  lr: 0.001
+  epocas: 2000                 # máximo; la parada temprana corta mucho antes
+  batch: 256
+  paciencia: 20                # épocas sin mejorar la pérdida de validación antes de parar
+  semillas_estabilidad: []     # semillas EXTRA solo para comprobar estabilidad, p. ej. [1, 2] (~4 min cada una)
+
+# buscar_autoencoder.py (NO lo lanza main.py): combinaciones a probar en el futuro (~4 min cada una).
+# Usa epocas, batch y paciencia de la sección "autoencoder". Al terminar imprime la mejor
+# para copiarla arriba.
+busqueda_autoencoder:
+  semillas_estabilidad: [1, 2] # se reentrena la ganadora con estas semillas
+  rejilla:
+    capas: [[24, 16], [16]]    # cada capa más estrecha que la anterior y que el cuello
+    cuello: [4, 8]
+    ruido: [0.0, 0.05]
+    lr: [0.001]

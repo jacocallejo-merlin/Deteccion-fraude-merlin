@@ -1,4 +1,3 @@
-import clickhouse_connect 
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -88,8 +87,8 @@ def crear_tablas(client):
  
     tablas['cliente_dispositivo'] = '''
         CREATE TABLE IF NOT EXISTS cliente_dispositivo (
-            cliente_id     UInt32, 
-            dispositivo_id UInt32,  
+            cliente_id     UInt32,
+            dispositivo_id UInt32
         ) ENGINE = MergeTree()
         ORDER BY (cliente_id, dispositivo_id)
     '''

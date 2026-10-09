@@ -40,7 +40,7 @@ def cargar_nuevo(carpeta):
     rx = os.path.join(carpeta, 'X_nuevo.parquet')
     if not os.path.exists(rx):
         raise SystemExit(f'No está {rx}. Genera el conjunto antes con '
-                         f'python generar_test_nuevo.py')
+                         f'python generar_test_autoencoder.py')
     X = pd.read_parquet(rx)
     info = pd.read_parquet(os.path.join(carpeta, 'info_nuevo.parquet'))
     tipo = (info['tipo_fraude'].astype(object).fillna('-').to_numpy()
@@ -87,7 +87,7 @@ def main():
 
     if list(X.columns) != list(guardado.get('columnas', X.columns)):
         raise SystemExit('Las columnas del conjunto nuevo no coinciden con las del modelo. '
-                         'Vuelve a generarlo con generar_test_nuevo.py.')
+                         'Vuelve a generarlo con generar_test_autoencoder.py.')
 
     error = error_reconstruccion(modelo, X)
     umbral, n_val = umbral_de_validacion(args.presupuesto)

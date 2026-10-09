@@ -71,10 +71,10 @@ def comprobar_consistencia(inf, client):
         FROM anomaly_scores GROUP BY model ORDER BY model
     ''').result_rows
     presentes = {m for m, *_ in filas}
-    for m in MODELOS:
+    for m in MODELOS + ['autoencoder']:
         inf.check(m in presentes, f'{m}: tiene scores en anomaly_scores')
 
-    # Recorre TODOS los modelos que haya en la tabla (incluido el autoencoder cuando escriba)
+    # Recorre TODOS los modelos que haya en la tabla
     for m, n, distintas, fuera in filas:
         inf.check(n == distintas, f'{m}: sin duplicados', f'{n:,} filas, {distintas:,} transacciones')
         inf.check(fuera == 0, f'{m}: score_pct dentro de [0, 1]',
@@ -140,7 +140,6 @@ def comprobar_autoencoder(inf, X_test):
 
     # Mismo orden de columnas que en el entrenamiento
     error = error_reconstruccion(modelo, X_test[g['columnas']])
-    # Columna 'error' (no score_norm, que de momento guarda el valor cruzado)
     guardado = pd.read_parquet(ruta_scores).reindex(X_test.index)['error'].to_numpy()
     dif = float(np.abs(error - guardado).max())
     # Tolerancia algo mayor: torch calcula en float32
@@ -194,10 +193,6 @@ def main():
         comprobar_scoring(inf, X_test)
         comprobar_autoencoder(inf, X_test)
         if args.reentrenar:
-            parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
-            parser.add_argument('--reentrenar', action='store_true',
-                        help='reentrena los modelos clásicos para comprobar la semilla (más lento)')
             comprobar_reentreno(inf)
     else:
         inf.titulo('Faltan artefactos: se omiten las comprobaciones de reproducibilidad')

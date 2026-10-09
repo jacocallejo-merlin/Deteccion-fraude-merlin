@@ -65,7 +65,14 @@ ventanas AS (
         -- historial del cliente (pico de gasto): solo transacciones ANTERIORES
         count() OVER cliente_previas                                 AS n_previas_cliente,
         avg(log1p(toFloat64(cantidad))) OVER cliente_previas         AS media_log_importe_cliente,
-        stddevSamp(log1p(toFloat64(cantidad))) OVER cliente_previas  AS std_log_importe_cliente
+        stddevSamp(log1p(toFloat64(cantidad))) OVER cliente_previas  AS std_log_importe_cliente,
+        -- velocidad del CLIENTE (con cualquiera de sus tarjetas): transacciones en la hora
+        -- anterior y tiempo desde su transacción anterior
+        count() OVER cliente_1h                                      AS n_cliente_1h,
+        dateDiff('second', lagInFrame(timestamp) OVER cliente_orden_hasta_actual, timestamp)
+                                                                     AS seg_desde_anterior_cliente_bruto,
+        -- dispositivo compartido: clientes distintos que lo han usado hasta ahora (incluida esta)
+        uniqExact(cliente_id) OVER dispositivo_historial             AS n_clientes_dispositivo_bruto
     FROM transacciones_enriquecidas
     WINDOW
         tarjeta_10min AS (PARTITION BY metodo_id ORDER BY timestamp RANGE BETWEEN 600 PRECEDING AND 1 PRECEDING),
@@ -76,9 +83,15 @@ ventanas AS (
                                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
         cliente_previas AS (PARTITION BY cliente_id ORDER BY timestamp
                             ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
+        cliente_orden_hasta_actual AS (PARTITION BY cliente_id ORDER BY timestamp
+                                       ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
+        -- hora ANTERIOR sin contar la transacción actual (igual que tarjeta_1h)
+        cliente_1h    AS (PARTITION BY cliente_id ORDER BY timestamp RANGE BETWEEN 3600 PRECEDING AND 1 PRECEDING),
         -- por CLIENTE (no por tarjeta): 24 h anteriores INCLUIDA la transacción actual,
         -- para que pagar con una 2.ª tarjeta distinta ya cuente 2
-        cliente_24h   AS (PARTITION BY cliente_id ORDER BY timestamp RANGE BETWEEN 86400 PRECEDING AND CURRENT ROW)
+        cliente_24h   AS (PARTITION BY cliente_id ORDER BY timestamp RANGE BETWEEN 86400 PRECEDING AND CURRENT ROW),
+        dispositivo_historial AS (PARTITION BY dispositivo_id ORDER BY timestamp
+                                  ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
 )
 SELECT
     -- identificadores y etiqueta (la etiqueta NUNCA se usa como variable)
@@ -112,6 +125,8 @@ SELECT
     ifNull(te.num_intentos_login, 0)                          AS num_intentos_login,
     CAST(ifNull(te.ip_pais != te.cliente_pais, 0), 'UInt8') AS ip_extranjera,
     toUInt8(te.dispositivo_id IS NOT NULL AND cd.dispositivo_id IS NULL) AS dispositivo_nuevo,
+    -- pagos presenciales (sin dispositivo) -> 0
+    if(te.dispositivo_id IS NULL, 0, v.n_clientes_dispositivo_bruto) AS n_clientes_dispositivo,
     ifNull(s.n_eventos_sesion, 0)                             AS n_eventos_sesion,
     ifNull(s.cambio_dato_sesion, 0)                           AS cambio_dato_sesion,
     ifNull(s.min_seg_entre_eventos, 3600)                     AS min_seg_entre_eventos,
@@ -124,6 +139,10 @@ SELECT
     v.n_tarjeta_24h                                           AS n_tarjeta_24h,
     if(v.n_orden_tarjeta = 1, 2592000, v.seg_desde_anterior_bruto) AS seg_desde_anterior_tarjeta,
     v.n_tarjetas_cliente_24h                                  AS n_tarjetas_cliente_24h,
+
+    -- VELOCIDAD DEL CLIENTE (todas sus tarjetas). Su 1.ª transacción -> 30 días, como en la tarjeta
+    v.n_cliente_1h                                            AS n_cliente_1h,
+    if(v.n_previas_cliente = 0, 2592000, v.seg_desde_anterior_cliente_bruto) AS seg_desde_anterior_cliente,
 
     -- HISTORIAL DEL CLIENTE (picos de gasto): z-score del importe respecto a SU historial
     v.n_previas_cliente                                       AS n_previas_cliente,
@@ -152,6 +171,7 @@ SENALES = {
     'ip_extranjera = 1': 'IP de otro país',
     'proxy_vpn = 1': 'Sesión con VPN',
     'dispositivo_nuevo = 1': 'Dispositivo no registrado del cliente',
+    'n_clientes_dispositivo >= 3': 'Dispositivo usado por >= 3 clientes distintos',
     'n_tarjeta_10min >= 3': '>= 3 pagos de la tarjeta en 10 min antes',
     'min_seg_entre_eventos <= 3': 'Eventos separados <= 3 s (bot)',
     'z_importe_cliente > 3': 'Importe > 3 desviaciones de su historial',
@@ -160,6 +180,8 @@ SENALES = {
     'cambio_dato_sesion = 1': 'Cambio de datos en la sesión',
     'n_tarjeta_1h >= 3': '>= 3 pagos de la tarjeta en 1 h antes',
     'n_tarjetas_cliente_24h >= 2': '>= 2 tarjetas distintas del cliente en 24 h',
+    'n_cliente_1h >= 3': '>= 3 pagos del cliente en 1 h antes',
+    'seg_desde_anterior_cliente <= 60': '<= 60 s desde el pago anterior del cliente',
 }
 
 

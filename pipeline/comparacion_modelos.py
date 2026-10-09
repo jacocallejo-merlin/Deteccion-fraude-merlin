@@ -1,12 +1,3 @@
-"""
-Script: comparacion_modelos.py
-Objetivo Hito 4: Comparación de autoencoders con métodos clásicos.
-
-Todos los modelos (IF, KMeans, OCSVM y autoencoder) se comparan en igualdad de condiciones:
-- el GANADOR se elige con la PR-AUC de VALIDACIÓN (las mismas filas para todos los modelos);
-- el TEST solo se usa para medir, nunca para elegir.
-"""
-
 import os
 import sys
 from pathlib import Path
@@ -22,16 +13,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import CONFIG, CARPETA_DATOS, CARPETA_MODELOS, CARPETA_RESULTADOS
 COLUMNA_GRUPO = 'cliente_id'   
 
-MODELOS = ['iforest', 'kmeans', 'ocsvm', 'autoencoder']
+MODELOS = ['iforest', 'kmeans', 'dbscan', 'ocsvm', 'autoencoder']
 PRESUPUESTO_PCT = 1.0
 PORCENTAJES_TOP = [0.5, 1, 2, 5, 10]
 N_BOOTSTRAP = 300
 SEMILLA = CONFIG['semilla']   # semilla del bootstrap (valor en config.yaml)
 
 SCRIPT_DE = {'iforest': 'modelos_nosupervisados.py', 'kmeans': 'modelos_nosupervisados.py',
-             'ocsvm': 'modelos_nosupervisados.py', 'autoencoder': 'entrenar_autoencoder.py'}
+             'ocsvm': 'modelos_nosupervisados.py', 'dbscan': 'modelos_nosupervisados.py',
+             'autoencoder': 'entrenar_autoencoder.py'}
 NOMBRES = {'iforest': 'Isolation Forest', 'kmeans': 'KMeans',
-           'ocsvm': 'One-Class SVM', 'autoencoder': 'Autoencoder'}
+           'ocsvm': 'One-Class SVM', 'dbscan': 'DBSCAN', 'autoencoder': 'Autoencoder'}
 
 pd.set_option('display.width', 160)
 
@@ -227,7 +219,7 @@ def generar_markdown(tabla, eleccion, por_tipo):
     
     L = ["Comparativa Final (Deep Learning vs Clásicos)\n"]
     L.append(f"Tras entrenar la arquitectura de Autoencoder, se evaluó su rendimiento contra "
-             f"los baselines Isolation Forest, KMeans, OCSVM.\n")
+             f"los baselines Isolation Forest, KMeans, One-Class SVM y DBSCAN.\n")
              
     L.append(f"- **El mejor modelo es `{mejor}`**: elegido por su PR-AUC en validación "
              f"({f.loc[mejor, 'PR-AUC_val']:.3f}) y medido en test ({f.loc[mejor, 'PR-AUC']:.3f}).")

@@ -27,6 +27,8 @@ def cargar_config(ruta=RUTA_CONFIG):
     ch['user'] = os.getenv('CLICKHOUSE_USER', ch['user'])
     ch['host'] = os.getenv('CLICKHOUSE_HOST', ch['host'])      # en Docker será otro host
     ch['port'] = int(os.getenv('CLICKHOUSE_PORT', ch['port']))
+    # generar_test_autoencoder.py la cambia para no tocar la base de datos principal
+    ch['database'] = os.getenv('CLICKHOUSE_DATABASE', ch['database'])
     return config
 
 def fijar_semillas(semilla=None):

@@ -9,9 +9,10 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-from sklearn.cluster import KMeans
+from sklearn.cluster import DBSCAN, KMeans
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import average_precision_score
+from sklearn.neighbors import NearestNeighbors
 from sklearn.svm import OneClassSVM
 
 # Raíz del proyecto, donde están config.py y artefactos.py
@@ -36,6 +37,9 @@ SEMILLAS_ESTABILIDAD = _cfg['semillas_estabilidad']
 
 # OCSVM es muy lento con muchas filas: se entrena con una muestra de este tamaño.
 OCSVM_MAX_FILAS = _cfg['ocsvm_max_filas']
+
+# DBSCAN calcula los vecinos de todos los puntos: también se entrena con una muestra.
+DBSCAN_MAX_FILAS = _cfg['dbscan_max_filas']
 
 # Veces que KMeans repite el agrupamiento con centros iniciales distintos (se queda con el mejor).
 KMEANS_N_INIT = _cfg['kmeans_n_init']
@@ -86,7 +90,27 @@ def entrenar(nombre, p, X, semilla):
         filas = rng.choice(len(X), size=min(OCSVM_MAX_FILAS, len(X)), replace=False)
         return OneClassSVM(kernel='rbf', nu=p['nu'], gamma=p['gamma'],
                            cache_size=1000).fit(X[filas])
+    if nombre == 'dbscan':
+        return entrenar_dbscan(p, X, semilla)
     raise ValueError(f'Modelo desconocido: {nombre}')
+
+
+def entrenar_dbscan(p, X, semilla):
+    """DBSCAN no sabe puntuar transacciones nuevas (no tiene predict). Se guardan sus puntos
+    centrales (core points) y el score es la distancia al más cercano: si es mayor que eps,
+    la transacción no cae en ningún grupo denso, es decir, DBSCAN la consideraría ruido."""
+    rng = np.random.default_rng(semilla)
+    filas = rng.choice(len(X), size=min(DBSCAN_MAX_FILAS, len(X)), replace=False)
+    db = DBSCAN(eps=p['eps'], min_samples=p['min_samples'], n_jobs=-1).fit(X[filas])
+    centrales = db.components_
+    return {
+        'eps': p['eps'],
+        # Sin puntos centrales (eps demasiado pequeño) todo es ruido y no hay a qué medir
+        'vecinos': NearestNeighbors(n_neighbors=1).fit(centrales) if len(centrales) else None,
+        'cluster_central': db.labels_[db.core_sample_indices_],
+        'n_clusters': int(db.labels_.max() + 1),
+        'pct_ruido_muestra': float((db.labels_ == -1).mean() * 100),
+    }
 
 
 def puntuar(nombre, modelo, X):
@@ -98,6 +122,14 @@ def puntuar(nombre, modelo, X):
         return distancias.min(axis=1), {'cluster': distancias.argmin(axis=1)}
     if nombre == 'ocsvm':
         return -modelo.decision_function(X), {}
+    if nombre == 'dbscan':
+        if modelo['vecinos'] is None:
+            return np.zeros(len(X)), {'cluster': np.full(len(X), -1), 'ruido': np.ones(len(X), int)}
+        distancia, cercano = modelo['vecinos'].kneighbors(X)
+        distancia, cercano = distancia[:, 0], cercano[:, 0]
+        ruido = distancia > modelo['eps']
+        cluster = np.where(ruido, -1, modelo['cluster_central'][cercano])
+        return distancia, {'cluster': cluster, 'ruido': ruido.astype(int)}
     raise ValueError(f'Modelo desconocido: {nombre}')
 
 
@@ -120,6 +152,13 @@ def combinaciones(rejilla):
     return [dict(zip(claves, valores)) for valores in itertools.product(*rejilla.values())]
 
 
+def descripcion(nombre, modelo):
+    """Texto extra para la búsqueda: en DBSCAN, cuántos grupos y cuánto ruido salen."""
+    if nombre != 'dbscan':
+        return ''
+    return f'   ({modelo["n_clusters"]} grupos, {modelo["pct_ruido_muestra"]:.1f} % ruido en la muestra)'
+
+
 def buscar(nombre, X_fit, X_val, y_val):
     candidatos = combinaciones(REJILLAS[nombre])
     print(f'\nBuscando configuración ({len(candidatos)} combinaciones):')
@@ -128,7 +167,7 @@ def buscar(nombre, X_fit, X_val, y_val):
         modelo = entrenar(nombre, p, X_fit, SEMILLA)
         s_val, _ = puntuar(nombre, modelo, X_val)
         ap = average_precision_score(y_val, s_val)
-        print(f'  {str(p):<70} PR-AUC val {ap:.4f}')
+        print(f'  {str(p):<70} PR-AUC val {ap:.4f}{descripcion(nombre, modelo)}')
         if ap > mejor_ap:
             mejor_p, mejor_ap = p, ap
     print(f'  -> elegida: {mejor_p}  (PR-AUC val {mejor_ap:.4f})')
@@ -246,6 +285,8 @@ def procesar(nombre, X_train, X_test, X_fit, X_val, y_val, ids, run_id, client):
         'filas_validacion': len(X_val),
         'semilla': SEMILLA,
         'run_id': run_id,
+        **({'n_clusters': modelo['n_clusters'], 'pct_ruido_muestra': modelo['pct_ruido_muestra']}
+           if nombre == 'dbscan' else {}),
     })
     print(f'Guardado en "{CARPETA_MODELOS}/": {nombre}.joblib y {nombre}_scores_train/val/test.parquet')
     if client is not None:
