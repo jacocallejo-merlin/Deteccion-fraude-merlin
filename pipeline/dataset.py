@@ -137,24 +137,25 @@ def generar_dispositivos(fab, rng):
 def generar_patrones(fab):
     patrones = [
         ("Pico de gasto anómalo", "Cantidad muy por encima de la media histórica del cliente",
-         "importe > 4 veces el gasto medio del cliente"),
+         "z_importe_cliente > 3 y importe >= 4 veces su importe habitual"),
         ("Card testing", "Ráfaga de importes muy bajos en poco tiempo con el mismo método de pago",
-         ">=3 transacciones del mismo metodo_id, importe <5€, en menos de 15 minutos"),
+         ">= 2 pagos previos de la tarjeta en 10 min e importe < 5 €"),
         ("Estructuración (smurfing)", "Varios pagos repetidos justo por debajo de un umbral redondo",
-         ">=3 pagos del mismo metodo_id entre 850€ y 999€ en pocas horas"),
+         "importe entre 850 € y 999 € y >= 1 pago previo de la tarjeta en ese rango en 24 h"),
         ("Account takeover", "Intentos de login fallidos, cambio de dato y compra en la misma sesión",
-         "cambio_dato + intentos de login >=2 + transacción alta en la misma sesión"),
+         "cambio de dato en la sesión y (>= 3 intentos de login o dispositivo nuevo o IP extranjera)"),
         ("IP/geolocalización sospechosa", "Sesión desde un país distinto al habitual del cliente",
-         "ip_pais distinto al pais del cliente, especialmente con proxy_vpn=true"),
+         "IP de un país distinto al del cliente y con proxy/VPN"),
         ("Dispositivo nuevo de alto riesgo", "Compra de importe alto desde un dispositivo nunca visto",
-         "dispositivo no presente en cliente_dispositivo para ese cliente e importe alto"),
+         "dispositivo no registrado del cliente e importe >= 2 veces su habitual"),
         ("Abuso de devoluciones", "Varias compras seguidas de devolución en un plazo muy corto",
-         ">=2 devoluciones del mismo cliente en menos de 5 días tras la compra"),
+         ">= 2 devoluciones del cliente en los 30 días previos"),
         ("Actividad tipo bot", "Eventos consecutivos a una velocidad no humana",
-         ">=4 eventos en la misma sesión separados por <3 segundos"),
+         ">= 4 eventos en la sesión y <= 3 s entre eventos"),
         ("Bust-out", "Historial de compras pequeñas seguido de un cargo cercano al límite",
-         "cargo entre el 85% y 98% del limite_credito tras semanas de compras pequeñas"),
+         "importe >= 85 % del límite de crédito"),
     ]
+
     for nombre, descripcion, condicion in patrones:
         fab.tablas["patron"].append({
             "patron_id": fab.siguiente_id("patron"), "nombre": nombre,
@@ -371,7 +372,7 @@ def generar_transacciones_normales(fab, rng, fecha_inicio, fecha_fin, clientes_i
                 crear_evento(fab, sesion_id, "cambio_dato", momento - timedelta(minutes=1), "cambio de contraseña")
             crear_evento(fab, sesion_id, "intento_pago", momento, "pago iniciado")
             if rng.random() < P_DOBLE_CLIC_LEGIT:
-                crear_evento(fab, sesion_id, "intento_pago", momento + timedelta(seconds=float(rng.uniform(0.3, 2))),
+                crear_evento(fab, sesion_id, "intento_pago", momento + timedelta(seconds=float(rng.uniform(1, 3))),
                              "pago iniciado")
             crear_transaccion(fab, sesion_id, metodo_id, canal_id, dispositivo_id, momento, cantidad,
                               estado=estado, metodo_auth=auth_online(rng))

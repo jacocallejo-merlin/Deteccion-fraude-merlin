@@ -1,6 +1,7 @@
 import clickhouse_connect
 from datetime import datetime
 import sys
+import math
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -43,7 +44,7 @@ def valores_nulos(client, tabla):
             n = client.query(f"SELECT count() FROM {tabla} WHERE {nombre_col} IS NULL").result_rows[0][0]
             if n > 0:
                 hallazgos.append((nombre_col, "NULL", n))
-        if "String" in tipo_col:   
+        if "String" in tipo_col:
             n = client.query(f"SELECT count() FROM {tabla} WHERE {nombre_col} = ''").result_rows[0][0]
             if n > 0:
                 hallazgos.append((nombre_col, "vacio", n))
@@ -58,6 +59,13 @@ def duplicados(client, tabla, columna_pk):
         HAVING n > 1
     """
     return client.query(q).result_rows
+
+def duplicados_contenido(client):
+    return client.query("""
+        SELECT count() FROM (
+            SELECT metodo_id, timestamp, cantidad, count() AS n
+            FROM transaccion GROUP BY metodo_id, timestamp, cantidad HAVING n > 1)
+    """).result_rows[0][0]
 
 
 def formatos_inconsistentes(client):
@@ -178,14 +186,16 @@ def fechas_futuras(client):
 
 
 def importes_atipicos(client):
-    media, desviacion = client.query(
-        "SELECT avg(cantidad), stddevPop(cantidad) FROM transaccion"
+    q1, q3 = client.query(
+        "SELECT quantileExact(0.25)(log1p(toFloat64(cantidad))), "
+        "       quantileExact(0.75)(log1p(toFloat64(cantidad))) FROM transaccion"
     ).result_rows[0]
-
-    limite = media + 3 * desviacion
-    n = client.query(f"SELECT count() FROM transaccion WHERE cantidad > {limite}").result_rows[0][0]
-
-    return media, desviacion, limite, n
+    inf, sup = q1 - 1.5 * (q3 - q1), q3 + 1.5 * (q3 - q1)
+    n_bajo, n_alto = client.query(
+        f"SELECT countIf(log1p(toFloat64(cantidad)) < {inf}), "
+        f"       countIf(log1p(toFloat64(cantidad)) > {sup}) FROM transaccion"
+    ).result_rows[0]
+    return math.expm1(inf), math.expm1(sup), n_bajo, n_alto
 
 
 if __name__ == "__main__":
@@ -225,6 +235,9 @@ if __name__ == "__main__":
             else:
                 log(f"{t}: OK")
 
+            n = duplicados_contenido(client)
+            log(f"transaccion (mismo metodo_id, timestamp y cantidad): {'OK' if n == 0 else f'REVISAR ({n})'}")
+
         log("\n FORMATOS Y COHERENCIA ")
         for desc, cant in formatos_inconsistentes(client):
             st = "OK" if cant == 0 else f"REVISAR ({cant})"
@@ -242,9 +255,10 @@ if __name__ == "__main__":
             st = "OK" if cant == 0 else f"REVISAR ({cant})"
             log(f"  {desc}: {st}")
 
-        log("\n OUTLIERS IMPORTES ")
-        media, desv, limite, n = importes_atipicos(client)
-        log(f"  Media: {media:.2f}€ | Desv: {desv:.2f}€ | Umbral: {limite:.2f}€")
-        log(f"  Encima del umbral: {n} transacciones")
+        log("\n OUTLIERS IMPORTES (IQR sobre log) ")
+        inf, sup, n_bajo, n_alto = importes_atipicos(client)
+        log(f"  Rango normal: {inf:.2f}€ - {sup:.2f}€")
+        log(f"  Por debajo: {n_bajo} transacciones | Por encima: {n_alto} transacciones")
+
 
     print(f"\nGuardado en {f_out}")

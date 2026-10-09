@@ -17,7 +17,7 @@ def cargar_datos():
         host=HOST, port=PORT, username=USER, password=PASSWORD, database=DATABASE
     )
     df = client.query_df('SELECT * FROM features_transaccion')
-    df = df.sort_values('timestamp').reset_index(drop=True)
+    df = df.sort_values(['timestamp', "transaccion_id"], kind= "stable").reset_index(drop=True)
 
     print(f'Filas: {len(df):,}   Columnas: {len(df.columns)}')
     print(f'Ordenado por fecha: {df["timestamp"].is_monotonic_increasing}')

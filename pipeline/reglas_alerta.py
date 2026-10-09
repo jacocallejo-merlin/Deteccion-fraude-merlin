@@ -61,15 +61,17 @@ def evaluar(client):
             WHERE a.origen = 'regla' AND a.patron_id = {pid}
         ''').result_rows[0]
         precision = vp / n * 100 if n else 0
-        print(f'{nombre:<20}{n:>8,}{vp:>8,}{precision:>10.1f}%{vp / total_fraude * 100:>8.1f}%'
-              f'{vp_tipo / n_tipo * 100 if n_tipo else 0:>12.1f}%')
+        recall_regla = vp / total_fraude * 100 if total_fraude else 0
+        print(f'{nombre:<20}{n:>8,}{vp:>8,}{precision:>10.1f}%{recall_regla:>8.1f}%'
+            f'{vp_tipo / n_tipo * 100 if n_tipo else 0:>12.1f}%')
  
     n, vp = client.query('''
         SELECT count(), countIf(t.es_fraude = 1)
         FROM (SELECT DISTINCT transaccion_id FROM alerta WHERE origen = 'regla') a
         INNER JOIN transaccion t ON a.transaccion_id = t.transaccion_id
     ''').result_rows[0]
-    precision, recall = vp / n * 100, vp / total_fraude * 100
+    precision = vp / n * 100 if n else 0
+    recall = vp / total_fraude * 100 if total_fraude else 0
     f1 = 2 * precision * recall / (precision + recall) if precision + recall else 0
     print('-' * 69)
     print(f'{"TODAS (>= 1 regla)":<20}{n:>8,}{vp:>8,}{precision:>10.1f}%{recall:>8.1f}%')
