@@ -26,7 +26,9 @@ def cargar_datos():
 
 
 IDENTIFICADORES = ['transaccion_id', 'cliente_id', 'metodo_id', 'timestamp']
-ETIQUETA = ['es_fraude', 'tipo_fraude']
+ETIQUETA = ['es_fraude', 'tipo_fraude', 'fecha_confirmacion']
+PROPORCION_VAL = CONFIG['modelos']['proporcion_val']
+TIPO_DESCONOCIDO = CONFIG['dataset']['fraude_desconocido']['tipo']
 
 
 # SÍ entran al modelo
@@ -108,9 +110,35 @@ def dividir(X, info):
                           'test': info_test['tipo_fraude'].value_counts()}).fillna(0).astype(int)
     print(f'\nTransacciones de cada tipo de fraude:\n{tipos}')
     faltan = tipos.index[(tipos['train'] == 0) | (tipos['test'] == 0)].tolist()
+    if TIPO_DESCONOCIDO in faltan and tipos.loc[TIPO_DESCONOCIDO, 'train'] == 0:
+        print(f'{TIPO_DESCONOCIDO}: solo en test, como debe ser (fraude que los modelos no han visto)')
+        faltan.remove(TIPO_DESCONOCIDO)
     if faltan:
         print(f'¡OJO! Tipos sin casos en train o en test: {faltan}')
     return X_train, X_test, info_train, info_test
+
+
+def etiquetas_conocidas(info_train):
+    """Deja en info_train la etiqueta que se conocería al entrenar: solo es fraude lo que el banco
+    ya había confirmado al final del periodo de train. Lo demás (confirmado después o nunca)
+    cuenta como legítimo, igual que en un banco real. La etiqueta real se guarda en es_fraude_real
+    y tipo_fraude_real. En test se mantiene la real: se mide cuando las etiquetas ya han madurado."""
+    info_train = info_train.copy()
+    corte = info_train['timestamp'].max()
+    confirmada = pd.to_datetime(info_train['fecha_confirmacion'])
+    conocido = (info_train['es_fraude'] == 1) & confirmada.notna() & (confirmada <= corte)
+
+    info_train['es_fraude_real'] = info_train['es_fraude']
+    info_train['tipo_fraude_real'] = info_train['tipo_fraude']
+    info_train['es_fraude'] = conocido.astype(info_train['es_fraude'].dtype)
+    info_train['tipo_fraude'] = info_train['tipo_fraude'].where(conocido, None)
+
+    inicio_val = int(len(info_train) * (1 - PROPORCION_VAL))
+    print(f'\nEtiquetas conocidas al entrenar (confirmadas antes de {corte}):')
+    for nombre, parte in [('train', info_train), ('validación (final del train)', info_train.iloc[inicio_val:])]:
+        real, conoc = int(parte['es_fraude_real'].sum()), int(parte['es_fraude'].sum())
+        print(f'  {nombre:<30} {conoc:>4} de {real:>4} fraudes ({conoc / max(real, 1) * 100:.0f} %)')
+    return info_train
 
 
 def escalar(X_train, X_test):
@@ -167,6 +195,7 @@ def main():
     X, info = seleccionar_variables(df)
     X = transformar(X)
     X_train, X_test, info_train, info_test = dividir(X, info)
+    info_train = etiquetas_conocidas(info_train)
     X_train, X_test, escalador = escalar(X_train, X_test)
     guardar(X_train, X_test, info_train, info_test, escalador)
 

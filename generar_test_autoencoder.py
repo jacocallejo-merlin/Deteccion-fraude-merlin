@@ -1,3 +1,14 @@
+"""
+Prueba del autoencoder con datos que no ha visto nunca (paso 1 de 2). NO lo lanza main.py.
+
+Genera un dataset sintético NUEVO (otra semilla) en una base de datos de pruebas aparte
+(fraude_pagos_nuevo por defecto, que se borra y se crea de cero; la principal no se toca),
+le aplica la misma carga, limpieza y features que al original, y lo deja escalado con el
+escalador del entrenamiento en datos_ml_nuevo/ (con preparar_test_autoencoder.py).
+
+Después:  python evaluar_test_autoencoder.py
+Uso:      python generar_test_autoencoder.py [--semilla 777] [--dias 75]
+"""
 import argparse
 import os
 import subprocess
@@ -63,6 +74,8 @@ def main():
         (['pipeline/BD_VACIAS.py'],                            'Crea las tablas vacías'),
         (['pipeline/dataset.py', '--seed', str(args.semilla),
           '--dias', str(args.dias)],                           'Genera las transacciones nuevas'),
+        (['pipeline/carga_transacciones.py'],                  'Convierte las transacciones brutas'),
+        (['pipeline/limpieza.py'],                             'Corrige duplicados, formatos y divisas'),
         (['pipeline/crear_tabla_enriquecida.py'],              'Une las tablas'),
         (['pipeline/features.py'],                             'Calcula las features'),
         (['preparar_test_autoencoder.py',

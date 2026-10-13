@@ -15,7 +15,7 @@ SELECT
     t.moneda AS moneda, t.tipo_operacion AS tipo_operacion,
     t.metodo_autenticacion AS metodo_autenticacion, t.estado AS estado,
     -- etiqueta (solo para evaluar, NUNCA como feature de entrenamiento)
-    t.es_fraude AS es_fraude, t.tipo_fraude AS tipo_fraude,
+    t.es_fraude AS es_fraude, t.tipo_fraude AS tipo_fraude, t.fecha_confirmacion AS fecha_confirmacion,
     -- método de pago
     t.metodo_id AS metodo_id, mp.tipo AS metodo_tipo, mp.entidad_emisora AS entidad_emisora,
     mp.limite_credito AS limite_credito,

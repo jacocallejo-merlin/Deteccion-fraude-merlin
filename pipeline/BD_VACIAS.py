@@ -134,9 +134,40 @@ def crear_tablas(client):
             metodo_autenticacion LowCardinality(String),
             estado               LowCardinality(String),
             es_fraude            UInt8,                           
-            tipo_fraude          LowCardinality(Nullable(String)) 
+            tipo_fraude          LowCardinality(Nullable(String)),
+            fecha_confirmacion   Nullable(DateTime)       -- cuándo confirmó el banco el fraude (NULL: aún no)
         ) ENGINE = MergeTree()
         ORDER BY (metodo_id, timestamp)
+    '''
+
+    #  Sirven para que la carga de transacciones se parezca a un caso real, donde las fechas no llegan bien formateadas
+    columnas_brutas = '''
+            transaccion_id       UInt32,
+            metodo_id            UInt32,
+            canal_id             UInt32,
+            dispositivo_id       Nullable(UInt32),
+            sesion_id            Nullable(UInt32),
+            timestamp            String,                -- cambio
+            cantidad             Decimal(10, 2),
+            moneda               LowCardinality(String),
+            tipo_operacion       LowCardinality(String),
+            metodo_autenticacion LowCardinality(String),
+            estado               LowCardinality(String),
+            es_fraude            UInt8,
+            tipo_fraude          LowCardinality(Nullable(String)),
+            fecha_confirmacion   Nullable(DateTime)'''
+    
+    tablas['transaccion_bruta'] = f'''
+        CREATE TABLE IF NOT EXISTS transaccion_bruta ({columnas_brutas}
+        ) ENGINE = MergeTree()
+        ORDER BY transaccion_id
+    '''
+    # Las que no se pueden cargar (fecha ilegible), con el motivo, para revisarlas a mano
+    tablas['transaccion_cuarentena'] = f'''
+        CREATE TABLE IF NOT EXISTS transaccion_cuarentena ({columnas_brutas},
+            motivo               String
+        ) ENGINE = MergeTree()
+        ORDER BY transaccion_id
     '''
  
     tablas['devolucion'] = '''
@@ -197,7 +228,7 @@ def verificar(client):
 if __name__ == '__main__':
     crear_base_de_datos()
     client = get_client(database=DATABASE)
-    print('\nCreando tablas...')
+    print('\nCreando tablas')
     crear_tablas(client)
     verificar(client)
  

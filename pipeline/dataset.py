@@ -1,6 +1,8 @@
 import argparse
+import math
 import random
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -10,11 +12,13 @@ from faker import Faker
 fake = Faker("es_ES")
 from config import CONFIG, HOST, PORT, USER, PASSWORD, DATABASE
 
+CONFIG_DATASET = CONFIG['dataset']
+
 N_CLIENTES = 2000
 N_COMERCIOS = 30
 N_DISPOSITIVOS = 6500   # >= 3 por cliente (máximo posible) + sobrantes para los "dispositivos nuevos"
-TRANSACCIONES_DIA_MEDIA = 200
-TASA_FRAUDE_OBJETIVO = 0.02
+TRANSACCIONES_DIA_MEDIA = CONFIG_DATASET['transacciones_dia']
+TASA_FRAUDE_OBJETIVO = CONFIG_DATASET['tasa_fraude']
 
 TIPOS_FRAUDE = ["pico_gasto", "card_testing", "smurfing", "account_takeover", "ip_sospechosa",
                 "dispositivo_nuevo", "devolucion_abusiva", "bot", "bust_out"]
@@ -31,8 +35,8 @@ PAISES_HABITUALES_PESOS = [0.50, 0.10, 0.09, 0.07, 0.07, 0.06, 0.04, 0.03, 0.02,
 PAISES_RAROS = ["Rusia", "Nigeria", "Vietnam", "Ucrania", "Indonesia", "Filipinas",
                 "China", "Pakistán", "Brasil", "India", "Sudáfrica", "Egipto"]
 
-DIAS_SIN_FRAUDE = 30
-MARGEN_FINAL_DIAS = {"devolucion_abusiva": 25}
+DIAS_SIN_FRAUDE = 30 # número de días del principio del periodo simulado en los que no se mete ningún fraude
+MARGEN_FINAL_DIAS = {"devolucion_abusiva": 25} # cuántos días antes de fecha_fin tiene que empezar como muy tarde cada tipo de fraude.
 
 MOTIVOS_DEVOLUCION = ["producto no conforme", "producto no recibido", "talla incorrecta",
                       "cargo duplicado", "cancelación del pedido"]
@@ -282,6 +286,7 @@ def crear_transaccion(fab, sesion_id, metodo_id, canal_id, dispositivo_id, momen
         "cantidad": round(float(cantidad), 2), "moneda": moneda, "tipo_operacion": tipo_operacion,
         "metodo_autenticacion": metodo_auth, "estado": estado,
         "es_fraude": int(es_fraude), "tipo_fraude": tipo_fraude,
+        "fecha_confirmacion": None,   # la rellena asignar_confirmaciones
     })
     return tid
 
@@ -531,6 +536,60 @@ def caso_bust_out(fab, rng, c, fecha_inicio, limite):
                       float(limite) * float(rng.uniform(0.85, 0.98)), metodo_auth=auth_online(rng), es_fraude=1)
 
 
+def caso_cash_out_multicomercio(fab, rng, c, comercios_ids, canales_por_comercio, canal_tipo):
+    """Fraude "desconocido": credenciales robadas usadas desde el propio dispositivo y país del
+    cliente (malware) para comprar en varios comercios distintos, espaciando las compras para no
+    parecer una ráfaga. No se diseñó ninguna variable ni regla pensando en él."""
+    t = c["momento"]
+    for comercio_id in rng.choice(comercios_ids, size=int(rng.integers(3, 7)), replace=False):
+        canales = [ch for ch in canales_por_comercio[int(comercio_id)] if canal_tipo[ch] != "datafono"]
+        if not canales:
+            continue
+        if t >= c["fecha_fin"]:
+            break
+        sid = crear_sesion(fab, rng, c["cid"], c["disp"], antes(rng, t), pais_ip=c["pais"])
+        crear_evento(fab, sid, "intento_pago", t, "pago iniciado")
+        crear_transaccion(fab, sid, c["metodo"], int(rng.choice(canales)), c["disp"], t,
+                          np.exp(c["mu"]) * float(rng.uniform(1.5, 4)), metodo_auth=auth_online(rng),
+                          es_fraude=1, tipo_fraude=c["tipo"])
+        t += timedelta(minutes=float(rng.uniform(8, 40)))
+
+
+def generar_fraude_desconocido(fab, rng, fecha_fin, clientes_ids, perfiles, metodos_por_cliente,
+                               disp_por_cliente, canales_por_comercio, canal_tipo, comercios_ids, cfg):
+    inicio = fecha_fin - timedelta(days=cfg["dias_finales"])
+    for _ in range(cfg["n_casos"]):
+        cid = int(rng.choice(clientes_ids))
+        c = {"cid": cid, "metodo": int(rng.choice(metodos_por_cliente[cid])),
+             "disp": int(rng.choice(disp_por_cliente[cid])), "pais": perfiles[cid]["pais"],
+             "mu": perfiles[cid]["mu"], "fecha_fin": fecha_fin, "tipo": cfg["tipo"],
+             "momento": momento_aleatorio(rng, inicio, fecha_fin - timedelta(days=1))}
+        caso_cash_out_multicomercio(fab, rng, c, comercios_ids, canales_por_comercio, canal_tipo)
+
+
+def asignar_confirmaciones(fab, semilla, fecha_fin, cfg):
+    """Fecha en que el banco confirma cada fraude (contracargo, reclamación). Una parte no se
+    confirma nunca, y las confirmaciones posteriores al final del periodo todavía no existen.
+    Generador propio: no altera el resto del dataset."""
+    rng = np.random.default_rng(semilla + 2000)
+    n_conf = n_nunca = n_pendiente = 0
+    for t in fab.tablas["transaccion"]:
+        if not t["es_fraude"]:
+            continue
+        if rng.random() < cfg["p_nunca_confirmado"]:
+            n_nunca += 1
+            continue
+        dias = float(rng.lognormal(math.log(cfg["retraso_mediana_dias"]), cfg["retraso_sigma"]))
+        fecha = t["timestamp"] + timedelta(days=dias)
+        if fecha > fecha_fin:
+            n_pendiente += 1
+            continue
+        t["fecha_confirmacion"] = fecha
+        n_conf += 1
+    print(f"\nEtiquetas: {n_conf} fraudes confirmados, {n_pendiente} sin confirmar todavía al "
+          f"final del periodo y {n_nunca} que no se confirmarán nunca")
+
+
 CASOS = {
     "pico_gasto": caso_pico_gasto, "card_testing": caso_card_testing, "smurfing": caso_smurfing,
     "account_takeover": caso_account_takeover, "ip_sospechosa": caso_ip_sospechosa,
@@ -595,6 +654,79 @@ ORDEN_INSERCION = ["cliente", "comercio", "dispositivo", "patron", "metodo_pago"
                    "transaccion", "devolucion", "analista", "alerta"]
 
 
+# Columnas de texto en las que los sistemas de origen escriben el mismo valor de varias formas
+COLUMNAS_FORMATO = {
+    "cliente": ["pais", "email"], "comercio": ["pais"], "sesion": ["ip_pais"],
+    "transaccion": ["estado", "moneda", "metodo_autenticacion"],
+}
+TABLAS_DUPLICADOS = ["transaccion", "sesion", "evento"]
+
+#Mismo valor escrito de otra forma: mayúsculas, minúsculas o espacios sobrantes.
+def variante_formato(valor, rng):
+    variantes = [valor.upper(), valor.lower(), f" {valor}", f"{valor} ", valor.capitalize()]
+    variantes = [v for v in variantes if v != valor]
+    return variantes[int(rng.integers(len(variantes)))] if variantes else valor
+
+
+FORMATO_FECHA = "%Y-%m-%d %H:%M:%S"          # el habitual del sistema de origen, en UTC
+FORMATO_FECHA_DIA_PRIMERO = "%d/%m/%Y %H:%M:%S"
+ZONA_LOCAL = ZoneInfo("Europe/Madrid")
+FECHAS_ILEGIBLES = ["", "0000-00-00 00:00:00", "31/02/2026 10:15:00", "2026-13-01 25:00:00", "sin fecha"]
+
+
+#La fecha de una transacción tal como la escribe el sistema de origen (texto). La mayoría en el formato habitual; algunas en otro formato, en hora local con su desfase o ilegibles
+def fecha_bruta(momento, rng, s):
+    r = rng.random()
+    if r < s["p_fecha_ilegible"]:
+        return FECHAS_ILEGIBLES[int(rng.integers(len(FECHAS_ILEGIBLES)))], "ilegible"
+    r -= s["p_fecha_ilegible"]
+    if r < s["p_fecha_otro_formato"]:
+        return momento.strftime(FORMATO_FECHA_DIA_PRIMERO), "dd/mm/aaaa"
+    r -= s["p_fecha_otro_formato"]
+    if r < s["p_fecha_hora_local"]:
+        local = momento.replace(tzinfo=timezone.utc).astimezone(ZONA_LOCAL)
+        return local.isoformat(timespec="seconds"), "hora de Madrid con desfase"
+    return momento.strftime(FORMATO_FECHA), None
+
+# Mete los errores típicos de unos datos reales. Usa su propio generador para no alterar el dataset de fondo
+def ensuciar(fab, semilla, s):
+    rng = np.random.default_rng(semilla + 1000)
+    cambios = {}
+
+    def anotar(desc, n=1):
+        cambios[desc] = cambios.get(desc, 0) + n
+
+    # importes registrados en otra divisa (antes que los formatos: " usd" también puede pasar)
+    divisas = list(s["tipos_cambio"])
+    for t in fab.tablas["transaccion"]:
+        if rng.random() < s["p_otra_divisa"]:
+            t["moneda"] = divisas[int(rng.integers(len(divisas)))]
+            t["cantidad"] = round(t["cantidad"] * s["tipos_cambio"][t["moneda"]], 2)
+            anotar(f"transaccion.cantidad en {t['moneda']}")
+
+    for tabla, columnas in COLUMNAS_FORMATO.items():
+        for fila in fab.tablas[tabla]:
+            for col in columnas:
+                if isinstance(fila[col], str) and rng.random() < s["p_formato"]:
+                    fila[col] = variante_formato(fila[col], rng)
+                    anotar(f"{tabla}.{col} con otro formato")
+
+    # la fecha de la transacción llega como texto (se convierte en carga_transacciones.py)
+    for t in fab.tablas["transaccion"]:
+        t["timestamp"], tipo = fecha_bruta(t["timestamp"], rng, s)
+        if tipo:
+            anotar(f"transaccion.timestamp {tipo}")
+
+    for tabla in TABLAS_DUPLICADOS:
+        filas = fab.tablas[tabla]
+        repetidas = [dict(f) for f in filas if rng.random() < s["p_duplicado"]]
+        filas.extend(repetidas)
+        anotar(f"{tabla}: filas repetidas", len(repetidas))
+    print("\nErrores de datos reales introducidos (los corrigen carga_transacciones.py y limpieza.py):")
+    for desc, n in cambios.items():
+        print(f"  {desc}: {n:,}")
+
+
 def como_utc(valor):
     """Las fechas del generador no llevan zona horaria. Sin esto, clickhouse_connect las toma como
     hora local del ordenador: las horas se desplazan y dependen de la máquina (en Docker, UTC,
@@ -609,16 +741,23 @@ def cargar_en_clickhouse(fab):
     client = clickhouse_connect.get_client(
         host=HOST, port=PORT, username=USER, password=PASSWORD, database=DATABASE
     )
+    # las transacciones llegan como texto a transaccion_bruta; carga_transacciones.py las convierte
+    client.command("TRUNCATE TABLE IF EXISTS transaccion")
     for tabla in ORDEN_INSERCION:
-        client.command(f"TRUNCATE TABLE IF EXISTS {tabla}")  
+        destino = "transaccion_bruta" if tabla == "transaccion" else tabla
+        client.command(f"TRUNCATE TABLE IF EXISTS {destino}")
         filas = fab.tablas[tabla]
         if not filas:
-            print(f"  {tabla}: vacía")
+            print(f"  {destino}: vacía")
             continue
+        if tabla == "transaccion":
+            for fila in filas:
+                if isinstance(fila["timestamp"], datetime):   # sin ensuciar: formato habitual
+                    fila["timestamp"] = fila["timestamp"].strftime(FORMATO_FECHA)
         columnas = list(filas[0].keys())
         datos = [[como_utc(fila[col]) for col in columnas] for fila in filas]
-        client.insert(tabla, datos, column_names=columnas)
-        print(f"  {tabla}: {len(filas):,} filas cargadas")
+        client.insert(destino, datos, column_names=columnas)
+        print(f"  {destino}: {len(filas):,} filas cargadas")
 
 
 def resumen(fab):
@@ -641,7 +780,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true", help="No conecta a ClickHouse, solo genera y resume")
     parser.add_argument("--seed", type=int, default=CONFIG['semilla'])
-    parser.add_argument("--dias", type=int, default=180)
+    parser.add_argument("--dias", type=int, default=CONFIG_DATASET["dias"])
     parser.add_argument("--proporciones", choices=["igual", "aleatoria"], default="igual")
     args = parser.parse_args()
 
@@ -686,9 +825,21 @@ def main():
                    disp_por_cliente, canales_por_comercio, canal_tipo, comercios_ids,
                    dispositivos_sin_dueno, dispositivos_estafador, proporcion_fraude)
 
+    desconocido = CONFIG_DATASET["fraude_desconocido"]
+    if desconocido["activar"]:
+        print(f"Inyectando fraude desconocido ({desconocido['tipo']}, últimos {desconocido['dias_finales']} días)...")
+        generar_fraude_desconocido(fab, rng, fecha_fin, clientes_ids, perfiles, metodos_por_cliente,
+                                   disp_por_cliente, canales_por_comercio, canal_tipo, comercios_ids,
+                                   desconocido)
+
     generar_analistas(fab, rng, fecha_inicio)
+    asignar_confirmaciones(fab, args.seed, fecha_fin, CONFIG_DATASET["etiquetas"])
 
     resumen(fab)
+
+    suciedad = CONFIG.get("suciedad", {})
+    if suciedad.get("activar"):
+        ensuciar(fab, args.seed, suciedad)
 
     if args.dry_run:
         print("\n--dry-run: no se carga nada en ClickHouse.")

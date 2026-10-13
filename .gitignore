@@ -1,6 +1,7 @@
 venv/
 .env
 datos_ml/
+datos_ml_nuevo/
 modelos/
 resultados/
 historico/

@@ -11,11 +11,13 @@ from config import DATABASE, HOST, PASSWORD, PORT, USER
 
 PASOS = [
     ('pipeline/BD_VACIAS.py',                      'Crea la base de datos y las tablas vacías'),
-    ('pipeline/dataset.py',                        'Genera el dataset sintético y lo carga'),
+    ('pipeline/dataset.py',                        'Genera el dataset sintético (con errores típicos) y lo carga'),
+    ('pipeline/carga_transacciones.py',            'Convierte las transacciones brutas (fechas en texto)'),
+    ('pipeline/informe_limpieza.py',               'Informe de calidad de los datos de origen'),
+    ('pipeline/limpieza.py',                       'Corrige duplicados y formatos inconsistentes'),
     ('pipeline/crear_tabla_enriquecida.py',        'Une las tablas en transacciones_enriquecidas'),
     ('pipeline/features.py',                       'Calcula features_transaccion'),
     ('pipeline/reglas_alerta.py',                  'Genera las alertas por reglas'),
-    ('pipeline/informe_limpieza.py',               'Informe de calidad de datos'),
     ('pipeline/preparacion_datos_ml.py',           'Train/test, escalado y parquets en datos_ml/'),
     ('pipeline/modelos_nosupervisados.py',         'Entrena IF, KMeans, OCSVM y DBSCAN y guarda scores'),
     ('pipeline/entrenar_autoencoder.py',           'Entrena el autoencoder y guarda scores'),

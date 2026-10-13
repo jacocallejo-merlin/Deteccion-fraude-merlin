@@ -1,3 +1,13 @@
+"""
+Prueba del autoencoder con datos que no ha visto nunca (paso 2 de 2). NO lo lanza main.py.
+
+Puntúa con el autoencoder ya entrenado el conjunto de datos_ml_nuevo/ (lo genera
+generar_test_autoencoder.py) y mide: clasificación fraude / no fraude con el umbral fijado
+en la validación del entrenamiento (sin mirar los datos nuevos), PR-AUC y ROC-AUC, y otros
+presupuestos de revisión. Sirve para ver si el modelo generaliza fuera del dataset original.
+
+Uso:  python evaluar_test_autoencoder.py [--presupuesto 1.0]
+"""
 import argparse
 import os
 import sys

@@ -1,3 +1,10 @@
+"""
+Convierte las features de la base de datos activa en X_nuevo.parquet / info_nuevo.parquet,
+con las mismas variables y transformaciones que el entrenamiento y el escalador de datos_ml/
+(transform, nunca fit). Avisa si alguna variable se desplaza respecto al train original.
+
+Normalmente no se lanza a mano: lo llama generar_test_autoencoder.py como último paso.
+"""
 import argparse
 import os
 import sys

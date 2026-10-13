@@ -26,6 +26,7 @@ N_BOOTSTRAP = 300
 N_TOP_VALIDACION = 3           
 TOLERANCIA_DERIVA = 1.5        
 SEMILLA = CONFIG['semilla'] 
+TIPO_DESCONOCIDO = CONFIG['dataset']['fraude_desconocido']['tipo']
 
 pd.set_option('display.width', 160)
 
@@ -67,6 +68,8 @@ def cargar(carpeta):
     grupo = COLUMNA_GRUPO if (COLUMNA_GRUPO in info_train and COLUMNA_GRUPO in info_test) else None
     datos = {
         'y_val': info_val['es_fraude'].astype(int).to_numpy(),
+        # fraudes reales de validación, conocidos o no al entrenar (solo para informar)
+        'n_fraude_val_real': int(info_val.get('es_fraude_real', info_val['es_fraude']).sum()),
         'y_test': info_test['es_fraude'].astype(int).to_numpy(),
         'tipo_test': info_test['tipo_fraude'].to_numpy(),
         'ids_test': info_test['transaccion_id'].to_numpy(),
@@ -256,6 +259,10 @@ TIPOS_FRAUDE = {
                       'ip_extranjera, proxy_vpn'),
     'bot': ('transacciones automáticas, muy rápidas y repetitivas',
             'min_seg_entre_eventos, seg_desde_anterior_tarjeta, seg_desde_anterior_cliente'),
+    TIPO_DESCONOCIDO: ('fraude NUEVO que no aparece en entrenamiento: credenciales robadas usadas '
+                       'desde el propio dispositivo del cliente para comprar en varios comercios '
+                       'seguidos', 'ninguna diseñada para él; solo señales genéricas como '
+                       'n_cliente_1h o z_importe_cliente'),
 }
 
 
@@ -310,6 +317,12 @@ def conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resume
                  'La comparación con los demás no es del todo en igualdad de condiciones.')
     L.append('- El mejor se eligió con un periodo de datos (validación) y se comprobó en el periodo '
              'más reciente (test), que no se usó para nada antes. Así la medida es honesta.')
+    n_conocido, n_real = int(datos['y_val'].sum()), datos['n_fraude_val_real']
+    if n_conocido < n_real:
+        L.append(f'- Como en un banco, al elegir solo se conocían los fraudes ya confirmados: en '
+                 f'validación había {n_real} fraudes, pero solo {n_conocido} estaban confirmados al '
+                 f'final del periodo de entrenamiento (el resto se confirma más tarde o nunca). Para '
+                 f'elegir, los no confirmados cuentan como legítimos. El test se mide con todos.')
 
     L.append('\n## El mejor modelo y por qué')
     L.append(f'- {nom} {INFO_MODELOS[elegido][1]}.')
@@ -356,6 +369,20 @@ def conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resume
             desc = TIPOS_FRAUDE.get(tipo, ('', ''))[0]
             L.append(f'- {tipo} ({int(fila["n"])} casos{": " + desc if desc else ""}): '
                      f'detecta el {fila[col]:.0f} %.')
+        if TIPO_DESCONOCIDO in por_tipo.index:
+            r = por_tipo.loc[TIPO_DESCONOCIDO, col]
+            if r >= 30:
+                L.append(f'- {TIPO_DESCONOCIDO} es el fraude nuevo: no hay ningún caso en entrenamiento ni '
+                         f'variables pensadas para él, y aun así se detecta el {r:.0f} %. Es lo que se '
+                         f'espera de un detector de anomalías: encontrar fraude que nadie había descrito.')
+            else:
+                L.append(f'- {TIPO_DESCONOCIDO} es el fraude nuevo (sin casos en entrenamiento ni variables '
+                         f'pensadas para él) y solo se detecta el {r:.0f} %. Imita el comportamiento normal '
+                         f'del cliente: su dispositivo, su país e importes moderados. Un detector de '
+                         f'anomalías solo encuentra lo que se sale de lo normal, así que el fraude que se '
+                         f'parece a una compra legítima necesita otra vía: que los analistas lo marquen al '
+                         f'revisarlo y se añadan variables o reglas nuevas (hito 6).')
+        malos = [t for t in malos if t != TIPO_DESCONOCIDO]
         if malos:
             L.append('- Los que se escapan no es por falta de variables: el modelo ya tiene '
                      'variables que los distinguen. El problema es que los detectores de anomalías '
@@ -377,6 +404,12 @@ def conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resume
         L.append(f'- En test baja respecto a validación ({e["PR-AUC_val"]:.2f} a {e["PR-AUC"]:.2f}). '
                  f'Es en parte normal (al elegir el mejor de varios, su nota de validación sale algo '
                  f'inflada) y en parte las transacciones recientes son algo distintas.')
+    elif dif > 0.05 and datos['y_val'].sum() < datos['n_fraude_val_real']:
+        L.append(f'- En test sube respecto a validación ({e["PR-AUC_val"]:.2f} a {e["PR-AUC"]:.2f}) sobre todo '
+                 f'por las etiquetas: en validación los fraudes aún no confirmados cuentan como legítimos, '
+                 f'así que un modelo que los pone arriba parece equivocarse. En test se mide con todas las '
+                 f'etiquetas. La cifra de referencia es la de test, con su intervalo de confianza; la de '
+                 f'validación solo sirve para comparar modelos entre sí.')
     elif dif > 0.05:
         L.append(f'- En test sube respecto a validación ({e["PR-AUC_val"]:.2f} a {e["PR-AUC"]:.2f}). '
                  f'No es que el modelo mejore con datos nuevos: validación solo tiene '

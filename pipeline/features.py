@@ -98,6 +98,8 @@ SELECT
     te.transaccion_id AS transaccion_id, te.timestamp AS timestamp,
     assumeNotNull(te.cliente_id) AS cliente_id, te.metodo_id AS metodo_id,
     te.es_fraude AS es_fraude, te.tipo_fraude AS tipo_fraude,
+    -- cuándo se supo que era fraude: al entrenar solo cuentan los confirmados antes del corte
+    te.fecha_confirmacion AS fecha_confirmacion,
 
     -- IMPORTE: tipo Decimal -> Float64 y logaritmo por la asimetría
     toFloat64(te.cantidad)                                    AS importe,

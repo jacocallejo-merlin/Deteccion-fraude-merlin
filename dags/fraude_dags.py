@@ -77,11 +77,13 @@ with DAG(
     default_args=ARGS,
     tags=['fraude'],
 ) as dag_entrenamiento:
-    # ETL
+    # ETL: carga, informe de calidad de los datos de origen, limpieza y variables
+    carga = paso('carga_transacciones', 'carga_transacciones.py')
+    informe = paso('informe_limpieza', 'informe_limpieza.py')
+    limpieza = paso('limpieza', 'limpieza.py')
     enriquecida = paso('crear_tabla_enriquecida', 'crear_tabla_enriquecida.py')
     features = paso('features', 'features.py')
     reglas = paso('reglas_alerta', 'reglas_alerta.py')
-    limpieza = paso('informe_limpieza', 'informe_limpieza.py')
     preparacion = paso('preparacion_datos_ml', 'preparacion_datos_ml.py')
 
     # Entrenamiento (en paralelo)
@@ -99,7 +101,7 @@ with DAG(
 
     validacion = paso('validacion', 'validacion_reproducibilidad_consistencia.py')
 
-    enriquecida >> features >> [reglas, limpieza] >> preparacion
+    carga >> informe >> limpieza >> enriquecida >> features >> reglas >> preparacion
     preparacion >> [clasicos, autoencoder]
     clasicos >> puntuar_clasicos
     autoencoder >> puntuar_ae
@@ -121,6 +123,8 @@ with DAG(
     default_args=ARGS,
     tags=['fraude'],
 ) as dag_scoring:
+    carga = paso('carga_transacciones', 'carga_transacciones.py')
+    limpieza = paso('limpieza', 'limpieza.py')     # los lotes nuevos llegan con los mismos errores
     enriquecida = paso('crear_tabla_enriquecida', 'crear_tabla_enriquecida.py')
     features = paso('features', 'features.py')
     reglas = paso('reglas_alerta', 'reglas_alerta.py')
@@ -130,6 +134,6 @@ with DAG(
 
     if GENERAR_LOTE:
         lote = paso('generar_lote', 'generar_lote.py', f'--dias {DIAS_POR_LOTE}')
-        lote >> enriquecida
+        lote >> carga
 
-    enriquecida >> features >> reglas >> [puntuar_clasicos, puntuar_ae] >> validacion
+    carga >> limpieza >> enriquecida >> features >> reglas >> [puntuar_clasicos, puntuar_ae] >> validacion

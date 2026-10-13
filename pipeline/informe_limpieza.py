@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from config import HOST, PORT, USER, PASSWORD, DATABASE, CARPETA_RESULTADOS
+from pipeline.limpieza import DOMINIOS, elegir_canonicos
 
 TABLAS = ["cliente", "comercio", "dispositivo", "patron", "analista", "metodo_pago", "canal_pago",
           "cliente_dispositivo", "sesion", "evento", "transaccion", "devolucion", "alerta"]
@@ -23,6 +24,7 @@ ESPERADOS = {
     ("transaccion", "dispositivo_id"): "pagos presenciales (datáfono)",
     ("transaccion", "sesion_id"): "pagos presenciales (datáfono)",
     ("transaccion", "tipo_fraude"): "transacciones legítimas",
+    ("transaccion", "fecha_confirmacion"): "legítimas y fraudes aún sin confirmar",
     ("evento", "detalle"): "eventos de login sin detalle",
     ("alerta", "patron_id"): "alertas generadas por un modelo, no por una regla",
     ("alerta", "analista_id"): "alertas sin revisar",
@@ -77,6 +79,29 @@ def formatos_inconsistentes(client):
             f"SELECT count() FROM {tabla} WHERE NOT match(email, '^[^@]+@[^@]+\\.[^@]+$')"
         ).result_rows[0][0]
         resultados.append((f"{tabla}.email con formato invalido", n))
+        n = client.query(
+            f"SELECT count() FROM {tabla} WHERE email != lowerUTF8(trimBoth(email))"
+        ).result_rows[0][0]
+        resultados.append((f"{tabla}.email con mayúsculas o espacios", n))
+
+    # el mismo valor categórico escrito de varias formas ("España", " españa", "ESPAÑA")
+    for dominio, columnas in DOMINIOS.items():
+        conteos = {}
+        for tabla, col in columnas:
+            for valor, n in client.query(f"SELECT {col}, count() FROM {tabla} "
+                                         f"WHERE {col} IS NOT NULL GROUP BY {col}").result_rows:
+                conteos[valor] = conteos.get(valor, 0) + n
+        variantes = elegir_canonicos(conteos)
+        n = sum(conteos[v] for v in variantes)
+        nombres = ", ".join(f"{t}.{c}" for t, c in columnas)
+        resultados.append((f"{nombres}: valores con mayúsculas/espacios distintos "
+                           f"({len(variantes)} variantes)", n))
+
+    # transacciones que no se pudieron cargar y divisas distintas del euro
+    n = client.query("SELECT count() FROM transaccion_cuarentena").result_rows[0][0]
+    resultados.append(("transacciones en cuarentena (fecha ilegible)", n))
+    n = client.query("SELECT count() FROM transaccion WHERE upper(trimBoth(moneda)) != 'EUR'").result_rows[0][0]
+    resultados.append(("transacciones en otra divisa (sin convertir a EUR)", n))
 
     # importes que no deberian ser 0 o negativos
     n = client.query("SELECT count() FROM transaccion WHERE cantidad <= 0").result_rows[0][0]
@@ -119,6 +144,9 @@ def formatos_inconsistentes(client):
         ("devoluciones anteriores a la compra",
          "SELECT count() FROM devolucion d JOIN transaccion t ON d.transaccion_id = t.transaccion_id "
          "WHERE d.fecha < t.timestamp"),
+        ("fraudes confirmados antes de ocurrir / legitimas con confirmacion",
+         "SELECT countIf(fecha_confirmacion < timestamp) + countIf(es_fraude = 0 AND fecha_confirmacion IS NOT NULL) "
+         "FROM transaccion"),
         ("fraude sin tipo_fraude / legitima con tipo_fraude",
          "SELECT countIf(es_fraude = 1 AND tipo_fraude IS NULL) + countIf(es_fraude = 0 AND tipo_fraude IS NOT NULL) "
          "FROM transaccion"),
@@ -169,6 +197,7 @@ def huerfanos(client):
 def fechas_futuras(client):
     checks = [
         ("transaccion", "timestamp"),
+        ("transaccion", "fecha_confirmacion"),
         ("sesion", "timestamp"),
         ("evento", "timestamp"),
         ("alerta", "fecha"),
@@ -207,7 +236,8 @@ def importes_atipicos(client):
 
 if __name__ == "__main__":
     CARPETA_RESULTADOS.mkdir(exist_ok=True)
-    f_out = CARPETA_RESULTADOS / f"informe_limpieza_{datetime.now():%Y%m%d_%H%M}.txt"
+    # se sobrescribe en cada ejecución; la copia de cada entrenamiento queda en historico/
+    f_out = CARPETA_RESULTADOS / "informe_limpieza.txt"
     with open(f_out, "w", encoding="utf-8") as f:
         def log(msg=""):
             print(msg)
@@ -215,6 +245,8 @@ if __name__ == "__main__":
 
         client = get_client()
 
+        log(f"Informe de calidad de los datos de origen (ANTES de limpieza.py) - {datetime.now():%Y-%m-%d %H:%M}")
+        log()
         log(" TABLAS ")
         for t in TABLAS:
             n = client.query(f"SELECT count() FROM {t}").result_rows[0][0]

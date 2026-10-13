@@ -7,6 +7,43 @@ clickhouse:
 # Semilla única para todo el proyecto (dataset, modelos, evaluación)
 semilla: 42
 
+# dataset.py: tamaño y realismo del dataset sintético
+dataset:
+  dias: 180
+  transacciones_dia: 600       # media de transacciones legítimas al día
+  # En tarjetas reales el fraude es muy inferior al 1 % de las operaciones. 0,5 % es un compromiso:
+  # más bajo dejaría muy pocos fraudes de cada tipo en validación y test para medir nada.
+  tasa_fraude: 0.005
+  # Fraude "desconocido": un patrón nuevo que solo aparece al final del periodo (en test) y para el
+  # que no se diseñó ninguna variable ni regla. Mide si los modelos detectan fraude que no conocían.
+  fraude_desconocido:
+    activar: true
+    tipo: cash_out_multicomercio
+    dias_finales: 40           # aparece solo en los últimos 40 días (dentro del test)
+    n_casos: 10                # cada caso son 3-6 compras (unas 45 transacciones en total)
+  # Etiquetas como las tiene un banco: el fraude se confirma días o semanas después (contracargo,
+  # reclamación del cliente) y parte nunca se confirma. Al entrenar solo se conocen los fraudes
+  # confirmados antes del final del train; el test se mide con la etiqueta real.
+  etiquetas:
+    retraso_mediana_dias: 12   # retraso log-normal entre la transacción y su confirmación
+    retraso_sigma: 0.9
+    p_nunca_confirmado: 0.10
+
+# dataset.py: errores típicos de los datos reales que se meten al cargar (carga_transacciones.py y
+# limpieza.py los corrigen). Tienen su propia semilla: el dataset de fondo no cambia al activarlos.
+suciedad:
+  activar: true
+  p_duplicado: 0.005           # filas que llegan dos veces (reenvío/reingesta) en transaccion, sesion y evento
+  p_formato: 0.03              # textos con mayúsculas o espacios distintos (país, estado, moneda, email)
+  p_fecha_otro_formato: 0.04   # fechas como 05/03/2026 14:22:10 (otro sistema de origen, en UTC)
+  p_fecha_hora_local: 0.04     # fechas en hora de Madrid con su desfase: 2026-03-05T15:22:10+01:00
+  p_fecha_ilegible: 0.001      # fechas imposibles o vacías: no se pueden recuperar -> cuarentena
+  p_otra_divisa: 0.02          # importes registrados en USD o GBP en vez de EUR
+  # cambio de 1 EUR. Simplificación: un tipo fijo; en real sería el del día de la operación
+  tipos_cambio:
+    USD: 1.10
+    GBP: 0.85
+
 # preparacion_datos_ml.py
 preparacion:
   proporcion_train: 0.7        # partición temporal: el 70 % más antiguo es train
@@ -44,7 +81,7 @@ autoencoder:
   epocas: 2000                 # máximo; la parada temprana corta mucho antes
   batch: 256
   paciencia: 20                # épocas sin mejorar la pérdida de validación antes de parar
-  semillas_estabilidad: []     # semillas EXTRA solo para comprobar estabilidad, p. ej. [1, 2] (~4 min cada una)
+  semillas_estabilidad: [1, 2] # semillas EXTRA solo para comprobar estabilidad (~4 min cada una; [] = no)
 
 # buscar_autoencoder.py (NO lo lanza main.py): combinaciones a probar en el futuro (~4 min cada una).
 # Usa epocas, batch y paciencia de la sección "autoencoder". Al terminar imprime la mejor
