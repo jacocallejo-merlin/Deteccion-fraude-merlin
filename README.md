@@ -5,25 +5,35 @@ variables por transacción y entrena detectores de anomalías no supervisados (I
 KMeans, DBSCAN, One-Class SVM) y un autoencoder. Cada transacción recibe un score de anomalía que
 se guarda en la tabla `anomaly_scores`.
 
-**Resultado principal**: el mejor detector es **KMeans**. Revisando el 1 % de transacciones más
-sospechosas (unas 7 alertas al día) encuentra el **42 % del fraude**, y 26 de cada 100 alertas son
-fraude real. Detalle en [Resultados](#resultados).
 
 ## Índice
 
-1. [Puesta en marcha](#puesta-en-marcha)
-2. [Cómo está organizado](#cómo-está-organizado)
-3. [Correspondencia con los hitos](#correspondencia-con-los-hitos)
-4. [El dataset](#el-dataset)
-5. [Calidad y limpieza de datos (Hitos 1 y 2)](#calidad-y-limpieza-de-datos-hitos-1-y-2)
-6. [Exploración y estadística (Hitos 1 y 2)](#exploración-y-estadística-hitos-1-y-2)
-7. [Modelos clásicos (Hito 3)](#modelos-clásicos-hito-3)
-8. [Autoencoder (Hito 4)](#autoencoder-hito-4)
-9. [Orquestación (Hito 5)](#orquestación-hito-5)
-10. [Resultados](#resultados)
-11. [Tests](#tests)
-12. [Carpetas](#carpetas)
-13. [Limitaciones](#limitaciones)
+- [Herramienta antifraude: detección de anomalías en transacciones](#herramienta-antifraude-detección-de-anomalías-en-transacciones)
+  - [Índice](#índice)
+  - [Puesta en marcha](#puesta-en-marcha)
+  - [Cómo está organizado](#cómo-está-organizado)
+    - [Pasos del pipeline](#pasos-del-pipeline)
+  - [Correspondencia con los hitos](#correspondencia-con-los-hitos)
+  - [El dataset](#el-dataset)
+    - [Tipos de fraude](#tipos-de-fraude)
+    - [Qué lo hace realista](#qué-lo-hace-realista)
+  - [Calidad y limpieza de datos (Hitos 1 y 2)](#calidad-y-limpieza-de-datos-hitos-1-y-2)
+    - [Los tres pasos](#los-tres-pasos)
+    - [Cómo leer el informe de limpieza](#cómo-leer-el-informe-de-limpieza)
+  - [Exploración y estadística (Hitos 1 y 2)](#exploración-y-estadística-hitos-1-y-2)
+  - [Modelos clásicos (Hito 3)](#modelos-clásicos-hito-3)
+    - [1. Variables (`features.py`)](#1-variables-featurespy)
+    - [2. Reglas (`reglas_alerta.py`)](#2-reglas-reglas_alertapy)
+    - [3. Preparación (`preparacion_datos_ml.py`)](#3-preparación-preparacion_datos_mlpy)
+    - [4. Entrenamiento y elección de configuración (`modelos_nosupervisados.py`)](#4-entrenamiento-y-elección-de-configuración-modelos_nosupervisadospy)
+    - [5. Scoring (`puntuar_nosupervisados.py`)](#5-scoring-puntuar_nosupervisadospy)
+    - [6. Evaluación (`evaluar_modelos_nosupervisados.py`)](#6-evaluación-evaluar_modelos_nosupervisadospy)
+  - [Autoencoder (Hito 4)](#autoencoder-hito-4)
+  - [Orquestación (Hito 5)](#orquestación-hito-5)
+  - [Resultados](#resultados)
+  - [Tests](#tests)
+  - [Carpetas](#carpetas)
+  - [Limitaciones](#limitaciones)
 
 ## Puesta en marcha
 
@@ -31,9 +41,8 @@ Requisitos: Docker (para ClickHouse) y Python 3.13 (es la versión con la que se
 
 ```bash
 docker compose up -d                  # ClickHouse local en los puertos 8123 y 9000
-cp .env.example .env                  # contraseña de ClickHouse
 python -m venv venv
-venv/Scripts/pip install -r requirements.txt     # en Linux/Mac: venv/bin/pip
+venv/Scripts/pip install -r requirements.txt    
 venv/Scripts/python main.py           # BORRA la base de datos y lo regenera todo
 ```
 
@@ -51,31 +60,67 @@ errores simulados, particiones, rejillas de hiperparámetros, autoencoder) está
 
 ## Cómo está organizado
 
+Cada caja es un script; a la derecha, lo que lee (◄) y lo que escribe (►). Las tablas están en
+ClickHouse y las carpetas en el disco.
+
 ```
- dataset.py ──► transaccion_bruta ──► carga_transacciones.py ──► transaccion ──┐
- (datos sintéticos     (fechas en texto)       │                                │
-  con errores)                                 └──► transaccion_cuarentena      │
-                                                    (fechas ilegibles)          │
-                                                                                ▼
-          informe_limpieza.py (mide)  ──►  limpieza.py (corrige)  ──►  tablas limpias
-                                                                                │
-                                                                                ▼
-          crear_tabla_enriquecida.py ──► features.py ──► features_transaccion ──┤
-                                                                                │
-                    ┌──────────────────────────┬────────────────────────────────┤
-                    ▼                          ▼                                ▼
-            reglas_alerta.py        preparacion_datos_ml.py              (notebooks)
-              (alertas)              train / test, escalado
-                                               │
-                         ┌─────────────────────┴─────────────────────┐
-                         ▼                                           ▼
-             modelos_nosupervisados.py                     entrenar_autoencoder.py
-             IForest, KMeans, DBSCAN, OCSVM                     (PyTorch)
-                         │                                           │
-                         └──────────► anomaly_scores ◄───────────────┘
-                                            │
-                                            ▼
-                  evaluación, comparativa y validación ──► resultados/
+ 1. CARGA ─────────────────────────────────────────────────────────────────────────────────────
+  BD_VACIAS.py ................ ► base de datos fraude_pagos con las 15 tablas vacías
+        │
+  dataset.py .................. ► cliente, comercio, dispositivo, cliente_dispositivo, metodo_pago,
+        │                          canal_pago, sesion, evento, devolucion, analista, patron
+        │                        ► transaccion_bruta   (las transacciones, con la fecha en texto)
+        │                          (alerta queda vacía: la rellena reglas_alerta.py)
+        │
+  carga_transacciones.py ...... ◄ transaccion_bruta
+        │                        ► transaccion              (fecha convertida a UTC)
+        │                        ► transaccion_cuarentena   (fecha ilegible, con el motivo)
+
+ 2. LIMPIEZA ──────────────────────────────────────────────────────────────────────────────────
+  informe_limpieza.py ......... ◄ las 13 tablas de origen + transaccion_cuarentena
+        │                        ► resultados/informe_limpieza.txt   (calidad ANTES de limpiar)
+        │
+  limpieza.py ................. ◄► las 13 tablas de origen (las corrige en el sitio:
+        │                          duplicados, mayúsculas/espacios, divisas, emails)
+
+ 3. VARIABLES ─────────────────────────────────────────────────────────────────────────────────
+  crear_tabla_enriquecida.py .. ◄ transaccion + cliente, metodo_pago, canal_pago, comercio,
+        │                          sesion, dispositivo
+        │                        ► transacciones_enriquecidas   (una fila por transacción, todo unido)
+        │                        ► alertas_enriquecidas   (vista: alerta + patron + analista)
+        │
+  features.py ................. ◄ transacciones_enriquecidas, evento, devolucion, cliente_dispositivo
+        │                        ► features_transaccion   (las ~35 variables numéricas)
+        │
+        ├──► reglas_alerta.py ..... ◄ features_transaccion   ► alerta   (una regla por tipo de fraude)
+        │
+        └──► notebooks/ ........... ◄ cualquier tabla (sobre todo transaccion,
+                                       transacciones_enriquecidas y features_transaccion)
+                                     ► resultados/hito2/
+
+ 4. ENTRENAMIENTO ─────────────────────────────────────────────────────────────────────────────
+  preparacion_datos_ml.py ..... ◄ features_transaccion
+        │                        ► datos_ml/   (X_train, X_test, info_train, info_test, escalador)
+        │
+        ├──► modelos_nosupervisados.py ◄ datos_ml/
+        │                               ► modelos/   (IForest, KMeans, DBSCAN, OCSVM + scores)
+        │                               ► anomaly_scores   (scores de test)
+        │
+        └──► entrenar_autoencoder.py ... ◄ datos_ml/
+                                        ► modelos/autoencoder.pt + scores
+                                        ► anomaly_scores   (scores de test)
+
+ 5. SCORING ───────────────────────────────────────────────────────────────────────────────────
+  puntuar_nosupervisados.py ... ◄ features_transaccion, modelos/   ► anomaly_scores   (las que faltan)
+  puntuar_autoencoder.py ...... ◄ features_transaccion, modelos/   ► anomaly_scores   (las que faltan)
+
+ 6. EVALUACIÓN ────────────────────────────────────────────────────────────────────────────────
+  evaluar_modelos_nosupervisados.py ◄ modelos/, datos_ml/   ► resultados/conclusiones.md, CSV, curvas PR
+  evaluar_autoencoders.py ......... ◄ modelos/, datos_ml/   ► resultados/historico_autoencoders.csv
+  comparacion_modelos.py .......... ◄ modelos/, datos_ml/   ► resultados/conclusiones_hito4.md
+  validacion_reproducibilidad_consistencia.py ◄ todo lo anterior ► resultados/validacion_<fecha>.txt
+
+  Cada entrenamiento copia sus artefactos y el config.yaml usado en historico/<run_id>/
 ```
 
 Todo el tratamiento de datos (carga, limpieza, variables) se hace en SQL dentro de ClickHouse.
