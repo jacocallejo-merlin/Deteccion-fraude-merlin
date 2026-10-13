@@ -1,0 +1,56 @@
+# Airflow para orquestar el pipeline (hito 5). Se levanta JUNTO al compose principal (ClickHouse):
+#
+#   docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
+#
+# Interfaz web: http://localhost:8080 (sin login: entorno local de desarrollo).
+# El proyecto se monta en /opt/proyecto, así que los DAGs y los scripts son los de esta carpeta
+# y lo que generan (datos_ml/, modelos/, resultados/) aparece aquí también.
+services:
+  airflow-db:
+    image: postgres:16.4
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: airflow
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "airflow"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  airflow:
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    image: fraude-airflow:3.0.6
+    command: standalone          # api-server, scheduler, dag-processor y triggerer en un contenedor
+    depends_on:
+      airflow-db:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    environment:
+      AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-db/airflow
+      AIRFLOW__CORE__EXECUTOR: LocalExecutor
+      AIRFLOW__CORE__DAGS_FOLDER: /opt/proyecto/dags
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: "true"   # el scoring diario no arranca solo
+      AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "true" # sin login (solo para uso local)
+      # lo que leen los DAGs
+      RUTA_PROYECTO: /opt/proyecto
+      PYTHON_PROYECTO: /opt/venv_proyecto/bin/python
+      # lo que lee config.py: tienen prioridad sobre el .env del proyecto
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: password
+    volumes:
+      - .:/opt/proyecto
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+volumes:
+  airflow_db:

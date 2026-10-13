@@ -1,3 +1,11 @@
+# ClickHouse + pipeline antifraude.
+#
+#   docker compose up -d                     # solo ClickHouse
+#   docker compose run --rm pipeline         # pipeline completo (BORRA la base de datos y lo regenera)
+#   docker compose run --rm pipeline python main.py --reutilizar-datos
+#
+# El pipeline tiene el perfil "pipeline" para que "docker compose up" no lo lance:
+# sin opciones borra la base de datos.
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:latest
@@ -11,7 +19,32 @@ services:
       - "9000:9000"   # nativo (clickhouse-driver / clickhouse-client)
     volumes:
       - clickhouse_data:/var/lib/clickhouse
+    healthcheck:      # el pipeline y Airflow esperan a que responda
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:8123/ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
     restart: unless-stopped
+
+  pipeline:
+    build: .
+    image: fraude-pipeline:latest
+    profiles: [pipeline]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      # lo que lee config.py (dentro de la red de Docker el host es el nombre del servicio)
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: password
+    volumes:
+      # lo que generan los scripts queda en estas carpetas del proyecto
+      - ./datos_ml:/app/datos_ml
+      - ./modelos:/app/modelos
+      - ./resultados:/app/resultados
+      - ./historico:/app/historico
 
 volumes:
   clickhouse_data:

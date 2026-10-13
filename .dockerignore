@@ -1,0 +1,15 @@
+# Las imágenes solo copian lo que nombran sus Dockerfile; esto evita además enviar
+# a Docker el entorno virtual, los datos y los modelos en cada build.
+.git
+.venv
+venv
+.env
+__pycache__
+*.pyc
+datos_ml
+datos_ml_nuevo
+modelos
+resultados
+historico
+notebooks
+legacy
