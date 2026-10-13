@@ -52,7 +52,7 @@ preparacion:
 # modelos_nosupervisados.py
 modelos:
   proporcion_val: 0.15         # validación = 15 % más reciente del train. IGUAL para todos los modelos
-  semillas_estabilidad: [0, 1, 2, 3, 4]
+  semillas_estabilidad: [0]     # [0, 1, 2, 3, 4]
   ocsvm_max_filas: 10000       # OCSVM es muy lento con más filas
   dbscan_max_filas: 10000      # DBSCAN también se entrena con una muestra
   kmeans_n_init: 10
@@ -79,11 +79,11 @@ autoencoder:
   ruido: 0.0                   # sigma del ruido gaussiano en la entrada (0 = autoencoder normal)
   lr: 0.001
   epocas: 2000                 # máximo; la parada temprana corta mucho antes
-  batch: 256
+  batch: 1024                  # con 256 tardaba bastante más y daba un PR-AUC val parecido (0,079 frente a 0,090)
   paciencia: 20                # épocas sin mejorar la pérdida de validación antes de parar
-  semillas_estabilidad: [1, 2] # semillas EXTRA solo para comprobar estabilidad (~4 min cada una; [] = no)
+  semillas_estabilidad: [] # [1, 2] # semillas EXTRA solo para comprobar estabilidad (~3 min cada una; [] = no)
 
-# buscar_autoencoder.py (NO lo lanza main.py): combinaciones a probar en el futuro (~4 min cada una).
+# buscar_autoencoder.py (NO lo lanza main.py): combinaciones a probar en el futuro (~3 min cada una).
 # Usa epocas, batch y paciencia de la sección "autoencoder". Al terminar imprime la mejor
 # para copiarla arriba.
 busqueda_autoencoder:

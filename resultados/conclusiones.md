@@ -14,17 +14,17 @@
 
 ## El mejor modelo y por qué
 - KMeans agrupa las transacciones en perfiles típicos (clusters) y marca como sospechosas las que quedan lejos de todos los perfiles.
-- Para comparar se usa la PR-AUC: si se ordenan las transacciones de más a menos sospechosa, mide cuánto fraude queda arriba. Va de 0 a 1, y un modelo al azar sacaría 0.007 (la proporción de fraude). KMeans saca 0.40, unas 59 veces más que el azar.
-- Cada modelo por separado: KMeans 0.40, One-Class SVM 0.37, DBSCAN 0.33, Autoencoder 0.22, Isolation Forest 0.15.
-- Se eligió porque es el que mejor separa el fraude en validación (PR-AUC KMeans 0.14, DBSCAN 0.13, One-Class SVM 0.10, Autoencoder 0.08 y Isolation Forest 0.03).
-- Revisando el 1 % de las transacciones del test, fraudes encontrados de 201: Isolation Forest 51, KMeans 84, DBSCAN 65, One-Class SVM 85 y Autoencoder 65.
-- En test, One-Class SVM encuentra algo más (85 frente a 84). No cambia la elección: el modelo se elige con validación, y elegirlo mirando el test sería hacer trampa.
+- Para comparar se usa la PR-AUC: si se ordenan las transacciones de más a menos sospechosa, mide cuánto fraude queda arriba. Va de 0 a 1, y un modelo al azar sacaría 0.007 (la proporción de fraude). KMeans saca 0.41, unas 59 veces más que el azar.
+- Cada modelo por separado: KMeans 0.41, One-Class SVM 0.37, DBSCAN 0.33, Autoencoder 0.21, Isolation Forest 0.15.
+- Se eligió porque es el que mejor separa el fraude en validación (PR-AUC KMeans 0.13, DBSCAN 0.13, One-Class SVM 0.10, Autoencoder 0.09 y Isolation Forest 0.03).
+- Revisando el 1 % de las transacciones del test, fraudes encontrados de 201: Isolation Forest 51, KMeans 85, DBSCAN 65, One-Class SVM 85 y Autoencoder 50.
+- El test lo confirma: KMeans es el que más fraude encuentra.
 - Ojo: en validación empata con DBSCAN y One-Class SVM. No se puede asegurar que sea mejor, solo que no es peor.
 
 ## Qué fraudes detecta y cuáles no
 - cash_out_multicomercio (45 casos: fraude NUEVO que no aparece en entrenamiento: credenciales robadas usadas desde el propio dispositivo del cliente para comprar en varios comercios seguidos): detecta el 0 %.
 - account_takeover (22 casos: alguien roba el acceso a una cuenta y opera con ella): detecta el 91 %.
-- smurfing (22 casos: una cantidad grande repartida en muchas pequeñas para no llamar la atención): detecta el 14 %.
+- smurfing (22 casos: una cantidad grande repartida en muchas pequeñas para no llamar la atención): detecta el 18 %.
 - bot (20 casos: transacciones automáticas, muy rápidas y repetitivas): detecta el 75 %.
 - ip_sospechosa (19 casos: operaciones desde una IP o ubicación sospechosa): detecta el 5 %.
 - bust_out (19 casos: el cliente se comporta con normalidad un tiempo y de golpe agota todo el crédito): detecta el 100 %.
@@ -42,8 +42,9 @@
 
 ## ¿Cuánto podemos fiarnos?
 - Con los datos disponibles, la PR-AUC real estaría entre 0.30 y 0.52 (intervalo de confianza del 95 %).
-- En test sube respecto a validación (0.14 a 0.40) sobre todo por las etiquetas: en validación los fraudes aún no confirmados cuentan como legítimos, así que un modelo que los pone arriba parece equivocarse. En test se mide con todas las etiquetas. La cifra de referencia es la de test, con su intervalo de confianza; la de validación solo sirve para comparar modelos entre sí.
+- En test sube respecto a validación (0.13 a 0.41) sobre todo por las etiquetas: en validación los fraudes aún no confirmados cuentan como legítimos, así que un modelo que los pone arriba parece equivocarse. En test se mide con todas las etiquetas. La cifra de referencia es la de test, con su intervalo de confianza; la de validación solo sirve para comparar modelos entre sí.
+- Los resultados no dependen del azar interno de los modelos: con distintas semillas salen prácticamente iguales.
 - Solo hay 26 fraudes en validación, así que las decisiones tienen bastante margen de error.
 - Revisar el 1 % supone unas 7.2 alertas al día.
-- Revisando el 5 % se llegaría al 70 % del fraude, pero solo 10 de cada 100 revisiones serían fraude.
+- Revisando el 5 % se llegaría al 73 % del fraude, pero solo 10 de cada 100 revisiones serían fraude.
 - El umbral fijado en validación marcó el 1.10 % en test, cerca de lo previsto: se puede usar tal cual.

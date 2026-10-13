@@ -105,8 +105,11 @@ def entrenar(X_fit, X_val, p, semilla, detalle=True):
     Devuelve el modelo con la mejor pérdida de validación y un resumen del entrenamiento."""
     torch.manual_seed(semilla)
     np.random.seed(semilla)
+    # Red muy pequeña y lotes de 256: con varios hilos se pierde más tiempo repartiendo el trabajo
+    # que calculando (medido: 3,3 s/época con 10 hilos frente a 0,6 s con 1).
+    torch.set_num_threads(1)
 
-    datos = torch.tensor(X_fit.to_numpy(), dtype=torch.float32)
+    datos =torch.tensor(X_fit.to_numpy(), dtype=torch.float32)
     validacion = torch.tensor(X_val.to_numpy(), dtype=torch.float32)
     ruido = p['ruido']
 
