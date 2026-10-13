@@ -1,0 +1,13 @@
+# datos_ml/, modelos/, resultados/ e historico/: lo que deja el entrenamiento y lee el scoring.
+# ReadWriteOnce: todos los pods del pipeline tienen que caer en el mismo nodo (en un clúster de
+# varios nodos, usar una StorageClass ReadWriteMany como NFS o un bucket).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: artefactos
+  namespace: fraude
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 2Gi

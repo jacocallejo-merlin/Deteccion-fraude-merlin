@@ -2,13 +2,14 @@
 #
 #   docker compose up -d                     # solo ClickHouse
 #   docker compose run --rm pipeline         # pipeline completo (BORRA la base de datos y lo regenera)
-#   docker compose run --rm pipeline python main.py --reutilizar-datos
+#   docker compose run --rm pipeline python main.py --reutilizar-datos   # reentrenar sin borrar
+#   docker compose run --rm pipeline python main.py --scoring            # lote nuevo + scoring
 #
 # El pipeline tiene el perfil "pipeline" para que "docker compose up" no lo lance:
 # sin opciones borra la base de datos.
 services:
   clickhouse:
-    image: clickhouse/clickhouse-server:latest
+    image: clickhouse/clickhouse-server:26.9   # versión fija: la misma que k8s/clickhouse.yaml
     container_name: clickhouse-dev
     environment:
       CLICKHOUSE_USER: default

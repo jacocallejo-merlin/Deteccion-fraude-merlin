@@ -29,7 +29,12 @@ se guarda en la tabla `anomaly_scores`.
     - [5. Scoring (`puntuar_nosupervisados.py`)](#5-scoring-puntuar_nosupervisadospy)
     - [6. Evaluación (`evaluar_modelos_nosupervisados.py`)](#6-evaluación-evaluar_modelos_nosupervisadospy)
   - [Autoencoder (Hito 4)](#autoencoder-hito-4)
-  - [Orquestación (Hito 5)](#orquestación-hito-5)
+  - [Orquestación y despliegue (Hito 5)](#orquestación-y-despliegue-hito-5)
+    - [Arquitectura](#arquitectura)
+    - [Los tres flujos](#los-tres-flujos)
+    - [Airflow](#airflow)
+    - [Kubernetes](#kubernetes)
+    - [Validación de reproducibilidad y consistencia](#validación-de-reproducibilidad-y-consistencia)
   - [Resultados](#resultados)
   - [Tests](#tests)
   - [Carpetas](#carpetas)
@@ -53,10 +58,20 @@ Opciones de `main.py`:
 | `python main.py` | Borra la base de datos y ejecuta todos los pasos. Con la misma semilla sale siempre lo mismo. |
 | `python main.py --reutilizar-datos` | No regenera el dataset; ejecuta el resto. |
 | `python main.py --desde PASO` | Empieza en ese paso sin borrar nada (p. ej. `--desde modelos_nosupervisados`). |
+| `python main.py --scoring` | Sin borrar ni entrenar: añade un día de transacciones nuevas, las limpia, las puntúa con los modelos guardados y valida. |
 
 Si un paso falla, el pipeline se detiene ahí. Todos los parámetros (semilla, tamaño del dataset,
 errores simulados, particiones, rejillas de hiperparámetros, autoencoder) están en
 [config.yaml](config.yaml).
+
+Sin instalar Python, todo con Docker (los resultados quedan en las mismas carpetas):
+
+```bash
+docker compose run --rm --build pipeline                       # = python main.py
+docker compose run --rm pipeline python main.py --scoring     # un día más de datos, puntuado
+```
+
+Airflow y Kubernetes: ver [Orquestación y despliegue](#orquestación-y-despliegue-hito-5).
 
 ## Cómo está organizado
 
@@ -159,7 +174,7 @@ Cada entrenamiento guarda una copia de sus artefactos y del `config.yaml` usado 
 | 2. Estadística y preprocesamiento | Limpieza y normalización, outliers (Z-score, IQR, boxplots), patrones simples, dataset limpio para ML | `limpieza.py`, `notebooks/outliers_patrones_tecnicas.ipynb` (tablas en `resultados/hito2/`), `preparacion_datos_ml.py` | Hecho |
 | 3. ML para anomalías | Isolation Forest, One-Class SVM, KMeans, DBSCAN; feature engineering; ajuste de hiperparámetros; scoring | `features.py`, `modelos_nosupervisados.py`, `puntuar_nosupervisados.py`, `evaluar_modelos_nosupervisados.py` | Hecho |
 | 4. Autoencoders | Autoencoder, error de reconstrucción, comparación con los clásicos, scripts reproducibles | `entrenar_autoencoder.py`, `puntuar_autoencoder.py`, `evaluar_autoencoders.py`, `comparacion_modelos.py` | Hecho |
-| 5. Orquestación y despliegue | DAGs, Docker, Kubernetes, ejecuciones periódicas, reproducibilidad | `dags/fraude_dags.py`, `docker-compose.yml` (solo ClickHouse), `validacion_reproducibilidad_consistencia.py` | En curso: falta contenerizar el pipeline y Kubernetes |
+| 5. Orquestación y despliegue | DAGs, Docker, Kubernetes, ejecuciones periódicas, reproducibilidad | `dags/fraude_dags.py`, `Dockerfile`, `airflow/Dockerfile`, `docker-compose*.yml`, `k8s/`, `generar_lote.py`, `main.py --scoring`, `validacion_reproducibilidad_consistencia.py` | Hecho |
 | 6. Feedback humano y dashboards | Feedback de analistas, ajuste de umbrales, dashboards | Tablas `alerta` y `analista` ya existen en el modelo de datos | Pendiente |
 
 ## El dataset
@@ -401,27 +416,156 @@ python generar_test_autoencoder.py      # --semilla 777 --dias 75 por defecto
 python evaluar_test_autoencoder.py
 ```
 
-## Orquestación (Hito 5)
+## Orquestación y despliegue (Hito 5)
 
-[dags/fraude_dags.py](dags/fraude_dags.py) define tres DAGs de Airflow. Cada tarea ejecuta un
-script de `pipeline/` desde la raíz del proyecto.
+El mismo pipeline se puede ejecutar de cuatro formas. Todas lanzan los mismos scripts de
+`pipeline/`, con las mismas versiones de librerías y la misma semilla:
 
-| DAG | Cuándo | Qué hace |
+| Forma | Para qué | Cómo |
 |---|---|---|
-| `fraude_setup` | A mano | Crea la base de datos desde cero y carga el dataset inicial |
-| `fraude_entrenamiento` | A mano (o `@weekly`) | Carga, limpieza, variables, entrenamiento de los 5 modelos, scoring, evaluación y validación |
-| `fraude_scoring` | `@daily` | Puntúa las transacciones nuevas con los modelos ya entrenados |
+| Local | Desarrollo | `venv/Scripts/python main.py` |
+| Docker Compose | Ejecutar sin instalar Python | `docker compose run --rm pipeline` |
+| Airflow | Orquestar con DAGs, reintentos e interfaz web | `docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build` |
+| Kubernetes | Ejecución programada y escalable | `kubectl apply -k k8s/` |
 
-`validacion_reproducibilidad_consistencia.py` cierra cada entrenamiento comprobando que:
+### Arquitectura
+
+```
+                         ┌──────────────── imagen fraude-pipeline (Dockerfile) ───────────────┐
+                         │ python:3.13-slim + requirements-pipeline.txt + torch CPU           │
+                         │ config.py, config.yaml, main.py, pipeline/                          │
+                         └──────────────────────────────┬─────────────────────────────────────┘
+                                                        │
+   main.py               (completo: BORRA y regenera)   │      ┌─────────────────────────────┐
+   main.py --reutilizar-datos   (reentrenamiento)  ─────┼────► │ ClickHouse (fraude_pagos)   │
+   main.py --scoring     (lote nuevo -> puntuar)        │      │ tablas de origen, features, │
+                                                        │      │ alerta, anomaly_scores      │
+                                                        │      └─────────────────────────────┘
+                                                        ▼
+                                  volumen de artefactos: datos_ml/  modelos/  resultados/  historico/
+                                  (lo escribe el entrenamiento; el scoring solo lo lee)
+```
+
+- **Los datos no van en la imagen.** ClickHouse es su propio contenedor (con volumen persistente) y
+  los artefactos (escalador, modelos, resultados) van a un volumen. La imagen solo lleva código y
+  dependencias, así que vale para entrenar y para puntuar.
+- **Versiones fijas.** `requirements-pipeline.txt` tiene las mismas versiones que el entorno local
+  (Python 3.13, scikit-learn 1.9.1, pandas 3.0.6, torch 2.14.1): un `.joblib` de scikit-learn solo
+  se carga de forma fiable con la versión que lo guardó. ClickHouse también va fijado (26.9).
+- **Configuración por variables de entorno.** `config.py` lee `CLICKHOUSE_HOST`, `_PORT`, `_USER`,
+  `_PASSWORD` y `_DATABASE`, que tienen prioridad sobre `config.yaml`. En Docker y Kubernetes el
+  host es el nombre del servicio (`clickhouse`) y la contraseña viene de un Secret.
+
+### Los tres flujos
+
+| Flujo | `main.py` | DAG de Airflow | Kubernetes | Cuándo |
+|---|---|---|---|---|
+| Setup + entrenamiento | `main.py` | `fraude_setup` y luego `fraude_entrenamiento` | Job `job-pipeline-completo.yaml` | Una vez, a mano |
+| Reentrenamiento | `main.py --reutilizar-datos` | `fraude_entrenamiento` | CronJob `fraude-entrenamiento` | Domingos 05:00 |
+| Scoring | `main.py --scoring` | `fraude_scoring` | CronJob `fraude-scoring` | Cada día a las 03:00 |
+
+El **scoring** hace: `generar_lote.py` (un día de transacciones nuevas) → `carga_transacciones.py`
+→ `limpieza.py` → `crear_tabla_enriquecida.py` → `features.py` → `reglas_alerta.py` →
+`puntuar_nosupervisados.py` y `puntuar_autoencoder.py` (solo lo pendiente, con los modelos
+guardados: nunca entrena) → validación.
+
+`generar_lote.py` simula la llegada diaria de datos, ya que el dataset es sintético: crea un día de
+transacciones de los mismos clientes, tarjetas y dispositivos (los reconstruye con la semilla),
+con unos pocos fraudes conocidos sin confirmar todavía y los mismos errores de carga que el
+dataset inicial. En producción este paso sería la ingesta real.
+
+Todos los pasos se pueden **reintentar** sin duplicar nada: la carga, la limpieza y las variables se
+recalculan enteras; el scoring solo puntúa lo que no tiene score; y `generar_lote.py` inserta
+`transaccion_bruta` la última y, si un lote anterior se quedó a medias, borra sus restos y lo
+vuelve a generar igual (mismo día, misma semilla).
+
+### Airflow
+
+[dags/fraude_dags.py](dags/fraude_dags.py) define los tres DAGs. Cada tarea es un script de
+`pipeline/` (BashOperator) y se ejecuta en paralelo lo que no depende entre sí (los clásicos y el
+autoencoder se entrenan a la vez). La imagen de [airflow/Dockerfile](airflow/Dockerfile) es
+Airflow 3.1 con un entorno virtual aparte para el pipeline, para que sus versiones no choquen con
+las de Airflow.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
+# http://localhost:8080  ->  activar y lanzar fraude_setup, luego fraude_entrenamiento;
+#                            fraude_scoring queda programado a diario
+```
+
+No se deben lanzar `fraude_entrenamiento` y `fraude_scoring` a la vez: los dos reconstruyen las
+tablas de ETL (cada DAG tiene `max_active_runs=1`, pero entre DAGs no hay bloqueo).
+
+### Kubernetes
+
+[k8s/](k8s/) tiene todo lo necesario (se aplica con Kustomize):
+
+| Fichero | Qué crea |
+|---|---|
+| `namespace.yaml`, `configmap.yaml`, `secret.yaml` | Namespace `fraude`, la configuración de `config.py` y la contraseña |
+| `clickhouse.yaml` | ClickHouse como StatefulSet con volumen de 5 GiB y su Service |
+| `pvc-artefactos.yaml` | Volumen para `datos_ml/`, `modelos/`, `resultados/` e `historico/` |
+| `job-pipeline-completo.yaml` | Job: `python main.py` (no está en la kustomization: se lanza a mano) |
+| `cronjob-scoring.yaml` | CronJob diario: `python main.py --scoring` |
+| `cronjob-entrenamiento.yaml` | CronJob semanal: `python main.py --reutilizar-datos` |
+
+Cada pod del pipeline tiene un initContainer que prepara las carpetas del volumen y espera a que
+ClickHouse responda. Los CronJobs usan `concurrencyPolicy: Forbid` y horarios separados.
+
+```bash
+docker build -t fraude-pipeline:latest .
+kind create cluster --name fraude                       # o Docker Desktop / minikube
+kind load docker-image fraude-pipeline:latest --name fraude
+kubectl apply -k k8s/
+kubectl create -f k8s/job-pipeline-completo.yaml        # primera ejecución
+kubectl -n fraude logs -f job/<nombre-del-job>
+kubectl -n fraude create job --from=cronjob/fraude-scoring scoring-manual   # scoring sin esperar
+```
+
+En un clúster remoto la imagen se sube a un registro (y se cambia `images` en
+`k8s/kustomization.yaml`), la contraseña se crea como Secret fuera del repositorio y, si hay
+varios nodos, el volumen de artefactos necesita una StorageClass ReadWriteMany.
+
+### Validación de reproducibilidad y consistencia
+
+`validacion_reproducibilidad_consistencia.py` cierra cada entrenamiento y cada scoring (si falla,
+la tarea o el Job terminan en error) comprobando que:
 
 - están todos los artefactos (modelos, escalador, parquets);
 - ClickHouse es coherente: una fila de variables por transacción, todas puntuadas por cada modelo,
   sin scores duplicados ni de transacciones inexistentes;
-- volver a preparar los datos da el mismo `X_test.parquet`;
+- volver a preparar los datos da el mismo `X_test.parquet` (también después de añadir lotes: las
+  variables solo miran al pasado);
 - los modelos guardados (clásicos y autoencoder) reproducen sus scores;
-- reentrenar los clásicos con la misma semilla da los mismos scores.
+- con `--reentrenar` (en el DAG de entrenamiento): reentrenar los clásicos con la misma semilla da
+  los mismos scores.
 
 Deja su informe en `resultados/validacion_<fecha>.txt`.
+
+### Prueba del despliegue
+
+Probado en un clúster local de un nodo (kind) con `kubectl apply -k k8s/`:
+
+- **Job del pipeline completo**: los 17 pasos en 8-16 minutos según la carga del equipo (el
+  autoencoder es más de la mitad) y validación "todo correcto".
+- **CronJob de scoring lanzado a mano tres veces**: cada ejecución añade un día (01, 02 y 03/09,
+  ~600-670 transacciones), lo limpia y lo puntúa con los 5 modelos en menos de 1 minuto. La
+  validación da "todo correcto" en las tres: todas las transacciones tienen score de cada modelo,
+  sin duplicados, y las variables y scores de test no cambian al añadir datos. Repetir un día da
+  exactamente el mismo lote.
+
+Dos problemas que aparecieron en estas pruebas y están corregidos:
+
+- `features.py` ordenaba algunas ventanas solo por `timestamp`: con dos transacciones (o eventos
+  de un bot) en el mismo segundo, el orden del empate podía cambiar entre ejecuciones y con él
+  variables como el tiempo desde la transacción anterior. Ahora desempata por id.
+- Los hilos OpenMP ociosos giraban en vacío y, con la CPU compartida, el autoencoder iba unas 10
+  veces más lento en el contenedor: las imágenes fijan `OMP_WAIT_POLICY=PASSIVE`.
+
+El CronJob de scoring no tiene reintentos (`backoffLimit: 0`): repetir `main.py --scoring` entero
+generaría otro día de datos. Si falla, el del día siguiente puntúa también lo pendiente.
+- **Airflow**: la imagen carga los tres DAGs sin errores, con las mismas versiones de librerías
+  que el entorno local.
 
 ## Resultados
 
@@ -469,6 +613,8 @@ venv/Scripts/python -m pytest tests
 | `pipeline/` | Scripts del pipeline |
 | `notebooks/` | Exploración, outliers y visualizaciones |
 | `dags/` | DAGs de Airflow |
+| `airflow/` | Imagen de Airflow con el entorno del pipeline |
+| `k8s/` | Manifiestos de Kubernetes (Kustomize) |
 | `datos_ml/` | Datos preparados para los modelos |
 | `modelos/` | Modelos entrenados y scores |
 | `resultados/` | Informe de limpieza, métricas, gráficos y conclusiones (`hito2/`: tablas del notebook de outliers) |
@@ -490,5 +636,9 @@ venv/Scripts/python -m pytest tests
 - **Errores de datos simulados**: solo los que se inyectan. Los datos reales traen otros
   (identificadores reasignados, cambios de esquema, tipos de cambio diarios) que habría que añadir
   al informe y a la limpieza.
-- **Despliegue**: Docker solo levanta ClickHouse; el pipeline se ejecuta en local o desde Airflow.
-  Falta contenerizarlo y desplegarlo en Kubernetes (Hito 5).
+- **Despliegue**: probado en un clúster local de un nodo (kind). Airflow corre en Docker Compose
+  con LocalExecutor y lanza los scripts en su propio contenedor; en un clúster real lo natural
+  sería Airflow con su chart de Helm y KubernetesPodOperator con la imagen `fraude-pipeline`.
+  El volumen de artefactos es ReadWriteOnce (un solo nodo).
+- **Lotes nuevos simulados**: `generar_lote.py` sustituye a una ingesta real y no añade el fraude
+  desconocido ni casos que duran semanas (bust-out, devolución abusiva).

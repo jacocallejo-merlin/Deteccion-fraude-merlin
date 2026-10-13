@@ -11,9 +11,9 @@ FORMATOS_FECHA = [
     ("aaaa-mm-dd hh:mm:ss", r"^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$",
      "parseDateTimeOrNull(timestamp, '%Y-%m-%d %H:%i:%s')"),
     ("dd/mm/aaaa hh:mm:ss", r"^\\d{2}/\\d{2}/\\d{4} \\d{2}:\\d{2}:\\d{2}$",
-     "parseDateTimeOrNull(timestamp, '%d/%m/%Y %H:%i:%s', )"),
+     "parseDateTimeOrNull(timestamp, '%d/%m/%Y %H:%i:%s', 'UTC')"),
     ("ISO con desfase horario", r"^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}[+-]\\d{2}:\\d{2}$",
-     "parseDateTimeBestEffortOrNull(timestamp, )"),
+     "parseDateTimeBestEffortOrNull(timestamp, 'UTC')"),
 ]
 
 FECHA = "multiIf(" + ", ".join(f"match(timestamp, '{patron}'), {conversion}"

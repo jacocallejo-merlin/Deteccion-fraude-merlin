@@ -14,10 +14,10 @@ WITH
 eventos AS (
     SELECT sesion_id, tipo, timestamp,
            dateDiff('second',
-                    lagInFrame(timestamp) OVER (PARTITION BY sesion_id ORDER BY timestamp
+                    lagInFrame(timestamp) OVER (PARTITION BY sesion_id ORDER BY timestamp, evento_id
                                                 ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
                     timestamp) AS seg_desde_evento_anterior,
-           row_number() OVER (PARTITION BY sesion_id ORDER BY timestamp) AS n_evento
+           row_number() OVER (PARTITION BY sesion_id ORDER BY timestamp, evento_id) AS n_evento
     FROM evento
 ),
 -- resumen de la sesión HASTA el momento del pago (no se cuentan eventos posteriores)
@@ -48,7 +48,9 @@ devoluciones_previas AS (
     INNER JOIN devoluciones_cliente AS dc ON te.cliente_id = dc.cliente_id
     GROUP BY te.transaccion_id
 ),
--- variables de ventana: velocidad de la tarjeta e historial del cliente
+-- variables de ventana: velocidad de la tarjeta e historial del cliente.
+-- Las ventanas ROWS desempatan por id: con dos transacciones en el mismo segundo, ordenar solo
+-- por timestamp daba un orden distinto en cada ejecución (y variables distintas). Igual en eventos.
 ventanas AS (
     SELECT
         transaccion_id,
@@ -78,19 +80,19 @@ ventanas AS (
         tarjeta_10min AS (PARTITION BY metodo_id ORDER BY timestamp RANGE BETWEEN 600 PRECEDING AND 1 PRECEDING),
         tarjeta_1h    AS (PARTITION BY metodo_id ORDER BY timestamp RANGE BETWEEN 3600 PRECEDING AND 1 PRECEDING),
         tarjeta_24h   AS (PARTITION BY metodo_id ORDER BY timestamp RANGE BETWEEN 86400 PRECEDING AND 1 PRECEDING),
-        tarjeta_orden AS (PARTITION BY metodo_id ORDER BY timestamp),
-        tarjeta_orden_hasta_actual AS (PARTITION BY metodo_id ORDER BY timestamp
+        tarjeta_orden AS (PARTITION BY metodo_id ORDER BY timestamp, transaccion_id),
+        tarjeta_orden_hasta_actual AS (PARTITION BY metodo_id ORDER BY timestamp, transaccion_id
                                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
-        cliente_previas AS (PARTITION BY cliente_id ORDER BY timestamp
+        cliente_previas AS (PARTITION BY cliente_id ORDER BY timestamp, transaccion_id
                             ROWS BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING),
-        cliente_orden_hasta_actual AS (PARTITION BY cliente_id ORDER BY timestamp
+        cliente_orden_hasta_actual AS (PARTITION BY cliente_id ORDER BY timestamp, transaccion_id
                                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
         -- hora ANTERIOR sin contar la transacción actual (igual que tarjeta_1h)
         cliente_1h    AS (PARTITION BY cliente_id ORDER BY timestamp RANGE BETWEEN 3600 PRECEDING AND 1 PRECEDING),
         -- por CLIENTE (no por tarjeta): 24 h anteriores INCLUIDA la transacción actual,
         -- para que pagar con una 2.ª tarjeta distinta ya cuente 2
         cliente_24h   AS (PARTITION BY cliente_id ORDER BY timestamp RANGE BETWEEN 86400 PRECEDING AND CURRENT ROW),
-        dispositivo_historial AS (PARTITION BY dispositivo_id ORDER BY timestamp
+        dispositivo_historial AS (PARTITION BY dispositivo_id ORDER BY timestamp, transaccion_id
                                   ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)
 )
 SELECT

@@ -1,0 +1,12 @@
+# Lo que lee config.py (tiene prioridad sobre config.yaml). Dentro del clúster ClickHouse
+# se llama por el nombre de su Service.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pipeline-config
+  namespace: fraude
+data:
+  CLICKHOUSE_HOST: clickhouse
+  CLICKHOUSE_PORT: "8123"
+  CLICKHOUSE_USER: default
+  CLICKHOUSE_DATABASE: fraude_pagos

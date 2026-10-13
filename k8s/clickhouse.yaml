@@ -1,0 +1,64 @@
+# ClickHouse con su propio volumen persistente (los datos sobreviven a reinicios del pod).
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickhouse
+  namespace: fraude
+spec:
+  selector:
+    app: clickhouse
+  ports:
+    - name: http          # clickhouse-connect
+      port: 8123
+    - name: nativo        # clickhouse-client
+      port: 9000
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: clickhouse
+  namespace: fraude
+spec:
+  serviceName: clickhouse
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clickhouse
+  template:
+    metadata:
+      labels:
+        app: clickhouse
+    spec:
+      containers:
+        - name: clickhouse
+          image: clickhouse/clickhouse-server:26.9
+          env:
+            - name: CLICKHOUSE_USER
+              valueFrom:
+                configMapKeyRef: {name: pipeline-config, key: CLICKHOUSE_USER}
+            - name: CLICKHOUSE_DB
+              valueFrom:
+                configMapKeyRef: {name: pipeline-config, key: CLICKHOUSE_DATABASE}
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef: {name: clickhouse, key: CLICKHOUSE_PASSWORD}
+          ports:
+            - containerPort: 8123
+            - containerPort: 9000
+          readinessProbe:
+            httpGet: {path: /ping, port: 8123}
+            periodSeconds: 5
+          resources:
+            requests: {cpu: 500m, memory: 1Gi}
+            limits: {memory: 4Gi}
+          volumeMounts:
+            - name: datos
+              mountPath: /var/lib/clickhouse
+  volumeClaimTemplates:
+    - metadata:
+        name: datos
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: 5Gi

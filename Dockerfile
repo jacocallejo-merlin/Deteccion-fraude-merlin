@@ -1,16 +1,37 @@
-# Airflow 3 + un entorno virtual con las dependencias del pipeline.
-# Los DAGs (dags/fraude_dags.py) lanzan cada script con /opt/venv_proyecto/bin/python, así que
-# las versiones del pipeline (pandas, scikit-learn, torch...) no se mezclan con las de Airflow.
-# Python 3.10, igual que el entorno local. Se construye desde la raíz del proyecto
-# (ver docker-compose.airflow.yml) para usar el mismo requirements-pipeline.txt que el Dockerfile.
-FROM apache/airflow:3.0.6-python3.10
+# Imagen del pipeline antifraude: Python + dependencias + código. La usan docker-compose.yml
+# (servicio "pipeline") y los Job/CronJob de Kubernetes (k8s/).
+# Los datos no van dentro: ClickHouse es otro contenedor y lo que generan los scripts
+# (datos_ml/, modelos/, resultados/, historico/) va a un volumen.
+#
+#   docker build -t fraude-pipeline:latest .
+FROM python:3.13-slim
 
-USER root
-COPY requirements-pipeline.txt /tmp/requirements-pipeline.txt
-RUN python -m venv /opt/venv_proyecto \
- && /opt/venv_proyecto/bin/pip install --no-cache-dir --upgrade pip \
- # torch solo CPU: la versión por defecto de PyPI trae CUDA y ocupa varios GB
- && /opt/venv_proyecto/bin/pip install --no-cache-dir torch==2.14.1 \
-        --index-url https://download.pytorch.org/whl/cpu \
- && /opt/venv_proyecto/bin/pip install --no-cache-dir -r /tmp/requirements-pipeline.txt
-USER airflow
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+# Primero las dependencias (capa que cambia poco): torch solo CPU, la de PyPI trae CUDA y ocupa varios GB
+COPY requirements-pipeline.txt .
+RUN pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu \
+ && pip install -r requirements-pipeline.txt
+
+# Los hilos OpenMP ociosos duermen en vez de girar en vacío. Sin esto, con la CPU compartida
+# (Kubernetes, varios contenedores) el autoencoder iba unas 10 veces más lento.
+# No cambia el número de hilos ni los resultados.
+ENV OMP_WAIT_POLICY=PASSIVE
+
+# Después el código
+COPY config.py config.yaml main.py artefactos.py ./
+COPY pipeline/ pipeline/
+
+# Usuario sin privilegios, dueño de las carpetas donde escriben los scripts
+RUN useradd --create-home --uid 1000 fraude \
+ && mkdir -p datos_ml modelos resultados historico \
+ && chown -R fraude:fraude /app
+USER fraude
+
+# Por defecto, el pipeline completo (BORRA la base de datos). Ver main.py --help
+CMD ["python", "main.py"]

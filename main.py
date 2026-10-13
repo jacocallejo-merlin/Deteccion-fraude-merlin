@@ -32,6 +32,19 @@ PASOS = [
 # Pasos que crean y cargan los datos de origen: se saltan con --reutilizar-datos
 PASOS_DATOS = {'pipeline/BD_VACIAS.py', 'pipeline/dataset.py'}
 
+# --scoring: lo que se ejecuta cada día con los modelos ya entrenados (igual que el DAG fraude_scoring)
+PASOS_SCORING = [
+    ('pipeline/generar_lote.py',                   'Añade un día de transacciones nuevas a las tablas de origen'),
+    ('pipeline/carga_transacciones.py',            'Convierte las transacciones brutas (fechas en texto)'),
+    ('pipeline/limpieza.py',                       'Corrige duplicados y formatos inconsistentes'),
+    ('pipeline/crear_tabla_enriquecida.py',        'Une las tablas en transacciones_enriquecidas'),
+    ('pipeline/features.py',                       'Calcula features_transaccion'),
+    ('pipeline/reglas_alerta.py',                  'Genera las alertas por reglas'),
+    ('pipeline/puntuar_nosupervisados.py',         'Puntúa las transacciones pendientes con los clásicos'),
+    ('pipeline/puntuar_autoencoder.py',            'Puntúa las transacciones pendientes con el autoencoder'),
+    ('pipeline/validacion_reproducibilidad_consistencia.py', 'Valida reproducibilidad y consistencia'),
+]
+
 
 def nombre_paso(script):
     return Path(script).stem
@@ -67,6 +80,10 @@ def preparar_base_de_datos(borrar):
 
 
 def elegir_pasos(args, hay_datos):
+    if args.scoring:
+        if not hay_datos:
+            sys.exit('--scoring: la base de datos está vacía. Ejecuta antes "python main.py" completo.')
+        return PASOS_SCORING
     pasos = PASOS
     if hay_datos and args.reutilizar_datos:
         pasos = [p for p in pasos if p[0] not in PASOS_DATOS]
@@ -88,18 +105,22 @@ def main():
                         help='no borra la base de datos ni regenera el dataset; ejecuta el resto de pasos')
     parser.add_argument('--desde', metavar='PASO',
                         help='empieza en este paso sin borrar nada, p. ej. --desde entrenar_autoencoder')
+    parser.add_argument('--scoring', action='store_true',
+                        help='sin borrar ni entrenar: añade un lote nuevo, lo limpia, lo puntúa con los '
+                             'modelos guardados y valida')
     args = parser.parse_args()
 
-    faltan = [s for s, _ in PASOS if not (CARPETA / s).exists()]
+    faltan = [s for s, _ in PASOS + PASOS_SCORING if not (CARPETA / s).exists()]
     if faltan:
         sys.exit(f'No encuentro estos scripts en {CARPETA}: {", ".join(faltan)}')
 
-    borrar = not (args.reutilizar_datos or args.desde)
+    borrar = not (args.reutilizar_datos or args.desde or args.scoring)
     hay_datos = preparar_base_de_datos(borrar)
     pasos = elegir_pasos(args, hay_datos)
 
     print('=' * 78)
-    print(f'PIPELINE ANTIFRAUDE  ({len(pasos)} de {len(PASOS)} pasos)')
+    total = len(PASOS_SCORING if args.scoring else PASOS)
+    print(f'PIPELINE ANTIFRAUDE{" (SCORING)" if args.scoring else ""}  ({len(pasos)} de {total} pasos)')
     print('=' * 78)
 
     tiempos = []
@@ -127,8 +148,9 @@ def main():
     for script, segundos in tiempos:
         print(f'  {script:<36} {segundos:>8.1f} s')
     print(f'  {"TOTAL":<36} {time.perf_counter() - inicio_total:>8.1f} s')
-    print('\nDatos listos en "datos_ml/", preparados para el entrenamiento.')
-    print('\nModelos en "modelos/", resultados en "resultados/" y scores en anomaly_scores.')
+    if not args.scoring:
+        print('\nDatos listos en "datos_ml/", preparados para el entrenamiento.')
+        print('\nModelos en "modelos/", resultados en "resultados/" y scores en anomaly_scores.')
 
 
 if __name__ == '__main__':

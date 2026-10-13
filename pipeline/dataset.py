@@ -2,6 +2,7 @@ import argparse
 import math
 import random
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 import sys
 from pathlib import Path
@@ -776,23 +777,20 @@ def resumen(fab):
         print(f"    {tipo}: {n}")
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--dry-run", action="store_true", help="No conecta a ClickHouse, solo genera y resume")
-    parser.add_argument("--seed", type=int, default=CONFIG['semilla'])
-    parser.add_argument("--dias", type=int, default=CONFIG_DATASET["dias"])
-    parser.add_argument("--proporciones", choices=["igual", "aleatoria"], default="igual")
-    args = parser.parse_args()
+FECHA_FIN = datetime(2026, 9, 1)   # final del periodo del dataset inicial
 
-    rng = np.random.default_rng(args.seed)
-    random.seed(args.seed)
-    Faker.seed(args.seed)
 
-    fecha_fin = datetime(2026, 9, 1)  
-    fecha_inicio = fecha_fin - timedelta(days=args.dias)
+def sembrar(semilla):
+    rng = np.random.default_rng(semilla)
+    random.seed(semilla)
+    Faker.seed(semilla)
+    return rng
 
-    fab = Fabrica()
-    print("Generando entidades maestras...")
+
+def generar_mundo(fab, rng, fecha_inicio):
+    """Entidades maestras: clientes y sus perfiles, comercios, dispositivos, tarjetas y canales.
+    Con la misma semilla salen siempre iguales; generar_lote.py las reconstruye así para crear
+    transacciones nuevas de los mismos clientes."""
     perfiles = generar_clientes(fab, rng, fecha_inicio)
     generar_comercios(fab, rng)
     generar_dispositivos(fab, rng)
@@ -813,6 +811,33 @@ def main():
     # unos pocos de los sin dueño son de estafadores; el resto, "nuevos" de un solo uso
     dispositivos_estafador = dispositivos_sin_dueno[:N_DISPOSITIVOS_ESTAFADOR]
     dispositivos_sin_dueno = dispositivos_sin_dueno[N_DISPOSITIVOS_ESTAFADOR:]
+    return SimpleNamespace(
+        perfiles=perfiles, clientes_ids=clientes_ids, comercios_ids=comercios_ids,
+        todos_dispositivos=todos_dispositivos, favoritos=favoritos,
+        metodos_por_cliente=metodos_por_cliente, canales_por_comercio=canales_por_comercio,
+        canal_tipo=canal_tipo, disp_por_cliente=disp_por_cliente,
+        dispositivos_estafador=dispositivos_estafador, dispositivos_sin_dueno=dispositivos_sin_dueno)
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--dry-run", action="store_true", help="No conecta a ClickHouse, solo genera y resume")
+    parser.add_argument("--seed", type=int, default=CONFIG['semilla'])
+    parser.add_argument("--dias", type=int, default=CONFIG_DATASET["dias"])
+    parser.add_argument("--proporciones", choices=["igual", "aleatoria"], default="igual")
+    args = parser.parse_args()
+
+    rng = sembrar(args.seed)
+    fecha_fin = FECHA_FIN
+    fecha_inicio = fecha_fin - timedelta(days=args.dias)
+
+    fab = Fabrica()
+    print("Generando entidades maestras...")
+    m = generar_mundo(fab, rng, fecha_inicio)
+    perfiles, clientes_ids, comercios_ids = m.perfiles, m.clientes_ids, m.comercios_ids
+    favoritos, metodos_por_cliente, disp_por_cliente = m.favoritos, m.metodos_por_cliente, m.disp_por_cliente
+    canales_por_comercio, canal_tipo = m.canales_por_comercio, m.canal_tipo
+    dispositivos_sin_dueno, dispositivos_estafador = m.dispositivos_sin_dueno, m.dispositivos_estafador
 
     print("Generando transacciones legítimas...")
     generar_transacciones_normales(fab, rng, fecha_inicio, fecha_fin, clientes_ids, perfiles, favoritos,

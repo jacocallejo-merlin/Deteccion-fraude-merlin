@@ -1,16 +1,17 @@
 # Dependencias de los scripts de pipeline/ para las imágenes Docker (Dockerfile y airflow/Dockerfile).
-# Mismas versiones que el entorno local con el que se entrenan los modelos: los .joblib
-# de scikit-learn solo se cargan de forma fiable con la misma versión que los guardó.
-# torch se instala aparte en los Dockerfile (versión solo CPU).
+# Mismas versiones que el entorno local (venv, Python 3.13) con el que se entrenan los modelos:
+# los .joblib de scikit-learn solo se cargan de forma fiable con la misma versión que los guardó.
+# torch se instala aparte en los Dockerfile (versión solo CPU, también 2.14.1).
 clickhouse-connect==1.8.0
 Faker==40.39.0
 joblib==1.6.0
-matplotlib==3.10.9
-numpy==2.2.6
-pandas==2.3.3
+matplotlib==3.11.2
+numpy==2.5.3
+pandas==3.0.6
 pyarrow==25.0.1
 python-dotenv==1.2.3
 PyYAML==6.0.3
-scikit-learn==1.7.2
-scipy==1.15.3
+scikit-learn==1.9.1
+scipy==1.18.1
 seaborn==0.13.2
+tzdata==2026.4

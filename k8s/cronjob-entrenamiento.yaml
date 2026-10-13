@@ -1,0 +1,65 @@
+# Reentrenamiento semanal (igual que el DAG fraude_entrenamiento): ETL sobre todos los datos
+# acumulados, entrenamiento, scoring, evaluación y validación, SIN borrar la base de datos
+# (python main.py --reutilizar-datos). Domingo a las 05:00, lejos del scoring de las 03:00.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: fraude-entrenamiento
+  namespace: fraude
+spec:
+  schedule: "0 5 * * 0"
+  timeZone: Europe/Madrid
+  concurrencyPolicy: Forbid      # nunca dos a la vez (reconstruyen las mismas tablas)
+  suspend: false
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1            # seguro: los scripts no duplican al repetirse
+      template:
+        metadata:
+          labels:
+            app: fraude-pipeline
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsUser: 1000          # el usuario "fraude" de la imagen
+            runAsGroup: 1000
+          initContainers:
+            # Crea las carpetas en el volumen con dueño "fraude" y espera a que ClickHouse responda
+            - name: preparar
+              image: busybox:1.36
+              securityContext:
+                runAsUser: 0
+              command:
+                - sh
+                - -c
+                - |
+                  mkdir -p /v/datos_ml /v/modelos /v/resultados /v/historico
+                  chown -R 1000:1000 /v
+                  until wget -q -O- http://clickhouse:8123/ping; do echo "esperando a ClickHouse"; sleep 3; done
+              volumeMounts:
+                - name: artefactos
+                  mountPath: /v
+          containers:
+            - name: pipeline
+              image: fraude-pipeline
+              imagePullPolicy: IfNotPresent
+              command: ["python", "main.py", "--reutilizar-datos"]
+              envFrom:
+                - configMapRef:
+                    name: pipeline-config
+                - secretRef:
+                    name: clickhouse
+              resources:
+                requests: {cpu: "1", memory: 2Gi}
+                limits: {memory: 6Gi}
+              volumeMounts:
+                - {name: artefactos, mountPath: /app/datos_ml, subPath: datos_ml}
+                - {name: artefactos, mountPath: /app/modelos, subPath: modelos}
+                - {name: artefactos, mountPath: /app/resultados, subPath: resultados}
+                - {name: artefactos, mountPath: /app/historico, subPath: historico}
+          volumes:
+            - name: artefactos
+              persistentVolumeClaim:
+                claimName: artefactos
