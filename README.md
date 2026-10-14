@@ -35,6 +35,7 @@ se guarda en la tabla `anomaly_scores`.
     - [Airflow](#airflow)
     - [Kubernetes](#kubernetes)
     - [Validación de reproducibilidad y consistencia](#validación-de-reproducibilidad-y-consistencia)
+  - [Feedback de analistas (Hito 6)](#feedback-de-analistas-hito-6)
   - [Resultados](#resultados)
   - [Tests](#tests)
   - [Carpetas](#carpetas)
@@ -129,7 +130,13 @@ ClickHouse y las carpetas en el disco.
   puntuar_nosupervisados.py ... ◄ features_transaccion, modelos/   ► anomaly_scores   (las que faltan)
   puntuar_autoencoder.py ...... ◄ features_transaccion, modelos/   ► anomaly_scores   (las que faltan)
 
- 6. EVALUACIÓN ────────────────────────────────────────────────────────────────────────────────
+ 6. FEEDBACK DE ANALISTAS (Hito 6) ────────────────────────────────────────────────────────────
+  simular_analistas.py ........ ◄ anomaly_scores, features_transaccion ► feedback_analistas
+  integrar_feedback.py ........ ◄ feedback_analistas, transaccion       ► etiquetas_conocidas
+  recalibrar_modelo.py ........ ◄ etiquetas_conocidas, features         ► modelos/recalibrador.joblib
+  medir_feedback.py ........... ◄ feedback_analistas, transaccion       ► resultados/feedback_semanal.*
+
+ 7. EVALUACIÓN ────────────────────────────────────────────────────────────────────────────────
   evaluar_modelos_nosupervisados.py ◄ modelos/, datos_ml/   ► resultados/conclusiones.md, CSV, curvas PR
   evaluar_autoencoders.py ......... ◄ modelos/, datos_ml/   ► resultados/historico_autoencoders.csv
   comparacion_modelos.py .......... ◄ modelos/, datos_ml/   ► resultados/conclusiones_hito4.md
@@ -158,10 +165,14 @@ Python solo trae a memoria los datos ya preparados para entrenar.
 | 11 | `entrenar_autoencoder.py` | `datos_ml/` | `modelos/autoencoder.pt` y scores |
 | 12 | `puntuar_nosupervisados.py` | modelos guardados | Scores de las transacciones aún sin puntuar |
 | 13 | `puntuar_autoencoder.py` | autoencoder guardado | Ídem para el autoencoder |
-| 14 | `evaluar_modelos_nosupervisados.py` | scores de val y test | `resultados/`: comparativa, curvas PR, conclusiones |
-| 15 | `evaluar_autoencoders.py` | scores del autoencoder | Análisis del autoencoder |
-| 16 | `comparacion_modelos.py` | scores de val y test | Comparativa final |
-| 17 | `validacion_reproducibilidad_consistencia.py` | todo lo anterior | Informe de reproducibilidad |
+| 14 | `simular_analistas.py` | scores del día | `feedback_analistas`: veredicto de las alertas del 1 % más sospechoso |
+| 15 | `integrar_feedback.py` | `feedback_analistas`, `transaccion` | `etiquetas_conocidas`: banco + analistas |
+| 16 | `recalibrar_modelo.py` | `etiquetas_conocidas` | `modelos/recalibrador.joblib` (cada semana) |
+| 17 | `medir_feedback.py` | `feedback_analistas` | `resultados/feedback_semanal.csv/png`, `conclusiones_feedback.md` |
+| 18 | `evaluar_modelos_nosupervisados.py` | scores de val y test | `resultados/`: comparativa, curvas PR, conclusiones |
+| 19 | `evaluar_autoencoders.py` | scores del autoencoder | Análisis del autoencoder |
+| 20 | `comparacion_modelos.py` | scores de val y test | Comparativa final |
+| 21 | `validacion_reproducibilidad_consistencia.py` | todo lo anterior | Informe de reproducibilidad |
 
 Cada entrenamiento guarda una copia de sus artefactos y del `config.yaml` usado en
 `historico/<run_id>/`.
@@ -175,7 +186,7 @@ Cada entrenamiento guarda una copia de sus artefactos y del `config.yaml` usado 
 | 3. ML para anomalías | Isolation Forest, One-Class SVM, KMeans, DBSCAN; feature engineering; ajuste de hiperparámetros; scoring | `features.py`, `modelos_nosupervisados.py`, `puntuar_nosupervisados.py`, `evaluar_modelos_nosupervisados.py` | Hecho |
 | 4. Autoencoders | Autoencoder, error de reconstrucción, comparación con los clásicos, scripts reproducibles | `entrenar_autoencoder.py`, `puntuar_autoencoder.py`, `evaluar_autoencoders.py`, `comparacion_modelos.py` | Hecho |
 | 5. Orquestación y despliegue | DAGs, Docker, Kubernetes, ejecuciones periódicas, reproducibilidad | `dags/fraude_dags.py`, `Dockerfile`, `airflow/Dockerfile`, `docker-compose*.yml`, `k8s/`, `generar_lote.py`, `main.py --scoring`, `validacion_reproducibilidad_consistencia.py` | Hecho |
-| 6. Feedback humano y dashboards | Feedback de analistas, ajuste de umbrales, dashboards | Tablas `alerta` y `analista` ya existen en el modelo de datos | Pendiente |
+| 6. Feedback humano y dashboards | Feedback de analistas, ajuste de umbrales, dashboards | Feedback: `simular_analistas.py`, `integrar_feedback.py`, `recalibrar_modelo.py`, `medir_feedback.py`. Umbrales y dashboard (HTML): pendientes | En curso |
 
 ## El dataset
 
@@ -467,7 +478,8 @@ El mismo pipeline se puede ejecutar de cuatro formas. Todas lanzan los mismos sc
 El **scoring** hace: `generar_lote.py` (un día de transacciones nuevas) → `carga_transacciones.py`
 → `limpieza.py` → `crear_tabla_enriquecida.py` → `features.py` → `reglas_alerta.py` →
 `puntuar_nosupervisados.py` y `puntuar_autoencoder.py` (solo lo pendiente, con los modelos
-guardados: nunca entrena) → validación.
+guardados: nunca entrena) → feedback de analistas (`simular_analistas.py` → `integrar_feedback.py`
+→ `recalibrar_modelo.py` → `medir_feedback.py`) → validación.
 
 `generar_lote.py` simula la llegada diaria de datos, ya que el dataset es sintético: crea un día de
 transacciones de los mismos clientes, tarjetas y dispositivos (los reconstruye con la semilla),
@@ -566,6 +578,48 @@ El CronJob de scoring no tiene reintentos (`backoffLimit: 0`): repetir `main.py 
 generaría otro día de datos. Si falla, el del día siguiente puntúa también lo pendiente.
 - **Airflow**: la imagen carga los tres DAGs sin errores, con las mismas versiones de librerías
   que el entorno local.
+
+## Feedback de analistas (Hito 6)
+
+KMeans marca lo **raro**, no lo que es fraude. El feedback de los analistas cierra el ciclo: cada
+día revisan las alertas, sus veredictos se juntan con los contracargos del banco y cada semana se
+recalibra el orden de las alertas con lo aprendido.
+
+| Script | Qué hace |
+|---|---|
+| `simular_analistas.py` | Al cerrar cada día, los analistas revisan el 1 % de transacciones con más puntuación (~7). Como no hay analistas reales, el veredicto es la etiqueta real con algo de error (8 % junior, 2 % senior) y llega entre 2 h y 2 días después. Guarda `feedback_analistas`. Si hay varios días pendientes (la primera vez, todo el test) los recorre en orden y recalibra cada semana por el camino. |
+| `integrar_feedback.py` | Junta lo que se sabía en un momento dado: fraudes confirmados por el banco (con ~12 días de retraso) y veredictos de los analistas. Si se contradicen manda el banco. Deja `etiquetas_conocidas`. |
+| `recalibrar_modelo.py` | Cada 7 días (o si se ha reentrenado KMeans) entrena un HistGradientBoosting con las etiquetas conocidas: entran el percentil de KMeans y las mismas variables que los modelos. Las transacciones revisadas pesan 10 veces más: enseñan qué alertas fueron falsas alarmas. Desde entonces las alertas se ordenan con él. |
+| `medir_feedback.py` | Precisión y recall de la cola de alertas semana a semana, comparados en los mismos días con KMeans sin recalibrar y con un recalibrado que solo usa los contracargos del banco. |
+
+Tabla `feedback_analistas`: `transaccion_id`, `fecha_alerta`, `fecha_revision`, `analista_id`
+(tabla `analista`), `veredicto` (`fraude` / `legitima`), `tipo_fraude`, `comentario`, y además
+`puntuacion` y `modelo` (con qué score y qué modelo entró la alerta en la cola).
+
+Todo es reproducible (semilla por día) y se puede repetir sin duplicar: solo se revisan los días
+puntuados que aún no tienen feedback. Si se regenera la base de datos, se borra el recalibrador
+anterior y se empieza otra vez con KMeans.
+
+Resultado en el periodo de test (6 semanas y media, ~7 alertas al día):
+
+- Semana 1 (KMeans, sin feedback todavía): el 26 % de las alertas son fraude. Semana 6
+  (recalibrado): el 52 %. Pero cada semana tiene una mezcla de fraude distinta; la comparación
+  justa es en los mismos días:
+
+| Semanas 2 a 7 (mismos días y presupuesto) | Fraudes en la cola | Precisión | Recall |
+|---|---|---|---|
+| KMeans sin recalibrar | 70 | 28 % | 40 % |
+| Recalibrado solo con el banco | 98 | 39 % | 56 % |
+| Recalibrado con banco + analistas | 95 | 38 % | 54 % |
+
+- **Recalibrar con etiquetas mejora claramente** las alertas (+40 % de fraude encontrado con el
+  mismo trabajo).
+- **El feedback de los analistas no añade nada medible** sobre los contracargos del banco: aquí el
+  banco confirma el 90 % del fraude y hay cientos de casos, y ~7 revisiones al día pesan poco. Donde
+  es imprescindible es en los lotes diarios nuevos: el banco aún no ha confirmado nada y los
+  veredictos de los analistas son las únicas etiquetas recientes.
+- Detalle en [resultados/conclusiones_feedback.md](resultados/conclusiones_feedback.md) y
+  `resultados/feedback_semanal.png`.
 
 ## Resultados
 

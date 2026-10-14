@@ -93,3 +93,17 @@ busqueda_autoencoder:
     cuello: [4, 8]
     ruido: [0.0, 0.05]
     lr: [0.001]
+
+# Hito 6: feedback de analistas (simulado) y recalibración de las alertas
+# simular_analistas.py, integrar_feedback.py, recalibrar_modelo.py y medir_feedback.py
+feedback:
+  modelo_base: kmeans          # el detector elegido: ordena las alertas hasta la primera recalibración
+  presupuesto: 0.01            # parte de las transacciones de cada día que revisan los analistas (~7 al día)
+  retraso_revision_horas: [2, 48]   # tras cerrar el día, el veredicto llega entre 2 h y 2 días después
+  p_error:                     # probabilidad de que el analista se equivoque de veredicto
+    junior: 0.08
+    senior: 0.02
+  reentrenar_cada_dias: 7      # cada cuánto se recalibra con las etiquetas nuevas
+  # Peso de las transacciones revisadas al recalibrar. Son las que el detector pone arriba: enseñan
+  # qué alertas fueron falsas alarmas. Probado 1, 10 y 50: 10 da la mejor precisión (37 % frente a 36 %)
+  peso_revisadas: 10

@@ -5,6 +5,8 @@ Tres DAGs, todos lanzan los scripts de pipeline/ con BashOperator:
   fraude_setup          (manual, una vez)   borra la BD -> crea tablas -> dataset inicial
   fraude_entrenamiento  (manual o semanal)  ETL -> entrena los 5 modelos -> puntúa -> evalúa -> valida
   fraude_scoring        (diario)            lote nuevo -> ETL -> puntúa con los modelos guardados -> valida
+Los dos últimos terminan con el feedback de analistas (Hito 6):
+  puntuar -> simular_analistas -> integrar_feedback -> recalibrar_modelo -> medir_feedback
 Son los mismos pasos que main.py (completo y --scoring), pero en paralelo donde se puede.
 Los scripts de puntuar son idempotentes (solo puntúan lo pendiente) y generar_lote.py borra los
 restos de un lote a medias, así que las tareas se pueden reintentar sin duplicar nada.
@@ -61,6 +63,18 @@ def etl():
     return carga, limpieza, features, reglas
 
 
+def feedback():
+    """Hito 6: los analistas revisan las alertas puntuadas -> se juntan sus veredictos con los
+    contracargos del banco -> se recalibra el orden de las alertas (solo si toca) -> se mide.
+    Devuelve la primera tarea para engancharla."""
+    analistas = paso('simular_analistas', 'simular_analistas.py')
+    integrar = paso('integrar_feedback', 'integrar_feedback.py')
+    recalibrar = paso('recalibrar_modelo', 'recalibrar_modelo.py')
+    medir = paso('medir_feedback', 'medir_feedback.py')
+    analistas >> integrar >> recalibrar >> medir
+    return analistas
+
+
 # --------------------------------------------------------------------------- setup
 with DAG(
     dag_id='fraude_setup',
@@ -89,7 +103,7 @@ with DAG(
 with DAG(
     dag_id='fraude_entrenamiento',
     description='ETL, entrenamiento de los 5 modelos, scoring, evaluación y validación',
-    schedule=None,                         # a mano; para semanal: '@weekly'
+    schedule="*/5 * * * *",                         # a mano; para semanal: '@weekly'
     start_date=INICIO,
     catchup=False,
     max_active_runs=1,
@@ -128,6 +142,10 @@ with DAG(
     [clasicos, autoencoder, reglas] >> comparacion
     [puntuar_clasicos, puntuar_ae, eval_clasicos, eval_ae, comparacion] >> validacion
 
+    # Con el detector reentrenado el recalibrador anterior ya no vale: se rehace con el feedback
+    analistas = feedback()
+    puntuar_clasicos >> analistas
+
 
 # -------------------------------------------------------------------------- scoring
 with DAG(
@@ -151,3 +169,7 @@ with DAG(
 
     features >> [puntuar_clasicos, puntuar_ae]
     [reglas, puntuar_clasicos, puntuar_ae] >> validacion
+
+    # scoring -> feedback -> recalibración
+    analistas = feedback()
+    puntuar_clasicos >> analistas
