@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MERLIN · Detección de fraude</title>
+  <link rel="stylesheet" href="/static/estilos.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+</head>
+<body>
+  <header class="cabecera">
+    <div class="marca">
+      <div class="logo">M</div>
+      <div>
+        <h1>MERLIN · Detección de fraude</h1>
+        <p id="rango">Cargando datos…</p>
+      </div>
+    </div>
+    <div class="controles">
+      <label for="periodo">Periodo</label>
+      <select id="periodo">
+        <option value="0">Todo el periodo</option>
+        <option value="30">Últimos 30 días</option>
+        <option value="7">Últimos 7 días</option>
+      </select>
+      <button id="actualizar" title="Volver a leer los datos">Actualizar</button>
+    </div>
+  </header>
+
+  <nav class="pestanas" id="pestanas">
+    <button data-pestana="resumen" class="activa">Resumen</button>
+    <button data-pestana="transacciones">Transacciones</button>
+    <button data-pestana="patrones">Patrones</button>
+    <button data-pestana="alertas">Alertas y analistas</button>
+    <button data-pestana="anomalias">Anomalías</button>
+    <button data-pestana="modelos">Modelos y ajuste</button>
+  </nav>
+
+  <main>
+    <!-- ======================================================== RESUMEN -->
+    <section id="resumen" class="seccion activa">
+      <div class="kpis" id="kpis"></div>
+      <div class="rejilla">
+        <div class="tarjeta ancha">
+          <h2>Actividad diaria</h2>
+          <p class="nota">Transacciones por día (barras) y, en el eje derecho, fraudes, transacciones con alerta de
+            alguna regla y anómalas para el detector. Al principio salen muchas anómalas: los clientes aún no
+            tienen historial (por eso los primeros 30 días no se usan para entrenar).</p>
+          <div class="grafica alta"><canvas id="g-serie"></canvas></div>
+        </div>
+        <div class="tarjeta">
+          <h2>Fraude frente a legítimas</h2>
+          <div class="grafica"><canvas id="g-donut"></canvas></div>
+        </div>
+        <div class="tarjeta">
+          <h2>Fraude por tipo</h2>
+          <p class="nota">Transacciones fraudulentas de cada tipo en el periodo.</p>
+          <div class="grafica"><canvas id="g-tipos"></canvas></div>
+        </div>
+        <div class="tarjeta">
+          <h2>Últimas alertas de las reglas</h2>
+          <div class="tabla-contenedor" id="t-res-alertas"></div>
+        </div>
+        <div class="tarjeta">
+          <h2>Últimos fraudes</h2>
+          <div class="tabla-contenedor" id="t-res-fraudes"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================== TRANSACCIONES -->
+    <section id="transacciones" class="seccion">
+      <div class="tarjeta">
+        <div class="barra-filtros">
+          <div class="chips" id="filtros-tx">
+            <button data-filtro="todas" class="activa">Todas</button>
+            <button data-filtro="fraude">Fraude</button>
+            <button data-filtro="alerta">Con alerta de reglas</button>
+            <button data-filtro="anomala">Anómalas</button>
+            <button data-filtro="revisada">Revisadas por analistas</button>
+          </div>
+          <select id="limite-tx">
+            <option>25</option><option selected>50</option><option>100</option><option>250</option>
+          </select>
+        </div>
+        <p class="nota">Las más recientes primero. <b>Score</b>: percentil del detector elegido (1 = más rara que todo
+          el entrenamiento). <b>Etiqueta</b>: la real del dataset, que el sistema no conoce al puntuar.</p>
+        <div class="tabla-contenedor" id="t-transacciones"></div>
+      </div>
+    </section>
+
+    <!-- ======================================================= PATRONES -->
+    <section id="patrones" class="seccion">
+      <div class="rejilla">
+        <div class="tarjeta ancha">
+          <h2>Por hora del día</h2>
+          <p class="nota">Transacciones (barras) y porcentaje que es fraude (línea, eje derecho).</p>
+          <div class="grafica"><canvas id="g-hora"></canvas></div>
+        </div>
+        <div class="tarjeta">
+          <h2>Por día de la semana</h2>
+          <div class="grafica"><canvas id="g-semana"></canvas></div>
+        </div>
+        <div class="tarjeta">
+          <h2>Señales de riesgo</h2>
+          <p class="nota">Porcentaje de fraude entre las transacciones que tienen cada señal.</p>
+          <div class="grafica"><canvas id="g-senales"></canvas></div>
+        </div>
+        <div class="tarjeta">
+          <h2>Por canal</h2>
+          <div class="grafica"><canvas id="g-canal"></canvas></div>
+        </div>
+        <div class="tarjeta">
+          <h2>Por dispositivo</h2>
+          <div class="grafica"><canvas id="g-dispositivo"></canvas></div>
+        </div>
+        <div class="tarjeta">
+          <h2>Por categoría de comercio</h2>
+          <div class="grafica alta"><canvas id="g-categoria"></canvas></div>
+        </div>
+        <div class="tarjeta">
+          <h2>Por país de la IP</h2>
+          <div class="grafica alta"><canvas id="g-pais"></canvas></div>
+        </div>
+        <div class="tarjeta">
+          <h2>Comercios con más fraude</h2>
+          <div class="tabla-contenedor" id="t-comercios"></div>
+        </div>
+        <div class="tarjeta">
+          <h2>Clientes con más fraude</h2>
+          <div class="tabla-contenedor" id="t-clientes"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============================================ ALERTAS Y ANALISTAS -->
+    <section id="alertas" class="seccion">
+      <div class="rejilla">
+        <div class="tarjeta ancha">
+          <h2>Alertas por regla</h2>
+          <p class="nota">Cuántas alertas lanza cada regla y cuántas eran fraude de verdad. Umbrales ajustados con lo
+            validado (Hito 6, ver «Modelos y ajuste»).</p>
+          <div class="grafica"><canvas id="g-reglas"></canvas></div>
+        </div>
+        <div class="tarjeta ancha">
+          <h2>¿Mejora la cola de alertas semana a semana?</h2>
+          <p class="nota">Porcentaje de las alertas revisadas por los analistas que eran fraude, comparado en los mismos
+            días con el detector sin recalibrar y con un recalibrado que solo usa las confirmaciones del banco.</p>
+          <div class="grafica"><canvas id="g-semanal"></canvas></div>
+        </div>
+        <div class="tarjeta ancha">
+          <h2>Últimas alertas de las reglas</h2>
+          <div class="tabla-contenedor" id="t-alertas"></div>
+        </div>
+        <div class="tarjeta">
+          <h2>Analistas</h2>
+          <p class="nota">Revisiones y acierto de cada analista (su veredicto frente a la etiqueta real).</p>
+          <div class="tabla-contenedor" id="t-por-analista"></div>
+        </div>
+        <div class="tarjeta">
+          <h2>Últimas revisiones</h2>
+          <div class="tabla-contenedor" id="t-revisiones"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ====================================================== ANOMALÍAS -->
+    <section id="anomalias" class="seccion">
+      <div class="barra-filtros">
+        <div class="chips" id="modelos-anomalia"></div>
+      </div>
+      <div class="kpis" id="kpis-anomalia"></div>
+      <div class="rejilla">
+        <div class="tarjeta ancha">
+          <h2>Distribución del score</h2>
+          <p class="nota">El score es un percentil: cada tramo de 0,05 tiene la misma parte de las transacciones de
+            entrenamiento. Barras: fraudes en cada tramo; línea: qué parte del tramo es fraude. Un buen detector
+            concentra el fraude en los tramos más altos.</p>
+          <div class="grafica"><canvas id="g-histograma"></canvas></div>
+        </div>
+        <div class="tarjeta ancha">
+          <h2>Las más anómalas</h2>
+          <div class="tabla-contenedor" id="t-anomalias"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ================================================ MODELOS Y AJUSTE -->
+    <section id="modelos" class="seccion">
+      <div class="rejilla">
+        <div class="tarjeta">
+          <h2>Calidad de cada detector (PR-AUC)</h2>
+          <p class="nota">Cuánto fraude queda arriba al ordenar por sospecha (0 a 1; al azar sería la tasa de fraude).
+            Se elige con validación y se mide en test.</p>
+          <div class="grafica"><canvas id="g-prauc"></canvas></div>
+        </div>
+        <div class="tarjeta">
+          <h2>Revisando el 1 % más sospechoso</h2>
+          <p class="nota">En test: qué parte de las alertas es fraude (precisión) y qué parte del fraude se encuentra
+            (recall).</p>
+          <div class="grafica"><canvas id="g-presupuesto"></canvas></div>
+        </div>
+        <div class="tarjeta ancha">
+          <h2>Comparativa en test</h2>
+          <div class="tabla-contenedor" id="t-comparativa"></div>
+        </div>
+        <div class="tarjeta ancha">
+          <h2>Recall por tipo de fraude (revisando el 1 %)</h2>
+          <div class="tabla-contenedor" id="t-recall-tipo"></div>
+        </div>
+        <div class="tarjeta ancha">
+          <h2>Ajuste de umbrales de las reglas (Hito 6)</h2>
+          <p class="nota">Umbrales iniciales frente a ajustados con lo validado, medidos en los días posteriores a la
+            fecha de decisión (que no se usaron para decidir).</p>
+          <div class="grafica"><canvas id="g-ajuste"></canvas></div>
+          <div class="tabla-contenedor" id="t-ajuste"></div>
+          <p class="nota" id="ajuste-config"></p>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>Proyecto antifraude MERLIN · datos sintéticos · la página solo lee ClickHouse y <code>resultados/</code></footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>

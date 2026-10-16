@@ -47,5 +47,27 @@ services:
       - ./resultados:/app/resultados
       - ./historico:/app/historico
 
+  # La web con los resultados (http://localhost:8000). Misma imagen que el pipeline; solo lee
+  # ClickHouse y resultados/. Perfil propio para que "docker compose up -d" siga arrancando solo
+  # la base de datos:   docker compose --profile web up -d --build
+  web:
+    build: .
+    image: fraude-pipeline:latest
+    profiles: [web]
+    command: ["uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8000"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: password
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./resultados:/app/resultados:ro
+    restart: unless-stopped
+
 volumes:
   clickhouse_data:

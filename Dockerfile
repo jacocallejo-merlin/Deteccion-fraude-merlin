@@ -26,6 +26,7 @@ ENV OMP_WAIT_POLICY=PASSIVE
 # Después el código
 COPY config.py config.yaml main.py artefactos.py ./
 COPY pipeline/ pipeline/
+COPY web/ web/
 
 # Usuario sin privilegios, dueño de las carpetas donde escriben los scripts
 RUN useradd --create-home --uid 1000 fraude \
