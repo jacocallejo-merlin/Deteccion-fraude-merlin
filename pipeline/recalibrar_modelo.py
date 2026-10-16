@@ -35,6 +35,10 @@ _cfg = CONFIG['feedback']
 MODELO_BASE = _cfg['modelo_base']
 REENTRENAR_CADA = timedelta(days=_cfg['reentrenar_cada_dias'])
 PESO_REVISADAS = _cfg['peso_revisadas']
+# Variables de features_transaccion que usa el recalibrador además de las de los modelos
+# (ajustar_umbrales.py decide si alguna aporta). Van sin escalar: los árboles no lo necesitan.
+VARIABLES_EXTRA = _cfg.get('variables_extra') or []
+VARIABLES_QUITADAS = _cfg.get('variables_quitadas') or []
 SEMILLA = CONFIG['semilla']
 RUTA_RECALIBRADOR = CARPETA_MODELOS / 'recalibrador.joblib'
 
@@ -63,8 +67,33 @@ def reloj(client):
     return datetime.combine(ultimo + timedelta(days=1), datetime.min.time())
 
 
-def matriz(df):
-    """Variables de los modelos + percentil del detector (0-1, 1 = más raro que todo el ajuste)."""
+def inicio_test():
+    """Primer día del test. Antes de él los modelos se entrenaron con esos mismos datos: los
+    analistas (simulados) empiezan a revisar ese día."""
+    return pd.read_parquet(CARPETA_DATOS / 'info_test.parquet', columns=['timestamp'])['timestamp'].min().date()
+
+
+def fecha_decision():
+    """Cuándo se ajustan umbrales y variables con lo validado (ajustar_umbrales.py): tras
+    ajuste.semanas_validacion semanas de feedback. Los ajustes se aplican desde ese momento."""
+    return datetime.combine(inicio_test() + timedelta(weeks=CONFIG['ajuste']['semanas_validacion']),
+                            datetime.min.time())
+
+
+def variables_extra_en(corte):
+    """Variables extra del recalibrador en esa fecha: las de feedback.variables_extra desde la fecha
+    de decisión del ajuste (antes no se habían validado)."""
+    return VARIABLES_EXTRA if corte >= fecha_decision() else []
+
+
+def variables_quitadas_en(corte):
+    """Variables que el recalibrador deja de usar desde la fecha de decisión del ajuste."""
+    return VARIABLES_QUITADAS if corte >= fecha_decision() else []
+
+
+def matriz(df, extra=None, quitar=()):
+    """Variables de los modelos + percentil del detector (0-1, 1 = más raro que todo el ajuste)
+    + las variables extra (por defecto las de feedback.variables_extra) - las de quitar."""
     escalador = joblib.load(CARPETA_DATOS / 'escalador.joblib')
     detector = joblib.load(CARPETA_MODELOS / f'{MODELO_BASE}.joblib')
     referencia = joblib.load(CARPETA_MODELOS / f'{MODELO_BASE}_referencia.joblib')
@@ -72,22 +101,28 @@ def matriz(df):
         X, info = preparar_features(df, escalador)
     s, _ = puntuar(MODELO_BASE, detector, X.to_numpy())
     X[f'pct_{MODELO_BASE}'] = percentil(s, referencia)
-    return X, info
+    for variable in VARIABLES_EXTRA if extra is None else extra:
+        X[variable] = df[variable].to_numpy(dtype=float)
+    return X.drop(columns=list(quitar)), info
 
 
 def cargar_recalibrador():
-    """El recalibrador guardado, o None si no hay o es de un detector anterior."""
+    """El recalibrador guardado, o None si no hay, es de un detector anterior o usa otras
+    variables que las de config.yaml (entonces toca recalibrar)."""
     if not RUTA_RECALIBRADOR.exists():
         return None
     recal = joblib.load(RUTA_RECALIBRADOR)
-    return recal if recal['run_id_base'] == run_id_base() else None
+    if recal['run_id_base'] != run_id_base() or             recal.get('variables_extra', []) != variables_extra_en(recal['corte']) or             recal.get('variables_quitadas', []) != variables_quitadas_en(recal['corte']):
+        return None
+    return recal
 
 
 def puntuar_alertas(df):
     """Score con el que se ordenan las alertas: el recalibrador si lo hay, si no el detector.
     Devuelve (score, nombre del modelo usado, info)."""
-    X, info = matriz(df)
     recal = cargar_recalibrador()
+    X, info = matriz(df, extra=recal['variables_extra'] if recal else [],
+                     quitar=recal['variables_quitadas'] if recal else [])
     if recal is None:
         return X[f'pct_{MODELO_BASE}'].to_numpy(), MODELO_BASE, info
     return recal['modelo'].predict_proba(X)[:, 1], f'recalibrado_{recal["corte"]:%Y%m%d}', info
@@ -96,7 +131,8 @@ def puntuar_alertas(df):
 def toca_recalibrar(client, corte):
     recal = cargar_recalibrador()
     if recal is not None:
-        return corte - recal['corte'] >= REENTRENAR_CADA
+        # cada semana, y también al llegar la fecha de decisión del ajuste (cambian las variables)
+        return corte - recal['corte'] >= REENTRENAR_CADA or recal['corte'] < fecha_decision() <= corte
     # Sin recalibrador (o el detector ha cambiado): cuando haya una semana de feedback
     primera = uno(client, 'SELECT min(fecha_alerta) FROM feedback_analistas')
     return primera > date(1970, 1, 1) and \
@@ -104,12 +140,14 @@ def toca_recalibrar(client, corte):
 
 
 def datos_entrenamiento(client, corte, etiquetas):
-    """Transacciones anteriores al corte (sin el calentamiento) con la etiqueta que se conocía.
+    """Transacciones anteriores al corte (sin el calentamiento) con la etiqueta que se conocía y
+    las variables que tocan en esa fecha.
     etiquetas: transaccion_id, etiqueta (0/1) y fuente, como en etiquetas_conocidas."""
     df = client.query_df('SELECT * FROM features_transaccion WHERE timestamp < {c:DateTime} '
                          'ORDER BY timestamp, transaccion_id', parameters={'c': corte})
     df = df[df['timestamp'] >= df['timestamp'].min() + pd.Timedelta(days=DIAS_CALENTAMIENTO)]
-    X, info = matriz(df.reset_index(drop=True))
+    X, info = matriz(df.reset_index(drop=True), extra=variables_extra_en(corte),
+                     quitar=variables_quitadas_en(corte))
     info = info.merge(etiquetas, on='transaccion_id', how='left')
     # Lo que nadie ha marcado cuenta como legítimo, igual que al entrenar el detector
     y = info['etiqueta'].fillna(0).astype(int).to_numpy()
@@ -131,8 +169,9 @@ def recalibrar(client, corte):
         return None
     modelo = entrenar(X, y, np.where(revisada, PESO_REVISADAS, 1.0))
     recal = {'modelo': modelo, 'corte': corte, 'run_id_base': run_id_base(),
-             'variables': list(X.columns), 'filas': len(X), 'fraudes_conocidos': int(y.sum()),
-             'revisadas': int(revisada.sum())}
+             'variables': list(X.columns), 'variables_extra': variables_extra_en(corte),
+             'variables_quitadas': variables_quitadas_en(corte), 'filas': len(X),
+             'fraudes_conocidos': int(y.sum()), 'revisadas': int(revisada.sum())}
     CARPETA_MODELOS.mkdir(exist_ok=True)
     joblib.dump(recal, RUTA_RECALIBRADOR)
 

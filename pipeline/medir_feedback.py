@@ -23,7 +23,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import CARPETA_RESULTADOS
-from recalibrar_modelo import MODELO_BASE, conectar, datos_entrenamiento, entrenar, matriz
+from recalibrar_modelo import MODELO_BASE, VARIABLES_EXTRA, conectar, datos_entrenamiento, entrenar, matriz
 
 COLUMNA_BASE = f'pct_{MODELO_BASE}'
 
@@ -38,10 +38,11 @@ def cargar(client):
     if feedback.empty:
         raise SystemExit('feedback_analistas está vacía: lanza antes simular_analistas.py')
     feedback['fecha_alerta'] = feedback['fecha_alerta'].dt.date
-    dias = sorted(feedback['fecha_alerta'].unique())
+    # todos los días desde la primera revisión, también los que no tuvieron ninguna alerta
+    dias = list(pd.date_range(min(feedback['fecha_alerta']), max(feedback['fecha_alerta'])).date)
     df = client.query_df('SELECT * FROM features_transaccion WHERE toDate(timestamp) IN {d:Array(Date)} '
                          'ORDER BY timestamp, transaccion_id', parameters={'d': dias})
-    X, info = matriz(df)
+    X, info = matriz(df, extra=VARIABLES_EXTRA)
     info['dia'] = info['timestamp'].dt.date
     info[COLUMNA_BASE] = X[COLUMNA_BASE].to_numpy()
     return feedback, X, info
@@ -50,7 +51,7 @@ def cargar(client):
 def aciertos_top(info, score, n_por_dia):
     """Fraudes reales entre las n transacciones de más score de cada día."""
     info = info.assign(score=score)
-    return {dia: int(g.nlargest(n_por_dia[dia], 'score')['es_fraude'].sum())
+    return {dia: int(g.nlargest(n_por_dia.get(dia, 0), 'score')['es_fraude'].sum())
             for dia, g in info.groupby('dia')}
 
 
@@ -68,7 +69,7 @@ def score_solo_banco(client, feedback, X, info):
         ''', parameters={'c': corte})
         Xe, y, revisada = datos_entrenamiento(client, corte, banco)
         filas = info['dia'].isin(set(dias)).to_numpy()
-        score[filas] = entrenar(Xe, y, np.ones(len(y))).predict_proba(X[filas])[:, 1]
+        score[filas] = entrenar(Xe, y, np.ones(len(y))).predict_proba(X.loc[filas, Xe.columns])[:, 1]
         print(f'  solo banco, corte {corte:%Y-%m-%d}: {int(y.sum())} fraudes confirmados')
     return score
 
@@ -85,6 +86,9 @@ def por_semana(client, feedback, X, info):
         'vp_solo_banco': pd.Series(aciertos_top(info, score_solo_banco(client, feedback, X, info),
                                                 n_por_dia)),
     })
+    # Días sin ninguna alerta (todo por debajo del umbral mínimo): 0 alertas, el modelo del día anterior
+    por_dia[['alertas', 'vp', 'vp_analistas']] = por_dia[['alertas', 'vp', 'vp_analistas']].fillna(0)
+    por_dia['modelo'] = por_dia['modelo'].ffill()
     primero = por_dia.index.min()
     por_dia['semana'] = [(d - primero).days // 7 + 1 for d in por_dia.index]
 

@@ -27,6 +27,7 @@ PASOS = [
     ('pipeline/integrar_feedback.py',              'Junta el feedback con los fraudes confirmados por el banco'),
     ('pipeline/recalibrar_modelo.py',              'Recalibra el orden de las alertas si toca (cada semana)'),
     ('pipeline/medir_feedback.py',                 'Mide si las alertas mejoran semana a semana'),
+    ('pipeline/ajustar_umbrales.py',               'Ajusta umbrales y variables con lo validado'),
     ('pipeline/evaluar_modelos_nosupervisados.py', 'Compara los 5 modelos y saca conclusiones'),
     ('pipeline/evaluar_autoencoders.py',           'Análisis detallado del autoencoder'),
     ('pipeline/comparacion_modelos.py',            'Comparativa final (clásicos vs autoencoder)'),

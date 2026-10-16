@@ -63,15 +63,18 @@ def etl():
     return carga, limpieza, features, reglas
 
 
-def feedback():
+def feedback(ajustar=False):
     """Hito 6: los analistas revisan las alertas puntuadas -> se juntan sus veredictos con los
     contracargos del banco -> se recalibra el orden de las alertas (solo si toca) -> se mide.
-    Devuelve la primera tarea para engancharla."""
+    ajustar=True añade el ajuste de umbrales y variables con lo validado (solo en el entrenamiento:
+    es una decisión periódica, no diaria). Devuelve la primera tarea para engancharla."""
     analistas = paso('simular_analistas', 'simular_analistas.py')
     integrar = paso('integrar_feedback', 'integrar_feedback.py')
     recalibrar = paso('recalibrar_modelo', 'recalibrar_modelo.py')
     medir = paso('medir_feedback', 'medir_feedback.py')
     analistas >> integrar >> recalibrar >> medir
+    if ajustar:
+        medir >> paso('ajustar_umbrales', 'ajustar_umbrales.py')
     return analistas
 
 
@@ -103,7 +106,7 @@ with DAG(
 with DAG(
     dag_id='fraude_entrenamiento',
     description='ETL, entrenamiento de los 5 modelos, scoring, evaluación y validación',
-    schedule="*/5 * * * *",                         # a mano; para semanal: '@weekly'
+    schedule='@weekly',                    # semanal, como el CronJob de Kubernetes (None = solo a mano)
     start_date=INICIO,
     catchup=False,
     max_active_runs=1,
@@ -143,7 +146,7 @@ with DAG(
     [puntuar_clasicos, puntuar_ae, eval_clasicos, eval_ae, comparacion] >> validacion
 
     # Con el detector reentrenado el recalibrador anterior ya no vale: se rehace con el feedback
-    analistas = feedback()
+    analistas = feedback(ajustar=True)
     puntuar_clasicos >> analistas
 
 

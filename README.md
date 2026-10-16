@@ -36,6 +36,7 @@ se guarda en la tabla `anomaly_scores`.
     - [Kubernetes](#kubernetes)
     - [Validación de reproducibilidad y consistencia](#validación-de-reproducibilidad-y-consistencia)
   - [Feedback de analistas (Hito 6)](#feedback-de-analistas-hito-6)
+  - [Ajuste de umbrales y variables (Hito 6)](#ajuste-de-umbrales-y-variables-hito-6)
   - [Resultados](#resultados)
   - [Tests](#tests)
   - [Carpetas](#carpetas)
@@ -135,6 +136,7 @@ ClickHouse y las carpetas en el disco.
   integrar_feedback.py ........ ◄ feedback_analistas, transaccion       ► etiquetas_conocidas
   recalibrar_modelo.py ........ ◄ etiquetas_conocidas, features         ► modelos/recalibrador.joblib
   medir_feedback.py ........... ◄ feedback_analistas, transaccion       ► resultados/feedback_semanal.*
+  ajustar_umbrales.py ......... ◄ etiquetas validadas, features         ► resultados/ajuste_umbrales.md (propuesta para config.yaml)
 
  7. EVALUACIÓN ────────────────────────────────────────────────────────────────────────────────
   evaluar_modelos_nosupervisados.py ◄ modelos/, datos_ml/   ► resultados/conclusiones.md, CSV, curvas PR
@@ -169,10 +171,11 @@ Python solo trae a memoria los datos ya preparados para entrenar.
 | 15 | `integrar_feedback.py` | `feedback_analistas`, `transaccion` | `etiquetas_conocidas`: banco + analistas |
 | 16 | `recalibrar_modelo.py` | `etiquetas_conocidas` | `modelos/recalibrador.joblib` (cada semana) |
 | 17 | `medir_feedback.py` | `feedback_analistas` | `resultados/feedback_semanal.csv/png`, `conclusiones_feedback.md` |
-| 18 | `evaluar_modelos_nosupervisados.py` | scores de val y test | `resultados/`: comparativa, curvas PR, conclusiones |
-| 19 | `evaluar_autoencoders.py` | scores del autoencoder | Análisis del autoencoder |
-| 20 | `comparacion_modelos.py` | scores de val y test | Comparativa final |
-| 21 | `validacion_reproducibilidad_consistencia.py` | todo lo anterior | Informe de reproducibilidad |
+| 18 | `ajustar_umbrales.py` | etiquetas conocidas en la fecha de decisión | `resultados/ajuste_umbrales.md`, `ajuste_reglas.csv`, `ajuste_variables.csv`: propuesta de umbrales y variables |
+| 19 | `evaluar_modelos_nosupervisados.py` | scores de val y test | `resultados/`: comparativa, curvas PR, conclusiones |
+| 20 | `evaluar_autoencoders.py` | scores del autoencoder | Análisis del autoencoder |
+| 21 | `comparacion_modelos.py` | scores de val y test | Comparativa final |
+| 22 | `validacion_reproducibilidad_consistencia.py` | todo lo anterior | Informe de reproducibilidad |
 
 Cada entrenamiento guarda una copia de sus artefactos y del `config.yaml` usado en
 `historico/<run_id>/`.
@@ -186,7 +189,7 @@ Cada entrenamiento guarda una copia de sus artefactos y del `config.yaml` usado 
 | 3. ML para anomalías | Isolation Forest, One-Class SVM, KMeans, DBSCAN; feature engineering; ajuste de hiperparámetros; scoring | `features.py`, `modelos_nosupervisados.py`, `puntuar_nosupervisados.py`, `evaluar_modelos_nosupervisados.py` | Hecho |
 | 4. Autoencoders | Autoencoder, error de reconstrucción, comparación con los clásicos, scripts reproducibles | `entrenar_autoencoder.py`, `puntuar_autoencoder.py`, `evaluar_autoencoders.py`, `comparacion_modelos.py` | Hecho |
 | 5. Orquestación y despliegue | DAGs, Docker, Kubernetes, ejecuciones periódicas, reproducibilidad | `dags/fraude_dags.py`, `Dockerfile`, `airflow/Dockerfile`, `docker-compose*.yml`, `k8s/`, `generar_lote.py`, `main.py --scoring`, `validacion_reproducibilidad_consistencia.py` | Hecho |
-| 6. Feedback humano y dashboards | Feedback de analistas, ajuste de umbrales, dashboards | Feedback: `simular_analistas.py`, `integrar_feedback.py`, `recalibrar_modelo.py`, `medir_feedback.py`. Umbrales y dashboard (HTML): pendientes | En curso |
+| 6. Feedback humano y dashboards | Feedback de analistas, ajuste de umbrales, dashboards | Feedback: `simular_analistas.py`, `integrar_feedback.py`, `recalibrar_modelo.py`, `medir_feedback.py`. Umbrales y variables: `ajustar_umbrales.py`. Dashboard (HTML): pendiente | En curso |
 
 ## El dataset
 
@@ -318,6 +321,7 @@ el futuro.
 | Velocidad de la tarjeta | pagos en 10 min / 1 h / 24 h, importe en 10 min, rechazos en 1 h, `seg_desde_anterior_tarjeta` | card testing, smurfing |
 | Velocidad del cliente | `n_cliente_1h` (transacciones por hora), `seg_desde_anterior_cliente`, `n_tarjetas_cliente_24h` (tarjetas distintas) | uso de varias tarjetas seguidas |
 | Historial del cliente | `z_importe_cliente` (z-score del importe frente a su historial), `ratio_importe_habitual`, `n_devoluciones_30d` | pico de gasto, devolución abusiva |
+| Varios comercios (Hito 6) | `n_comercios_cliente_3h` (comercios distintos del cliente en las 3 h anteriores). Solo la usa el recalibrador: los detectores de los hitos 3 y 4 no cambian | el fraude nuevo (`cash_out_multicomercio`) |
 
 La etiqueta (`es_fraude`, `tipo_fraude`) se guarda aparte y **nunca entra al modelo**. Cuando falta
 un valor se usa uno neutro en vez de NULL: un pago presencial no tiene sesión (0), la primera
@@ -330,9 +334,13 @@ el porcentaje de fraude entre las transacciones que la cumplen, para ver qué va
 ### 2. Reglas (`reglas_alerta.py`)
 
 Además de los modelos, hay una regla por tipo de fraude conocido sobre esas variables (p. ej.
-card testing: `n_tarjeta_10min >= 2 AND importe < 5`). Cada regla tiene una nota de riesgo y genera
+card testing: `n_tarjeta_10min >= 3 AND importe < 5`). Cada regla tiene una nota de riesgo y genera
 alertas en la tabla `alerta`. Sirven de referencia y cubren fraudes que los detectores de
 anomalías globales no ven (ver [Resultados](#resultados)).
+
+Los umbrales de cada regla están en `config.yaml` (sección `reglas`; `activa: false` la desactiva).
+Los iniciales se pusieron a mano (quedan en `reglas_alerta.UMBRALES_INICIALES`); los actuales salen
+del [ajuste con lo validado](#ajuste-de-umbrales-y-variables-hito-6) del Hito 6.
 
 ### 3. Preparación (`preparacion_datos_ml.py`)
 
@@ -481,6 +489,9 @@ El **scoring** hace: `generar_lote.py` (un día de transacciones nuevas) → `ca
 guardados: nunca entrena) → feedback de analistas (`simular_analistas.py` → `integrar_feedback.py`
 → `recalibrar_modelo.py` → `medir_feedback.py`) → validación.
 
+El **reentrenamiento** hace además, tras el feedback, `ajustar_umbrales.py`: rehace la propuesta de
+umbrales y variables con lo validado y avisa si `config.yaml` tiene otros valores (no lo cambia).
+
 `generar_lote.py` simula la llegada diaria de datos, ya que el dataset es sintético: crea un día de
 transacciones de los mismos clientes, tarjetas y dispositivos (los reconstruye con la semilla),
 con unos pocos fraudes conocidos sin confirmar todavía y los mismos errores de carga que el
@@ -602,24 +613,74 @@ anterior y se empieza otra vez con KMeans.
 
 Resultado en el periodo de test (6 semanas y media, ~7 alertas al día):
 
-- Semana 1 (KMeans, sin feedback todavía): el 26 % de las alertas son fraude. Semana 6
-  (recalibrado): el 52 %. Pero cada semana tiene una mezcla de fraude distinta; la comparación
-  justa es en los mismos días:
+- Semana 1 (KMeans, sin feedback todavía): el 26 % de las alertas son fraude. Semana 2
+  (recalibrado): el 51 %. Pero cada semana tiene una mezcla de fraude distinta; la comparación
+  justa es en los mismos días. Desde la semana 4 se aplica el
+  [ajuste de umbrales y variables](#ajuste-de-umbrales-y-variables-hito-6), igual en las tres filas:
 
 | Semanas 2 a 7 (mismos días y presupuesto) | Fraudes en la cola | Precisión | Recall |
 |---|---|---|---|
-| KMeans sin recalibrar | 70 | 28 % | 40 % |
-| Recalibrado solo con el banco | 98 | 39 % | 56 % |
-| Recalibrado con banco + analistas | 95 | 38 % | 54 % |
+| KMeans sin recalibrar | 70 | 29 % | 40 % |
+| Recalibrado solo con el banco | 97 | 40 % | 55 % |
+| Recalibrado con banco + analistas | 87 | 36 % | 49 % |
 
-- **Recalibrar con etiquetas mejora claramente** las alertas (+40 % de fraude encontrado con el
+- **Recalibrar con etiquetas mejora claramente** las alertas (+39 % de fraude encontrado con el
   mismo trabajo).
-- **El feedback de los analistas no añade nada medible** sobre los contracargos del banco: aquí el
-  banco confirma el 90 % del fraude y hay cientos de casos, y ~7 revisiones al día pesan poco. Donde
-  es imprescindible es en los lotes diarios nuevos: el banco aún no ha confirmado nada y los
+- **El feedback de los analistas no mejora** sobre los contracargos del banco: aquí el banco
+  confirma el 90 % del fraude y hay cientos de casos, y ~7 revisiones al día pesan poco. Sale algo
+  por debajo (87 frente a 97; sin el ajuste de variables, 91 frente a 98). Donde el feedback es
+  imprescindible es en los lotes diarios nuevos: el banco aún no ha confirmado nada y los
   veredictos de los analistas son las únicas etiquetas recientes.
 - Detalle en [resultados/conclusiones_feedback.md](resultados/conclusiones_feedback.md) y
   `resultados/feedback_semanal.png`.
+
+## Ajuste de umbrales y variables (Hito 6)
+
+Tras unas semanas de feedback, el equipo ajusta el sistema con lo que se ha validado.
+`ajustar_umbrales.py` lo hace en una **fecha de decisión** (`ajuste.semanas_validacion`: 3 semanas
+después del inicio del test, el 8 de agosto). Solo usa lo que se sabía ese día: fraudes
+confirmados por el banco y veredictos de los analistas. Después **comprueba** el resultado en los
+días siguientes con la etiqueta real, que no se ha usado para decidir, igual que el test.
+
+| Qué se ajusta | Cómo se decide (con lo validado) |
+|---|---|
+| Umbrales de las reglas | Rejilla de umbrales por regla. Se elige la de más F1 (precisión sobre cualquier fraude, recall sobre su tipo) en transacciones de hace más de 30 días, cuando el banco ya ha confirmado la mayoría. Solo cambia si el F1 mejora al menos 0,02; la regla se desactiva si su precisión no llega al 10 %. |
+| Umbral de la cola de alertas | Con los veredictos de los analistas: puntuación del recalibrado por debajo de la cual las alertas casi nunca eran fraude (dejar de revisarlas no pierde más del 5 % del fraude validado y ahorra al menos el 10 % de las revisiones). |
+| Variables del recalibrador | Importancia por permutación en las semanas de feedback: se quitan las que no aportan si así mejora la PR-AUC de validación. Variables nuevas (`ajuste.variables_candidatas`) para los tipos de fraude que no llegan a la cola: se añaden si separan ese tipo (AUC >= 0,75) sin empeorar la validación. |
+
+El script no toca `config.yaml`: imprime la propuesta para copiarla (secciones `reglas` y
+`feedback`), como `buscar_autoencoder.py`. La propuesta actual ya está copiada. Los ajustes del
+recalibrador (umbral y variables) se aplican **desde la fecha de decisión**: lo anterior, que es la
+evidencia del ajuste, no cambia al adoptarlos, y repetir el ajuste da la misma propuesta. Las reglas
+se recalculan sobre todo el histórico, porque no influyen en lo que revisan los analistas.
+
+Resultado (detalle en `resultados/ajuste_umbrales.md`, `ajuste_reglas.csv` y `ajuste_variables.csv`):
+
+| Comprobación (24 días tras la decisión) | Antes | Después |
+|---|---|---|
+| Reglas: alertas al día | 27,1 | 7,4 |
+| Reglas: precisión | 10 % | 28 % |
+| Reglas: recall | 60 % | 48 % |
+| Cola de analistas: fraudes encontrados (152-155 alertas) | 51 | 47 |
+
+- **Reglas: el ajuste funciona.** Cambian 5 reglas y `devolucion_abusiva` se desactiva (1 % de
+  precisión con cualquier umbral). Los analistas recibirían casi 4 veces menos alertas por reglas,
+  con casi el triple de precisión, a cambio de perder 12 puntos de recall. `bot` es el caso más
+  claro: de 3,5 a 0,7 alertas al día y de 14 % a 69 % de precisión, sin perder casi recall.
+- **Umbral de la cola: apenas cambia nada.** Los veredictos muestran que las alertas con
+  puntuación por debajo de 0,78 solo eran fraude en un 18 %, frente a más del 80 % por encima de
+  0,96. Pero después de la decisión el recalibrado puntúa más alto y el umbral solo quita 3 alertas.
+- **Variables: la validación no se sostiene.** Quitar 17 variables subía la PR-AUC de validación de
+  0,63 a 0,68, y `n_comercios_cliente_3h` separa el fraude nuevo con AUC 0,96. Pero en la
+  comprobación la cola encuentra 3-4 fraudes menos. Una causa es que en las semanas de validación no
+  había ningún `card_testing` conocido, así que las variables de velocidad de la tarjeta parecían
+  inútiles; quitarlas baja el recall de `card_testing` de 36 % a 27 %. La variable nueva tampoco
+  ayuda todavía: el banco solo había confirmado 3 casos del fraude nuevo.
+- **Lección: ajustar con la validación funciona cuando hay muchas etiquetas maduras** (reglas: 344
+  fraudes en 96 días) **y engaña cuando hay pocas** (variables: 74 fraudes en 3 semanas y no de
+  todos los tipos). Se deja adoptado lo que decidió la validación, porque cambiarlo mirando la
+  comprobación sería hacer trampa. En la siguiente revisión, con más etiquetas, lo indicado es
+  volver a poner las variables quitadas.
 
 ## Resultados
 

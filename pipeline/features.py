@@ -71,6 +71,9 @@ ventanas AS (
         -- velocidad del CLIENTE (con cualquiera de sus tarjetas): transacciones en la hora
         -- anterior y tiempo desde su transacción anterior
         count() OVER cliente_1h                                      AS n_cliente_1h,
+        -- comercios distintos del cliente en las 3 h anteriores (Hito 6: compras seguidas en
+        -- varios comercios, el patrón del fraude nuevo que encuentra la validación)
+        uniqExact(comercio_id) OVER cliente_3h                       AS n_comercios_cliente_3h,
         dateDiff('second', lagInFrame(timestamp) OVER cliente_orden_hasta_actual, timestamp)
                                                                      AS seg_desde_anterior_cliente_bruto,
         -- dispositivo compartido: clientes distintos que lo han usado hasta ahora (incluida esta)
@@ -89,6 +92,7 @@ ventanas AS (
                                        ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW),
         -- hora ANTERIOR sin contar la transacción actual (igual que tarjeta_1h)
         cliente_1h    AS (PARTITION BY cliente_id ORDER BY timestamp RANGE BETWEEN 3600 PRECEDING AND 1 PRECEDING),
+        cliente_3h    AS (PARTITION BY cliente_id ORDER BY timestamp RANGE BETWEEN 10800 PRECEDING AND 1 PRECEDING),
         -- por CLIENTE (no por tarjeta): 24 h anteriores INCLUIDA la transacción actual,
         -- para que pagar con una 2.ª tarjeta distinta ya cuente 2
         cliente_24h   AS (PARTITION BY cliente_id ORDER BY timestamp RANGE BETWEEN 86400 PRECEDING AND CURRENT ROW),
@@ -151,6 +155,7 @@ SELECT
     -- VELOCIDAD DEL CLIENTE (todas sus tarjetas). Su 1.ª transacción -> 30 días, como en la tarjeta
     v.n_cliente_1h                                            AS n_cliente_1h,
     if(v.n_previas_cliente = 0, 2592000, v.seg_desde_anterior_cliente_bruto) AS seg_desde_anterior_cliente,
+    v.n_comercios_cliente_3h                                  AS n_comercios_cliente_3h,
 
     -- HISTORIAL DEL CLIENTE (picos de gasto): z-score del importe respecto a SU historial
     v.n_previas_cliente                                       AS n_previas_cliente,
@@ -190,6 +195,7 @@ SENALES = {
     'n_tarjetas_cliente_24h >= 2': '>= 2 tarjetas distintas del cliente en 24 h',
     'n_cliente_1h >= 3': '>= 3 pagos del cliente en 1 h antes',
     'seg_desde_anterior_cliente <= 60': '<= 60 s desde el pago anterior del cliente',
+    'n_comercios_cliente_3h >= 2': 'Compras en >= 2 comercios distintos en las 3 h previas',
 }
 
 

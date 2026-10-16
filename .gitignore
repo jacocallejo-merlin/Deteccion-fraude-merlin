@@ -1,4 +1,4 @@
-venv/
+.venv/
 .env
 datos_ml/
 datos_ml_nuevo/

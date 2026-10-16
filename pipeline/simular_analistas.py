@@ -23,12 +23,13 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import CONFIG
 from integrar_feedback import integrar
-from recalibrar_modelo import (MODELO_BASE, RUTA_RECALIBRADOR, conectar, puntuar_alertas, recalibrar,
-                               toca_recalibrar, uno)
+from recalibrar_modelo import (MODELO_BASE, RUTA_RECALIBRADOR, conectar, fecha_decision, inicio_test,
+                               puntuar_alertas, recalibrar, toca_recalibrar, uno)
 
 _cfg = CONFIG['feedback']
 PRESUPUESTO = _cfg['presupuesto']
 RETRASO_HORAS = _cfg['retraso_revision_horas']
+UMBRAL_MINIMO = _cfg['umbral_minimo']
 P_ERROR = _cfg['p_error']
 SEMILLA = CONFIG['semilla']
 
@@ -58,13 +59,15 @@ def crear_tabla(client):
 
 
 def dias_pendientes(client):
-    """Días ya puntuados por el detector que todavía no ha revisado nadie."""
+    """Días ya puntuados por el detector, desde el inicio del test, que todavía no ha revisado nadie.
+    (puntuar_*.py puntúan también train y calentamiento: revisar esos días no simularía nada real.)"""
     filas = client.query('''
         SELECT DISTINCT toDate(timestamp) AS dia FROM features_transaccion
         WHERE transaccion_id IN (SELECT transaccion_id FROM anomaly_scores WHERE model = {m:String})
+          AND dia >= {inicio:Date}
           AND dia > (SELECT max(fecha_alerta) FROM feedback_analistas)
         ORDER BY dia
-    ''', parameters={'m': MODELO_BASE}).result_rows
+    ''', parameters={'m': MODELO_BASE, 'inicio': inicio_test()}).result_rows
     return [d for (d,) in filas]
 
 
@@ -74,6 +77,10 @@ def revisar_dia(client, dia, analistas):
     score, modelo, info = puntuar_alertas(df)
     n = max(1, round(len(df) * PRESUPUESTO))
     cola = info.assign(puntuacion=score).sort_values('puntuacion', ascending=False, kind='stable').head(n)
+    # Desde la fecha de decisión del ajuste, no se revisa lo que el recalibrado puntúa por debajo
+    # del umbral mínimo (ajustar_umbrales.py): casi nunca era fraude
+    if UMBRAL_MINIMO and modelo != MODELO_BASE and dia >= fecha_decision().date():
+        cola = cola[cola['puntuacion'] >= UMBRAL_MINIMO]
 
     rng = np.random.default_rng([SEMILLA, dia.toordinal()])    # mismo día -> mismas revisiones
     fin_dia = datetime.combine(dia + timedelta(days=1), datetime.min.time())
@@ -95,9 +102,12 @@ def revisar_dia(client, dia, analistas):
             'modelo': modelo,
         })
     revision = pd.DataFrame(filas)
+    if not filas:
+        print(f'{dia}: {len(df):>4} transacciones, ninguna por encima del umbral mínimo ({UMBRAL_MINIMO})')
+        return revision
     client.insert_df('feedback_analistas', revision)
     n_fraude = int((revision['veredicto'] == 'fraude').sum())
-    print(f'{dia}: {len(df):>4} transacciones, {n} revisadas con {modelo:<21} -> {n_fraude} fraude')
+    print(f'{dia}: {len(df):>4} transacciones, {len(revision)} revisadas con {modelo:<21} -> {n_fraude} fraude')
     return revision
 
 

@@ -1,34 +1,68 @@
-import os
 import clickhouse_connect
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from config import HOST, PORT, USER, PASSWORD, DATABASE
+from config import CONFIG, HOST, PORT, USER, PASSWORD, DATABASE
 
 # No usamos ni es_fraude ni tipo_fraude. La etiqueta solo se usa al final para evaluar.
-# (patron_id, nombre, tipo_fraude al que apunta, nota_riesgo, condición SQL)
-REGLAS = [
-    (1, 'pico_gasto', 'pico_gasto', 0.60,'z_importe_cliente > 3 AND ratio_importe_habitual >= 4'),
-    (2, 'card_testing', 'card_testing', 0.80,'n_tarjeta_10min >= 2 AND importe < 5'),
-    (3, 'smurfing', 'smurfing', 0.75,'importe >= 850 AND importe < 1000 AND n_previos_umbral_24h >= 1'),
-    (4, 'account_takeover', 'account_takeover', 0.85,'cambio_dato_sesion = 1 AND (num_intentos_login >= 3 OR dispositivo_nuevo = 1 OR ip_extranjera = 1)'),
-    (5, 'ip_sospechosa', 'ip_sospechosa', 0.60,'ip_extranjera = 1 AND proxy_vpn = 1'),
-    (6, 'dispositivo_nuevo', 'dispositivo_nuevo', 0.70,'dispositivo_nuevo = 1 AND ratio_importe_habitual >= 2'),
-    (7, 'devolucion_abusiva', 'devolucion_abusiva', 0.50,'n_devoluciones_30d >= 2'),
-    (8, 'bot', 'bot', 0.70,'min_seg_entre_eventos <= 3 AND n_eventos_sesion >= 4'),
-    (9, 'bust_out', 'bust_out', 0.90,'pct_limite_credito >= 0.85'),
-]
- 
+# Cada regla: (patron_id, nota_riesgo, condición SQL con sus umbrales entre llaves). El nombre de la
+# regla es el tipo de fraude al que apunta.
+PLANTILLAS = {
+    'pico_gasto':         (1, 0.60, 'z_importe_cliente > {z_minimo} AND ratio_importe_habitual >= {ratio_minimo}'),
+    'card_testing':       (2, 0.80, 'n_tarjeta_10min >= {pagos_10min_minimo} AND importe < {importe_maximo}'),
+    'smurfing':           (3, 0.75, 'importe >= {importe_minimo} AND importe < 1000 '
+                                    'AND n_previos_umbral_24h >= {previos_24h_minimo}'),
+    'account_takeover':   (4, 0.85, 'cambio_dato_sesion = 1 AND (num_intentos_login >= {intentos_login_minimo} '
+                                    'OR dispositivo_nuevo = 1 OR ip_extranjera = 1)'),
+    'ip_sospechosa':      (5, 0.60, 'ip_extranjera = 1 AND proxy_vpn = 1'),
+    'dispositivo_nuevo':  (6, 0.70, 'dispositivo_nuevo = 1 AND ratio_importe_habitual >= {ratio_minimo}'),
+    'devolucion_abusiva': (7, 0.50, 'n_devoluciones_30d >= {devoluciones_30d_minimo}'),
+    'bot':                (8, 0.70, 'min_seg_entre_eventos <= {seg_entre_eventos_maximo} '
+                                    'AND n_eventos_sesion >= {eventos_minimo}'),
+    'bust_out':           (9, 0.90, 'pct_limite_credito >= {pct_limite_minimo}'),
+}
 
-# Detectar patrones de smurfing, cuantas compras realizo la misma tarjeta en 24h
-SQL_BASE = '''
+# Umbrales con los que se diseñaron las reglas (Hito 3, a mano). Los que se usan están en
+# config.yaml (sección reglas); ajustar_umbrales.py (Hito 6) los ajusta con lo validado y compara
+# el resultado con estos.
+UMBRALES_INICIALES = {
+    'pico_gasto':         {'activa': True, 'z_minimo': 3, 'ratio_minimo': 4},
+    'card_testing':       {'activa': True, 'pagos_10min_minimo': 2, 'importe_maximo': 5},
+    'smurfing':           {'activa': True, 'importe_minimo': 850, 'previos_24h_minimo': 1},
+    'account_takeover':   {'activa': True, 'intentos_login_minimo': 3},
+    'ip_sospechosa':      {'activa': True},
+    'dispositivo_nuevo':  {'activa': True, 'ratio_minimo': 2},
+    'devolucion_abusiva': {'activa': True, 'devoluciones_30d_minimo': 2},
+    'bot':                {'activa': True, 'seg_entre_eventos_maximo': 3, 'eventos_minimo': 4},
+    'bust_out':           {'activa': True, 'pct_limite_minimo': 0.85},
+}
+
+
+def construir_reglas(umbrales):
+    """(patron_id, nombre, tipo_fraude al que apunta, nota_riesgo, condición SQL) de las reglas activas."""
+    return [(pid, nombre, nombre, nota, plantilla.format(**umbrales[nombre]))
+            for nombre, (pid, nota, plantilla) in PLANTILLAS.items() if umbrales[nombre]['activa']]
+
+
+UMBRALES = CONFIG['reglas']
+REGLAS = construir_reglas(UMBRALES)
+
+
+def sql_base(importe_minimo_smurfing):
+    """features_transaccion + compras previas de la tarjeta en 24 h en la franja del smurfing
+    (justo por debajo de 1.000 €), que usa la regla de smurfing."""
+    return f'''
     SELECT *,
-           countIf(importe >= 850 AND importe < 1000) OVER (
+           countIf(importe >= {importe_minimo_smurfing} AND importe < 1000) OVER (
                PARTITION BY metodo_id ORDER BY timestamp
                RANGE BETWEEN 86400 PRECEDING AND 1 PRECEDING) AS n_previos_umbral_24h
     FROM features_transaccion
 '''
- 
+
+
+SQL_BASE = sql_base(UMBRALES['smurfing']['importe_minimo'])
+
+
 def generar_alertas(client):
     client.command("ALTER TABLE alerta DELETE WHERE origen = 'regla' SETTINGS mutations_sync = 2")
     siguiente_id = client.query('SELECT ifNull(max(alerta_id), 0) + 1 FROM alerta').result_rows[0][0]
@@ -96,6 +130,9 @@ def main():
     generar_alertas(client)
     n = client.query("SELECT count() FROM alerta WHERE origen = 'regla'").result_rows[0][0]
     print(f'Alertas generadas por reglas: {n:,}')
+    desactivadas = [nombre for nombre, u in UMBRALES.items() if not u['activa']]
+    if desactivadas:
+        print(f'Reglas desactivadas en config.yaml: {", ".join(desactivadas)}')
     evaluar(client)
  
  

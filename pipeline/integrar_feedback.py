@@ -31,8 +31,16 @@ def crear_tabla(client):
     ''')
 
 
-def integrar(client, corte):
-    crear_tabla(client)
+def con_columnas(df, tipos):
+    """query_df devuelve un DataFrame sin columnas si no hay filas (p. ej. el banco aún no ha
+    confirmado ningún fraude): se crea vacío con sus columnas y tipos para que el merge funcione."""
+    if len(df):
+        return df
+    return pd.DataFrame({col: pd.Series(dtype=tipo) for col, tipo in tipos.items()})
+
+
+def etiquetas_conocidas_a(client, corte):
+    """Etiquetas que se conocían en `corte` (banco + analistas), sin escribir nada."""
     banco = client.query_df('''
         SELECT transaccion_id, tipo_fraude AS tipo_banco, fecha_confirmacion
         FROM transaccion
@@ -43,6 +51,10 @@ def integrar(client, corte):
         FROM feedback_analistas
         WHERE fecha_revision <= {c:DateTime}
     ''', parameters={'c': corte})
+    banco = con_columnas(banco, {'transaccion_id': 'uint32', 'tipo_banco': 'object',
+                                 'fecha_confirmacion': 'datetime64[ns]'})
+    analistas = con_columnas(analistas, {'transaccion_id': 'uint32', 'veredicto': 'object',
+                                         'tipo_analista': 'object', 'fecha_revision': 'datetime64[ns]'})
 
     df = banco.merge(analistas, on='transaccion_id', how='outer')
     en_banco = df['fecha_confirmacion'].notna()
@@ -54,6 +66,14 @@ def integrar(client, corte):
                     + en_analista.map({True: 'analista', False: ''}))
     df['fecha_conocida'] = df[['fecha_confirmacion', 'fecha_revision']].min(axis=1)
     df['corte'] = corte
+    return df
+
+
+def integrar(client, corte):
+    crear_tabla(client)
+    df = etiquetas_conocidas_a(client, corte)
+    en_banco = df['fecha_confirmacion'].notna()
+    en_analista = df['veredicto'].notna()
 
     client.command('TRUNCATE TABLE etiquetas_conocidas')
     columnas = ['transaccion_id', 'es_fraude', 'tipo_fraude', 'fuente', 'fecha_conocida', 'corte']
