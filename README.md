@@ -1,759 +1,610 @@
 # Herramienta antifraude: detección de anomalías en transacciones
 
-Pipeline que genera un dataset sintético de pagos, lo carga en ClickHouse, lo limpia, calcula
-variables por transacción y entrena detectores de anomalías no supervisados (Isolation Forest,
-KMeans, DBSCAN, One-Class SVM) y un autoencoder. Cada transacción recibe un score de anomalía que
-se guarda en la tabla `anomaly_scores`.
+Este proyecto es un sistema que **busca pagos fraudulentos** entre miles de pagos normales y avisa
+de los más sospechosos para que una persona los revise.
 
 
 ## Índice
 
-- [Herramienta antifraude: detección de anomalías en transacciones](#herramienta-antifraude-detección-de-anomalías-en-transacciones)
-  - [Índice](#índice)
-  - [Puesta en marcha](#puesta-en-marcha)
-  - [Cómo está organizado](#cómo-está-organizado)
-    - [Pasos del pipeline](#pasos-del-pipeline)
-  - [Correspondencia con los hitos](#correspondencia-con-los-hitos)
-  - [El dataset](#el-dataset)
-    - [Tipos de fraude](#tipos-de-fraude)
-    - [Qué lo hace realista](#qué-lo-hace-realista)
-  - [Calidad y limpieza de datos (Hitos 1 y 2)](#calidad-y-limpieza-de-datos-hitos-1-y-2)
-    - [Los tres pasos](#los-tres-pasos)
-    - [Cómo leer el informe de limpieza](#cómo-leer-el-informe-de-limpieza)
-  - [Exploración y estadística (Hitos 1 y 2)](#exploración-y-estadística-hitos-1-y-2)
-  - [Modelos clásicos (Hito 3)](#modelos-clásicos-hito-3)
-    - [1. Variables (`features.py`)](#1-variables-featurespy)
-    - [2. Reglas (`reglas_alerta.py`)](#2-reglas-reglas_alertapy)
-    - [3. Preparación (`preparacion_datos_ml.py`)](#3-preparación-preparacion_datos_mlpy)
-    - [4. Entrenamiento y elección de configuración (`modelos_nosupervisados.py`)](#4-entrenamiento-y-elección-de-configuración-modelos_nosupervisadospy)
-    - [5. Scoring (`puntuar_nosupervisados.py`)](#5-scoring-puntuar_nosupervisadospy)
-    - [6. Evaluación (`evaluar_modelos_nosupervisados.py`)](#6-evaluación-evaluar_modelos_nosupervisadospy)
-  - [Autoencoder (Hito 4)](#autoencoder-hito-4)
-  - [Orquestación y despliegue (Hito 5)](#orquestación-y-despliegue-hito-5)
-    - [Arquitectura](#arquitectura)
-    - [Los tres flujos](#los-tres-flujos)
-    - [Airflow](#airflow)
-    - [Kubernetes](#kubernetes)
-    - [Validación de reproducibilidad y consistencia](#validación-de-reproducibilidad-y-consistencia)
-  - [Feedback de analistas (Hito 6)](#feedback-de-analistas-hito-6)
-  - [Ajuste de umbrales y variables (Hito 6)](#ajuste-de-umbrales-y-variables-hito-6)
-  - [Resultados](#resultados)
-  - [Tests](#tests)
-  - [Carpetas](#carpetas)
-  - [Limitaciones](#limitaciones)
+**1. Entender el proyecto**
+- [El problema](#el-problema)
+- [La idea en una frase](#la-idea-en-una-frase)
+- [Cómo funciona, paso a paso](#cómo-funciona-paso-a-paso)
+- [Diccionario](#diccionario)
 
-## Puesta en marcha
+**2. Lo que hay dentro**
+- [Los datos](#los-datos)
+- [Los modelos: cinco formas de buscar lo raro](#los-modelos-cinco-formas-de-buscar-lo-raro)
+- [Los analistas y el aprendizaje semanal](#los-analistas-y-el-aprendizaje-semanal)
+- [La automatización](#la-automatización)
 
-Requisitos: Docker (para ClickHouse) y Python 3.13 (es la versión con la que se ha probado).
+**3. Resultados**
+- [Cómo sabemos que funciona (y no nos engañamos)](#cómo-sabemos-que-funciona-y-no-nos-engañamos)
+- [Qué ha salido](#qué-ha-salido)
+- [Lo que no hace bien (limitaciones)](#lo-que-no-hace-bien-limitaciones)
+- [Preguntas que os van a hacer](#preguntas-que-os-van-a-hacer)
 
-```bash
-docker compose up -d                  # ClickHouse local en los puertos 8123 y 9000
-python -m venv venv
-venv/Scripts/pip install -r requirements.txt    
-venv/Scripts/python main.py           # BORRA la base de datos y lo regenera todo
+**4. Usarlo**
+- [Ejecutarlo](#ejecutarlo)
+- [Qué mirar después de ejecutar](#qué-mirar-después-de-ejecutar)
+- [Mapa del proyecto](#mapa-del-proyecto)
+- [Correspondencia con los hitos](#correspondencia-con-los-hitos)
+
+---
+
+# 1. Entender el proyecto
+
+## El problema
+
+Cada día un banco procesa miles de pagos con tarjeta. Casi todos son normales: alguien compra en el
+supermercado, paga una cena o compra ropa por internet. Pero **más o menos 1 de cada 200 es
+fraude**: alguien que ha robado una tarjeta o ha entrado en la cuenta de otra persona.
+
+¿Por qué es difícil encontrarlos?
+
+- **Son muy pocos.** Si revisas pagos al azar, casi siempre encontrarás pagos normales.
+- **No se pueden revisar todos.** Con 650 pagos al día, el equipo de fraude solo tiene tiempo para
+  mirar unos pocos.
+- **Los estafadores cambian.** Si solo buscas lo que ya conoces ("compras de madrugada desde otro
+  país"), se te escapa el fraude nuevo que nadie ha descrito todavía.
+- **Lo raro no siempre es fraude.** Alguien que se compra un sofá de 2.000 € a las 3 de la mañana
+  es raro, pero no es un delincuente.
+
+## La idea en una frase
+
+> **El sistema da a cada pago una "nota de sospecha" y el equipo de fraude solo revisa los pagos
+> con la nota más alta.**
+
+Funciona como un **detector de humo**: no sabe qué es un incendio, pero sabe cómo es el aire normal
+y pita cuando algo se sale de lo normal. Después una persona va a ver si de verdad hay fuego.
+
+Y como un buen detector, **aprende**: cada semana mira qué alarmas eran fuego de verdad y cuáles
+eran una tostada quemada, y ajusta cuándo pitar.
+
+## Cómo funciona, paso a paso
+
+```
+  1. LLEGAN         2. SE LIMPIAN      3. SE DESCRIBEN      4. SE PUNTÚAN
+  los pagos    ──►  (errores,     ──►  (~35 datos por  ──►  (nota de sospecha
+  del día           duplicados)        cada pago)           con KMeans)
+                                                                 │
+                                                                 ▼
+  7. CADA SEMANA        6. LOS ANALISTAS          5. SE ELIGEN LAS ALERTAS
+  el sistema    ◄────── dicen si era      ◄────── (el 1 % con la nota más
+  aprende               fraude o no                 alta: unos 7 pagos al día)
+     │
+     └──► y la semana siguiente las alertas salen mejor ordenadas
 ```
 
-Opciones de `main.py`:
+1. **Llegan los pagos del día.** Cada pago trae: importe, fecha y hora, tarjeta, comercio, si fue
+   por internet o en tienda, desde qué móvil u ordenador, desde qué país…
+2. **Se limpian.** Los datos reales vienen sucios: pagos repetidos, fechas en formatos distintos,
+   "España" escrito de tres formas, importes en dólares… Si no se arreglan, el sistema se equivoca.
+3. **Se describen.** De cada pago se calculan unas 35 características que ayudan a ver si es
+   sospechoso. Por ejemplo: *¿cuántas veces se ha usado esta tarjeta en los últimos 10 minutos?*,
+   *¿este importe es normal para este cliente?*, *¿es un móvil que el cliente no había usado nunca?*
+4. **Se puntúan.** Un modelo (KMeans) compara cada pago con los pagos normales y le da una nota:
+   cuanto más raro, más alta.
+5. **Se eligen las alertas.** El 1 % de pagos con la nota más alta (unos 7 al día) pasa a una lista
+   de alertas.
+6. **Los analistas revisan.** Una persona del equipo de fraude mira cada alerta y decide: ¿es
+   fraude o es legítimo?
+7. **El sistema aprende.** Cada semana, con lo que ya se sabe que era fraude (lo que dijeron los
+   analistas y lo que confirmó el banco), se entrena un segundo modelo que reordena las alertas.
 
-| Comando | Qué hace |
+Todo esto se ejecuta **solo, cada día**, sin que nadie tenga que lanzarlo.
+
+## Diccionario
+
+**Sobre el negocio**
+
+| Palabra | Qué significa |
 |---|---|
-| `python main.py` | Borra la base de datos y ejecuta todos los pasos. Con la misma semilla sale siempre lo mismo. |
-| `python main.py --reutilizar-datos` | No regenera el dataset; ejecuta el resto. |
-| `python main.py --desde PASO` | Empieza en ese paso sin borrar nada (p. ej. `--desde modelos_nosupervisados`). |
-| `python main.py --scoring` | Sin borrar ni entrenar: añade un día de transacciones nuevas, las limpia, las puntúa con los modelos guardados y valida. |
+| **Transacción** | Un pago. Usamos las dos palabras para lo mismo. |
+| **Fraude** | Un pago que no ha hecho el dueño de la tarjeta (o que hace el dueño para estafar al banco). |
+| **Legítimo** | Un pago normal, hecho por su dueño. |
+| **Alerta** | Un pago que el sistema marca como sospechoso para que alguien lo revise. |
+| **Analista** | La persona del equipo de fraude que revisa las alertas. |
+| **Falsa alarma** (falso positivo) | Una alerta que al final era un pago normal. |
+| **Contracargo** | Cuando el cliente reclama al banco "este pago no lo hice yo" y le devuelven el dinero. Es la forma en que el banco **confirma** que algo era fraude. Tarda días o semanas. |
 
-Si un paso falla, el pipeline se detiene ahí. Todos los parámetros (semilla, tamaño del dataset,
-errores simulados, particiones, rejillas de hiperparámetros, autoencoder) están en
-[config.yaml](config.yaml).
+**Sobre los modelos**
 
-Sin instalar Python, todo con Docker (los resultados quedan en las mismas carpetas):
+| Palabra | Qué significa |
+|---|---|
+| **Modelo** | Un programa que aprende de datos a hacer algo; aquí, a dar una nota de sospecha. |
+| **Variable** (o *feature*) | Cada uno de los ~35 datos que describen un pago (importe, hora, pagos en la última hora…). |
+| **Etiqueta** | La respuesta correcta: si un pago era fraude o no. En la vida real se sabe tarde y no siempre. |
+| **Supervisado / no supervisado** | Un modelo *supervisado* aprende con ejemplos de la respuesta ("esto es fraude, esto no"). Uno *no supervisado* no ve respuestas: solo aprende cómo son los pagos normales y marca lo que se sale. Los 5 modelos principales son no supervisados. |
+| **Anomalía** | Algo que se sale de lo normal. No siempre es fraude. |
+| **Entrenar** | Enseñar al modelo con datos del pasado. |
+| **Semilla** | Un número que fija el azar. Con la misma semilla, el resultado sale siempre igual (así se puede repetir). |
 
-```bash
-docker compose run --rm --build pipeline                       # = python main.py
-docker compose run --rm pipeline python main.py --scoring     # un día más de datos, puntuado
-```
+**Sobre cómo se mide** (lo más importante para defender el proyecto)
 
-Airflow y Kubernetes: ver [Orquestación y despliegue](#orquestación-y-despliegue-hito-5).
+| Palabra | Qué significa | Ejemplo |
+|---|---|---|
+| **Precisión** | De las alertas que revisas, ¿cuántas eran fraude? | 26 % = de cada 100 alertas, 26 eran fraude de verdad. |
+| **Recall** (o cobertura) | Del fraude que hubo, ¿cuánto encontraste? | 42 % = de cada 100 fraudes, 42 llegaron a las alertas. |
+| **PR-AUC** | Una nota de 0 a 1 que resume lo bien que el modelo pone el fraude arriba de la lista. 1 = perfecto. Al azar se saca lo que vale la proporción de fraude (0,007). | KMeans saca 0,41: unas 60 veces más que el azar. |
+| **Entrenamiento / validación / test** | Los datos se parten por fechas, como un examen: con el **entrenamiento** se estudia, con la **validación** se elige el mejor modelo, y el **test** (los datos más recientes, que nadie ha tocado) es el examen final. | |
+| **Intervalo de confianza** | El margen de error. Con pocos fraudes, una cifra puede variar por suerte. | PR-AUC entre 0,30 y 0,52. |
 
-## Cómo está organizado
+**Sobre la parte técnica**
 
-Cada caja es un script; a la derecha, lo que lee (◄) y lo que escribe (►). Las tablas están en
-ClickHouse y las carpetas en el disco.
+| Palabra | Qué significa |
+|---|---|
+| **Pipeline** | La cadena de pasos (cargar → limpiar → describir → puntuar…) que se ejecutan uno detrás de otro. |
+| **ClickHouse** | La base de datos donde se guardan todos los pagos y resultados. Es muy rápida con muchos datos. |
+| **Docker** | Una "caja" que lleva el programa con todo lo que necesita, para que funcione igual en cualquier ordenador. |
+| **Airflow** | Un programa que lanza el pipeline solo, cada día, y avisa si algo falla. Cada flujo de pasos se llama **DAG**. |
+| **Kubernetes** | Un sistema para ejecutar esas "cajas" en servidores, de forma programada y escalable. |
 
-```
- 1. CARGA ─────────────────────────────────────────────────────────────────────────────────────
-  BD_VACIAS.py ................ ► base de datos fraude_pagos con las 15 tablas vacías
-        │
-  dataset.py .................. ► cliente, comercio, dispositivo, cliente_dispositivo, metodo_pago,
-        │                          canal_pago, sesion, evento, devolucion, analista, patron
-        │                        ► transaccion_bruta   (las transacciones, con la fecha en texto)
-        │                          (alerta queda vacía: la rellena reglas_alerta.py)
-        │
-  carga_transacciones.py ...... ◄ transaccion_bruta
-        │                        ► transaccion              (fecha convertida a UTC)
-        │                        ► transaccion_cuarentena   (fecha ilegible, con el motivo)
+---
 
- 2. LIMPIEZA ──────────────────────────────────────────────────────────────────────────────────
-  informe_limpieza.py ......... ◄ las 13 tablas de origen + transaccion_cuarentena
-        │                        ► resultados/informe_limpieza.txt   (calidad ANTES de limpiar)
-        │
-  limpieza.py ................. ◄► las 13 tablas de origen (las corrige en el sitio:
-        │                          duplicados, mayúsculas/espacios, divisas, emails)
+# 2. Lo que hay dentro
 
- 3. VARIABLES ─────────────────────────────────────────────────────────────────────────────────
-  crear_tabla_enriquecida.py .. ◄ transaccion + cliente, metodo_pago, canal_pago, comercio,
-        │                          sesion, dispositivo
-        │                        ► transacciones_enriquecidas   (una fila por transacción, todo unido)
-        │                        ► alertas_enriquecidas   (vista: alerta + patron + analista)
-        │
-  features.py ................. ◄ transacciones_enriquecidas, evento, devolucion, cliente_dispositivo
-        │                        ► features_transaccion   (las ~35 variables numéricas)
-        │
-        ├──► reglas_alerta.py ..... ◄ features_transaccion   ► alerta   (una regla por tipo de fraude)
-        │
-        └──► notebooks/ ........... ◄ cualquier tabla (sobre todo transaccion,
-                                       transacciones_enriquecidas y features_transaccion)
-                                     ► resultados/hito2/
+## Los datos
 
- 4. ENTRENAMIENTO ─────────────────────────────────────────────────────────────────────────────
-  preparacion_datos_ml.py ..... ◄ features_transaccion
-        │                        ► datos_ml/   (X_train, X_test, info_train, info_test, escalador)
-        │
-        ├──► modelos_nosupervisados.py ◄ datos_ml/
-        │                               ► modelos/   (IForest, KMeans, DBSCAN, OCSVM + scores)
-        │                               ► anomaly_scores   (scores de test)
-        │
-        └──► entrenar_autoencoder.py ... ◄ datos_ml/
-                                        ► modelos/autoencoder.pt + scores
-                                        ► anomaly_scores   (scores de test)
+### ¿Por qué son inventados?
 
- 5. SCORING ───────────────────────────────────────────────────────────────────────────────────
-  puntuar_nosupervisados.py ... ◄ features_transaccion, modelos/   ► anomaly_scores   (las que faltan)
-  puntuar_autoencoder.py ...... ◄ features_transaccion, modelos/   ► anomaly_scores   (las que faltan)
+Los bancos no comparten datos reales de sus clientes (son privados). Por eso el propio proyecto
+**genera datos sintéticos**: inventados por un programa, pero que se comportan como los reales.
+Lo hace el script `pipeline/dataset.py`.
 
- 6. FEEDBACK DE ANALISTAS (Hito 6) ────────────────────────────────────────────────────────────
-  simular_analistas.py ........ ◄ anomaly_scores, features_transaccion ► feedback_analistas
-  integrar_feedback.py ........ ◄ feedback_analistas, transaccion       ► etiquetas_conocidas
-  recalibrar_modelo.py ........ ◄ etiquetas_conocidas, features         ► modelos/recalibrador.joblib
-  medir_feedback.py ........... ◄ feedback_analistas, transaccion       ► resultados/feedback_semanal.*
-  ajustar_umbrales.py ......... ◄ etiquetas validadas, features         ► resultados/ajuste_umbrales.md (propuesta para config.yaml)
+### Qué contiene
 
- 7. EVALUACIÓN ────────────────────────────────────────────────────────────────────────────────
-  evaluar_modelos_nosupervisados.py ◄ modelos/, datos_ml/   ► resultados/conclusiones.md, CSV, curvas PR
-  evaluar_autoencoders.py ......... ◄ modelos/, datos_ml/   ► resultados/historico_autoencoders.csv
-  comparacion_modelos.py .......... ◄ modelos/, datos_ml/   ► resultados/conclusiones_hito4.md
-  validacion_reproducibilidad_consistencia.py ◄ todo lo anterior ► resultados/validacion_<fecha>.txt
+- **2.000 clientes**, cada uno con 1 a 3 tarjetas y 1 a 3 dispositivos (móvil, ordenador, tablet).
+- **30 comercios** (tiendas online y físicas).
+- **Unos 117.000 pagos en 180 días** (unos 650 al día).
+- **Fraude: el 0,5 %** de los pagos (1 de cada 200).
+- Todo repartido en 13 tablas: clientes, tarjetas, comercios, dispositivos, sesiones (cada vez que
+  alguien entra en la web o la app), eventos (cada clic dentro de una sesión), pagos y devoluciones.
 
-  Cada entrenamiento copia sus artefactos y el config.yaml usado en historico/<run_id>/
-```
+Cada cliente tiene su forma de comprar: unos gastan más, otros menos, unos compran por la mañana y
+otros por la noche, algunos viajan, algunos usan VPN… Esto es importante: el sistema compara cada
+pago **con lo que es normal para ese cliente**.
 
-Todo el tratamiento de datos (carga, limpieza, variables) se hace en SQL dentro de ClickHouse.
-Python solo trae a memoria los datos ya preparados para entrenar.
+### Los 10 tipos de fraude
 
-### Pasos del pipeline
+| Tipo | Qué hace el estafador | En la vida real |
+|---|---|---|
+| `card_testing` | Hace muchas compras muy pequeñas seguidas | Ha robado tarjetas y prueba cuáles funcionan con compras de 1 € |
+| `smurfing` | Reparte una cantidad grande en varias compras de poco menos de 1.000 € | Evita los controles que saltan a partir de 1.000 € |
+| `account_takeover` | Entra en la cuenta de otro, cambia la contraseña y compra | Robo de cuenta |
+| `ip_sospechosa` | Compra desde otro país, a menudo con VPN | Alguien en otro país usa los datos robados |
+| `dispositivo_nuevo` | Compra desde un móvil que el cliente nunca había usado | El estafador usa su propio móvil |
+| `pico_gasto` | Hace un gasto mucho mayor de lo normal para ese cliente | Aprovecha la tarjeta antes de que la bloqueen |
+| `devolucion_abusiva` | Compra y devuelve una y otra vez | Abusa de las devoluciones |
+| `bot` | Un programa hace clics a velocidad no humana | Compras automatizadas |
+| `bust_out` | Se porta bien unos meses y de golpe gasta todo el límite de la tarjeta | "Me voy con todo y no pago" |
+| `cash_out_multicomercio` | **Fraude desconocido** (ver abajo) | |
 
-| # | Script | Entrada | Salida |
+### Lo que hace que los datos sean difíciles (y realistas)
+
+- **El fraude desconocido.** `cash_out_multicomercio` solo aparece en las últimas semanas. El
+  sistema **nunca lo ha visto** y no se diseñó nada pensando en él: es la prueba de si detecta
+  fraude nuevo. Imita muy bien a un cliente normal: usa su móvil, su país e importes normales.
+- **Los clientes normales también hacen cosas raras.** Compras grandes de vez en cuando, viajes,
+  un móvil nuevo, VPN, cambiar la contraseña… Así el sistema no puede hacer trampa pensando "todo lo
+  raro es fraude".
+- **El banco tarda en saber qué era fraude.** Como en la vida real, cada fraude se confirma con
+  retraso (de media, 12 días después, cuando el cliente reclama) y **un 10 % no se confirma nunca**.
+- **Los datos llegan sucios.** Se meten a propósito los errores típicos de los datos reales:
+  - pagos repetidos (el sistema los envió dos veces);
+  - el mismo valor escrito distinto ("España", " españa", "ESPAÑA");
+  - fechas en tres formatos y zonas horarias diferentes;
+  - fechas imposibles (31 de febrero);
+  - importes en dólares o libras en vez de euros.
+
+### Cómo se limpian
+
+| Paso | Script | Qué hace |
+|---|---|---|
+| Cargar | `carga_transacciones.py` | Convierte las fechas (que llegan como texto) a un formato único en hora UTC. Las fechas imposibles se apartan a una tabla de "cuarentena" para revisarlas a mano. Comprueba que no se pierde ningún pago. |
+| Medir la calidad | `informe_limpieza.py` | Antes de limpiar, cuenta los problemas: nulos, duplicados, formatos, divisas… Lo guarda en `resultados/informe_limpieza.txt`. Que ponga `REVISAR` no es un error: es que ha encontrado los problemas que se metieron a propósito. |
+| Limpiar | `limpieza.py` | Quita duplicados, unifica los textos, pasa todo a euros y comprueba que no queda nada pendiente. |
+
+### Las 35 variables: cómo se describe un pago
+
+Para cada pago se calculan datos que ayudan a ver si es sospechoso (`features.py`). **Solo se usa
+información del pasado**: al describir un pago de las 10:00 no se mira nada de después de las
+10:00, igual que en la vida real.
+
+| Grupo | Ejemplos | Ayuda a detectar |
+|---|---|---|
+| Importe | Importe, qué parte del límite de la tarjeta gasta | Bust-out |
+| Hora | Hora, día de la semana, si es de madrugada o fin de semana | Fraude nocturno |
+| Canal | Online o en tienda, web o app, si se usó autenticación | |
+| Sesión y dispositivo | VPN, intentos de contraseña, IP de otro país, móvil nuevo, cuántos clientes usan ese móvil | Robo de cuenta, IP sospechosa, bots |
+| Velocidad de la tarjeta | Pagos en los últimos 10 min / 1 h / 24 h, tiempo desde el pago anterior | Card testing, smurfing |
+| Velocidad del cliente | Pagos del cliente en la última hora, tarjetas distintas en 24 h | Uso de varias tarjetas |
+| Historial del cliente | ¿Este importe es normal para él? (z-score), devoluciones en el último mes | Pico de gasto, devoluciones |
+
+La respuesta (si es fraude o no) **nunca** entra en el modelo: se guarda aparte y solo se usa para
+medir los resultados.
+
+## Los modelos: cinco formas de buscar lo raro
+
+Ninguno de estos cinco modelos sabe qué es fraude. Todos aprenden **cómo son los pagos normales** y
+dan una nota más alta a los que se salen de ahí. Se probaron los cinco para ver cuál funciona
+mejor.
+
+| Modelo | Cómo piensa (explicado fácil) |
+|---|---|
+| **Isolation Forest** | Va partiendo los pagos con cortes al azar ("¿importe mayor que 50?", "¿de madrugada?"). Un pago raro se queda solo con muy pocos cortes; uno normal necesita muchos. |
+| **KMeans** ⭐ | Agrupa los pagos en unos pocos "perfiles típicos" (aquí, 3). La nota es la distancia del pago a su perfil más parecido: si no se parece a ninguno, es raro. |
+| **DBSCAN** | Busca las zonas donde hay muchos pagos juntos. Lo que queda lejos de todas esas zonas es raro. |
+| **One-Class SVM** | Dibuja una frontera alrededor de los pagos normales. Lo que cae fuera es raro. |
+| **Autoencoder** (red neuronal) | Aprende a "copiar" pagos normales: los comprime y los vuelve a reconstruir. Si un pago no lo sabe reconstruir bien, es que no se parece a lo normal. La nota es lo mal que lo copia. |
+
+**¿Cuál se eligió?** **KMeans**, porque es el que mejor pone el fraude arriba de la lista. Cada
+modelo se probó con varias configuraciones (unas 40 en total) y se quedó la mejor de cada uno.
+
+Además de los modelos hay **reglas fijas** (`reglas_alerta.py`), una por tipo de fraude conocido.
+Por ejemplo, card testing: *"2 o más pagos de la tarjeta en 10 minutos y el importe es menor de
+5 €"*. Son útiles para los fraudes que los modelos no ven bien, pero solo detectan lo que ya se
+conoce.
+
+## Los analistas y el aprendizaje semanal
+
+**El problema de KMeans:** busca lo **raro**, no lo que es **fraude**. Por eso, de cada 100 alertas,
+solo unas 26 son fraude de verdad.
+
+**La solución:** aprender de lo que ya se sabe. Es lo que en el mundo de la IA se llama
+*human-in-the-loop* (una persona dentro del ciclo).
+
+Como no tenemos analistas reales, **se simulan** (`simular_analistas.py`):
+
+- Al final de cada día "revisan" las 7 alertas con la nota más alta.
+- Dicen si cada una es fraude o legítima. Como es una simulación, miran la respuesta real, pero
+  **a veces se equivocan** a propósito: los junior un 8 % de las veces y los senior un 2 %.
+- Tardan entre 2 horas y 2 días en responder.
+- Todo se guarda en la tabla `feedback_analistas` (qué pago, quién lo revisó, cuándo, qué dijo y
+  un comentario).
+
+Hay **dos fuentes** para saber qué era fraude, y se juntan (`integrar_feedback.py`):
+
+| Fuente | Ventaja | Inconveniente |
+|---|---|---|
+| **El banco** (contracargos) | Muy fiable | Tarda unos 12 días, y un 10 % nunca llega |
+| **Los analistas** | Rápido (1-2 días) | Solo de las 7 alertas revisadas, y a veces se equivocan |
+
+Si las dos fuentes no coinciden, manda el banco.
+
+**Cada semana** (`recalibrar_modelo.py`) se entrena un segundo modelo, ahora sí **supervisado**
+(aprende de ejemplos con respuesta). Recibe la nota de KMeans y las 35 variables, y aprende
+*"las alertas con estas características solían ser fraude; estas otras, falsas alarmas"*. A
+partir de ese momento las alertas se ordenan con él. KMeans no desaparece: su nota es una de las
+cosas que mira el nuevo modelo.
+
+Por último, `medir_feedback.py` comprueba semana a semana si las alertas mejoran.
+
+## La automatización
+
+Todo el proceso se ejecuta solo:
+
+| Cuándo | Qué se hace |
+|---|---|
+| **Cada día** | Llegan los pagos nuevos → se limpian → se describen → se puntúan → los analistas revisan → si ha pasado una semana, el sistema aprende |
+| **Cada semana** (domingo) | Se vuelven a entrenar los modelos con todos los datos |
+| **Una vez, al empezar** | Se crea la base de datos y se cargan los datos iniciales |
+
+Se puede ejecutar de cuatro formas, de más sencilla a más "profesional":
+
+| Forma | Para qué |
+|---|---|
+| **En tu ordenador** (`python main.py`) | Para desarrollar y probar |
+| **Docker** | Para ejecutarlo sin instalar Python |
+| **Airflow** | Para que se lance solo cada día, con una web donde ver cada paso y si ha fallado |
+| **Kubernetes** | Para ejecutarlo en servidores de forma programada |
+
+En cada ejecución, `validacion_reproducibilidad_consistencia.py` comprueba que todo cuadra (que no
+falta ningún pago, que no hay duplicados y que, con la misma semilla, sale exactamente lo mismo).
+Si algo falla, la ejecución se marca en rojo.
+
+---
+
+# 3. Resultados
+
+## Cómo sabemos que funciona (y no nos engañamos)
+
+Es muy fácil hacer trampa sin querer y que un modelo parezca mejor de lo que es. Para evitarlo se
+mide **como se haría en un banco real**:
+
+1. **El examen es con datos del futuro.** Los pagos se ordenan por fecha: el 70 % más antiguo
+   sirve para entrenar y el 30 % más reciente es el examen final (test). El modelo nunca ve el
+   examen antes de tiempo.
+2. **Se elige con unos datos y se mide con otros.** El mejor modelo se elige con la *validación*
+   (el final del periodo de entrenamiento) y después se mide en *test*. Si se eligiera mirando el
+   test, sería como copiar en el examen.
+3. **Las respuestas llegan tarde.** Al elegir, solo se conocen los fraudes que el banco ya había
+   confirmado en ese momento, como pasaría de verdad.
+4. **Hay un fraude que nunca se ha visto.** El `cash_out_multicomercio` mide si el sistema
+   detecta fraude nuevo.
+5. **Se da el margen de error.** Con pocos fraudes una cifra puede salir bien por suerte, así que
+   cada resultado lleva su intervalo de confianza.
+6. **El resultado se puede repetir.** Con la misma semilla, todo sale exactamente igual.
+
+## Qué ha salido
+
+> Las cifras salen de la última ejecución completa. Pueden variar un poco si se vuelve a
+> ejecutar con otros datos o con otra configuración.
+
+### Los modelos
+
+Medido en el test (los últimos 46 días, unos 29.000 pagos y 201 fraudes):
+
+| Modelo | PR-AUC test | Margen (95 %) | Fraude encontrado revisando el 1 % |
 |---|---|---|---|
-| 1 | `BD_VACIAS.py` | — | Base de datos y tablas vacías |
-| 2 | `dataset.py` | — | Datos sintéticos con fraude etiquetado (9 tipos + 1 desconocido) y errores típicos de datos reales |
-| 3 | `carga_transacciones.py` | `transaccion_bruta` (texto) | `transaccion` (tipada, en UTC) y `transaccion_cuarentena` |
-| 4 | `informe_limpieza.py` | tablas origen | `resultados/informe_limpieza.txt`: calidad de los datos tal como llegan |
-| 5 | `limpieza.py` | tablas origen | Tablas origen sin duplicados y con formatos unificados |
-| 6 | `crear_tabla_enriquecida.py` | tablas origen | `transacciones_enriquecidas` |
-| 7 | `features.py` | `transacciones_enriquecidas` | `features_transaccion` (una fila por transacción) |
-| 8 | `reglas_alerta.py` | `features_transaccion` | Alertas por reglas |
-| 9 | `preparacion_datos_ml.py` | `features_transaccion` | `datos_ml/`: X/info de train y test, escalador |
-| 10 | `modelos_nosupervisados.py` | `datos_ml/` | `modelos/`: modelos, scores, `resumen_entrenamiento.json`; `anomaly_scores` |
-| 11 | `entrenar_autoencoder.py` | `datos_ml/` | `modelos/autoencoder.pt` y scores |
-| 12 | `puntuar_nosupervisados.py` | modelos guardados | Scores de las transacciones aún sin puntuar |
-| 13 | `puntuar_autoencoder.py` | autoencoder guardado | Ídem para el autoencoder |
-| 14 | `simular_analistas.py` | scores del día | `feedback_analistas`: veredicto de las alertas del 1 % más sospechoso |
-| 15 | `integrar_feedback.py` | `feedback_analistas`, `transaccion` | `etiquetas_conocidas`: banco + analistas |
-| 16 | `recalibrar_modelo.py` | `etiquetas_conocidas` | `modelos/recalibrador.joblib` (cada semana) |
-| 17 | `medir_feedback.py` | `feedback_analistas` | `resultados/feedback_semanal.csv/png`, `conclusiones_feedback.md` |
-| 18 | `ajustar_umbrales.py` | etiquetas conocidas en la fecha de decisión | `resultados/ajuste_umbrales.md`, `ajuste_reglas.csv`, `ajuste_variables.csv`: propuesta de umbrales y variables |
-| 19 | `evaluar_modelos_nosupervisados.py` | scores de val y test | `resultados/`: comparativa, curvas PR, conclusiones |
-| 20 | `evaluar_autoencoders.py` | scores del autoencoder | Análisis del autoencoder |
-| 21 | `comparacion_modelos.py` | scores de val y test | Comparativa final |
-| 22 | `validacion_reproducibilidad_consistencia.py` | todo lo anterior | Informe de reproducibilidad |
+| **KMeans** ⭐ | **0,41** | 0,30 – 0,52 | **42 %** |
+| One-Class SVM | 0,37 | 0,26 – 0,48 | 42 % |
+| DBSCAN | 0,33 | 0,23 – 0,43 | 32 % |
+| Autoencoder | 0,21 | 0,13 – 0,32 | 25 % |
+| Isolation Forest | 0,15 | 0,08 – 0,27 | 25 % |
 
-Cada entrenamiento guarda una copia de sus artefactos y del `config.yaml` usado en
-`historico/<run_id>/`.
+**Cómo leerlo:**
+
+- **Revisando solo el 1 % de los pagos (unos 7 al día), KMeans encuentra el 42 % del fraude.** Si
+  se revisara al azar, se encontraría el 1 %.
+- **De cada 100 alertas, 26 son fraude de verdad.** Las otras 74 son falsas alarmas.
+- **Si se revisara el 5 %** (unos 35 al día) se encontraría el 73 % del fraude, pero solo 10 de
+  cada 100 alertas serían fraude.
+- **KMeans, One-Class SVM y DBSCAN están empatados.** Sus márgenes de error se solapan, así que
+  lo correcto es decir que KMeans "no es peor que los demás", no que "es el mejor".
+
+### Qué fraude detecta y cuál no
+
+| Tipo | Lo detecta | Por qué |
+|---|---|---|
+| Bust-out, dispositivo nuevo | 100 % | Gastan casi todo el límite o usan un móvil nunca visto: muy raro |
+| Account takeover | 91 % | Cambio de contraseña + móvil o país raros |
+| Bot | 75 % | Clics a velocidad no humana |
+| Card testing | 73 % | Muchas compras pequeñísimas seguidas |
+| Smurfing | 18 % | Solo es raro en 1 o 2 cosas (importes cerca de 1.000 €) |
+| IP sospechosa | 5 % | Solo cambia el país; todo lo demás es normal |
+| Pico de gasto, devolución abusiva | 0 % | Solo es raro en 1 cosa (el importe o las devoluciones) |
+| **Fraude desconocido** | **0 %** | Imita a un cliente normal: su móvil, su país, importes normales |
+
+**¿Por qué se escapan algunos?** Un detector de anomalías mira **todas las variables a la vez**.
+Si un fraude solo es raro en una cosa (por ejemplo, el país) y en todo lo demás es normal, en
+conjunto no parece raro. Para estos casos funcionan mejor las **reglas** que miran esa variable
+concreta.
+
+**¿Y el fraude desconocido?** Ningún modelo lo detecta, porque **no es raro**: se parece a una compra
+normal. Tampoco lo verán los analistas, porque solo revisan lo que el detector pone arriba. La
+única vía es que el banco lo confirme (cuando los clientes reclamen) y que el modelo recalibrado
+aprenda a reconocerlo.
+
+### Lo que mejora al aprender (Hito 6)
+
+Comparando **los mismos días con el mismo trabajo** (unas 7 alertas al día):
+
+| Cómo se ordenan las alertas | Fraudes encontrados | Precisión | Recall |
+|---|---|---|---|
+| Solo KMeans (sin aprender) | 67 | 28 % | 39 % |
+| Aprendiendo de lo que confirma el banco | 95 | 40 % | 55 % |
+| Aprendiendo del banco + los analistas | 92 | 38 % | 53 % |
+
+**Cómo leerlo:**
+
+- ✅ **Aprender de los fraudes confirmados mejora mucho.** Con el mismo trabajo, se encuentra un
+  37 % más de fraude.
+- ⚠️ **Lo que aportan los analistas no se nota en estos datos.** El banco ya confirma unos 500
+  fraudes, y 7 revisiones al día pesan poco al lado. Es un resultado honesto y se cuenta tal cual.
+- 💡 **Los analistas sí son imprescindibles con los pagos más recientes.** El banco tarda unos
+  12 días en confirmar, así que lo de esta semana solo lo saben los analistas.
+- 📈 La semana 1 tenía un 23 % de alertas que eran fraude y la semana 6 un 47 %. Pero cuidado: cada
+  semana tiene un tipo de fraude distinto, así que la comparación justa es la de la tabla.
+
+### Una cosa que parece rara: ¿por qué sale mejor en el examen que en la práctica?
+
+La PR-AUC de KMeans es **0,13 en validación** y **0,41 en test**. Parece que el modelo mejora con
+datos nuevos, y eso no tiene sentido. La explicación:
+
+- En validación, al elegir el modelo, solo se conocían **26 de los 57 fraudes** (el resto aún no
+  lo había confirmado el banco). Los no confirmados cuentan como pagos normales, así que el modelo
+  que los pone arriba parece que se equivoca.
+- Si se mide la validación con **todas** las respuestas (solo para comprobarlo, no para elegir),
+  sale **0,32**, cerca del 0,41 del test.
+- El resto de la diferencia es que en validación hay muchos fraudes de los tipos difíciles (pico de
+  gasto, IP sospechosa).
+
+## Lo que no hace bien (limitaciones)
+
+Contarlas da credibilidad. Son estas:
+
+- **Los datos son inventados.** Están hechos para ser difíciles, pero las variables se diseñaron
+  sabiendo qué tipos de fraude había. En esos tipos, los resultados son algo optimistas. El fraude
+  desconocido es la medida más honesta, y ahí el sistema falla.
+- **Hay pocos fraudes para elegir el modelo.** Solo 26 confirmados en validación. Por eso los
+  modelos empatan.
+- **3 de cada 4 alertas son falsas alarmas.** Es normal en fraude, pero hay margen de mejora.
+- **Los fraudes "de una sola cosa"** (pico de gasto, IP sospechosa, devoluciones) se escapan al
+  detector. Necesitan reglas.
+- **El banco nunca confirma los fraudes de los días nuevos simulados** (`generar_lote.py`). En la
+  vida real sí llegarían. *(Pendiente de corregir.)*
+- **Las reglas y el modelo van por separado.** Lo ideal sería una única cola de alertas con las
+  dos cosas. *(Pendiente: parte de "ajuste de umbrales" del Hito 6.)*
+- **Probado en pequeño.** 2.000 clientes y un clúster de Kubernetes de un solo ordenador.
+
+## Preguntas que os van a hacer
+
+**¿Por qué no usar directamente un modelo que aprenda con ejemplos de fraude (supervisado)?**
+Porque al empezar no hay ejemplos: el banco tarda semanas en confirmar el fraude, y el fraude
+nuevo no tiene ejemplos nunca. Por eso se empieza con un detector de rarezas y, cuando ya hay
+fraudes confirmados, se añade el modelo supervisado (Hito 6). Se usan los dos.
+
+**¿Por qué KMeans y no la red neuronal (autoencoder), que es más moderna?**
+Porque se eligió el que mejor funciona con los datos, no el más moderno. El autoencoder quedó
+cuarto. Además, KMeans es más fácil de explicar: *"este pago no se parece a ninguno de los perfiles
+normales"*.
+
+**¿Por qué solo el 1 %?**
+Es lo que da tiempo a revisar a un equipo pequeño (unos 7 pagos al día). Se puede cambiar en
+`config.yaml`. Revisando el 5 % se encuentra el 73 % del fraude, pero con muchas más falsas alarmas.
+
+**¿Cómo sé que no habéis hecho trampa?**
+El examen (test) son los datos más recientes, que nadie toca hasta el final; las variables solo
+miran el pasado; y hay tests automáticos que lo comprueban (`tests/test_features_sin_futuro.py`).
+
+**¿Si lo ejecuto yo, me sale lo mismo?**
+Sí. Con la misma semilla (`semilla: 42` en `config.yaml`) sale exactamente igual, y cada ejecución
+lo comprueba.
+
+**¿Funcionaría con datos reales?**
+El pipeline sí: basta con cambiar la carga de datos. Los resultados habría que volver a medirlos,
+porque los datos reales tendrán otros patrones.
+
+---
+
+# 4. Usarlo
+
+## Ejecutarlo
+
+### Lo que necesitas
+
+- **Docker Desktop** (para la base de datos ClickHouse).
+- **Python 3.13**.
+
+### La primera vez
+
+```powershell
+docker compose up -d                                 # arranca la base de datos
+python -m venv venv                                  # crea el entorno de Python
+venv\Scripts\pip install -r requirements.txt         # instala las librerías
+copy .env.example .env                               # y escribe la contraseña de ClickHouse en .env
+```
+
+### Comandos del día a día
+
+| Quiero… | Comando | Tarda |
+|---|---|---|
+| Arrancar la base de datos (si el ordenador se ha reiniciado) | `docker compose up -d` | 1 min |
+| **Generarlo todo desde cero** (borra la base de datos) | `venv\Scripts\python.exe main.py` (o el ▶ de VS Code con `main.py` abierto) | ~15 min |
+| Rehacerlo todo **sin** regenerar los datos | `venv\Scripts\python.exe main.py --reutilizar-datos` | ~12 min |
+| Empezar desde un paso concreto | `venv\Scripts\python.exe main.py --desde entrenar_autoencoder` | depende |
+| **Simular un día nuevo** (como hace Airflow cada día) | `venv\Scripts\python.exe main.py --scoring` | ~5 min |
+| Pasar los tests | `venv\Scripts\python.exe -m pytest tests` | 1 min |
+
+Si un paso falla, el pipeline se para ahí y dice cuál ha sido.
+
+### Repetir solo la parte de los analistas
+
+```powershell
+# 1. Vaciar las revisiones anteriores
+venv\Scripts\python.exe -c "import sys; sys.path.insert(0,'.'); import clickhouse_connect; from config import *; clickhouse_connect.get_client(host=HOST,port=PORT,username=USER,password=PASSWORD,database=DATABASE).command('TRUNCATE TABLE feedback_analistas')"
+
+# 2. Volver a simularlo todo (revisa ~47 días y aprende cada semana)
+venv\Scripts\python.exe pipeline\simular_analistas.py
+venv\Scripts\python.exe pipeline\integrar_feedback.py
+venv\Scripts\python.exe pipeline\recalibrar_modelo.py
+venv\Scripts\python.exe pipeline\medir_feedback.py
+```
+
+### Con Docker, Airflow o Kubernetes
+
+```powershell
+# Docker, sin instalar Python
+docker compose run --rm --build pipeline                       # = python main.py
+docker compose run --rm pipeline python main.py --scoring      # un día más
+
+# Airflow (después, abrir http://localhost:8080)
+docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
+#   1. lanzar fraude_setup (crea los datos)
+#   2. lanzar fraude_entrenamiento (entrena)
+#   3. fraude_scoring se lanza solo cada día
+
+# Kubernetes (clúster local con kind)
+docker build -t fraude-pipeline:latest .
+kind create cluster --name fraude
+kind load docker-image fraude-pipeline:latest --name fraude
+kubectl apply -k k8s/
+kubectl create -f k8s/job-pipeline-completo.yaml
+```
+
+**Importante:** no lanzar a la vez el entrenamiento y el scoring diario, porque los dos rehacen las
+mismas tablas.
+
+Todos los ajustes (semilla, tamaño de los datos, porcentaje de alertas, errores de los analistas…)
+están en **`config.yaml`**, comentados.
+
+## Qué mirar después de ejecutar
+
+| Para ver… | Abre |
+|---|---|
+| **El resumen de los modelos**: cuál gana, qué detecta, cuánto fiarse | `resultados/conclusiones.md` |
+| Las curvas de los 5 modelos | `resultados/curvas_pr_test.png` |
+| La comparación con la red neuronal (Hito 4) | `resultados/conclusiones_hito4.md`, `comparativa_final_pr.png` |
+| **Si mejora al aprender** (Hito 6) | `resultados/feedback_semanal.png`, `conclusiones_feedback.md` |
+| La calidad de los datos antes de limpiar | `resultados/informe_limpieza.txt` |
+| Si la última ejecución cuadra | `resultados/validacion_<fecha>.txt` |
+| Los números en tablas | `resultados/comparativa_test.csv`, `recall_por_tipo_test.csv`, `feedback_semanal.csv` |
+| Gráficos de exploración | `notebooks/` (necesitan ClickHouse arrancado) |
+
+Y dentro de **ClickHouse** (base de datos `fraude_pagos`):
+
+| Tabla | Qué tiene |
+|---|---|
+| `transaccion` | Los pagos ya limpios |
+| `features_transaccion` | Las ~35 variables de cada pago |
+| `anomaly_scores` | La nota de sospecha de cada pago, con cada modelo |
+| `alerta` | Las alertas de las reglas fijas |
+| `feedback_analistas` | Lo que dijeron los analistas de cada alerta |
+| `etiquetas_conocidas` | Lo que se sabe que es fraude (banco + analistas) |
+
+## Mapa del proyecto
+
+### Carpetas
+
+| Carpeta | Qué hay |
+|---|---|
+| `pipeline/` | Los scripts del pipeline (uno por paso) |
+| `main.py` | El que lanza todos los pasos en orden |
+| `config.yaml` | Todos los ajustes |
+| `notebooks/` | Exploración de los datos y gráficos (Hitos 1 y 2) |
+| `dags/` | Los flujos de Airflow |
+| `k8s/` | La configuración de Kubernetes |
+| `tests/` | Comprobaciones automáticas |
+| `datos_ml/` | Los datos ya preparados para los modelos (se genera) |
+| `modelos/` | Los modelos entrenados (se genera) |
+| `resultados/` | Informes, tablas y gráficos (se genera) |
+| `historico/` | Una copia de cada ejecución, para poder volver atrás (se genera) |
+| `legacy/` | Código antiguo que ya no se usa |
+
+### Los pasos, en orden
+
+| # | Script | Qué hace |
+|---|---|---|
+| 1 | `BD_VACIAS.py` | Crea la base de datos y las tablas vacías |
+| 2 | `dataset.py` | Inventa los datos (clientes, pagos, fraudes) con errores a propósito |
+| 3 | `carga_transacciones.py` | Carga los pagos y arregla las fechas |
+| 4 | `informe_limpieza.py` | Cuenta los problemas de calidad |
+| 5 | `limpieza.py` | Arregla los problemas |
+| 6 | `crear_tabla_enriquecida.py` | Junta en una tabla todo lo de cada pago (cliente, comercio, sesión…) |
+| 7 | `features.py` | Calcula las ~35 variables |
+| 8 | `reglas_alerta.py` | Aplica las reglas fijas |
+| 9 | `preparacion_datos_ml.py` | Parte los datos por fechas (entrenamiento / test) y los prepara |
+| 10 | `modelos_nosupervisados.py` | Entrena Isolation Forest, KMeans, DBSCAN y One-Class SVM |
+| 11 | `entrenar_autoencoder.py` | Entrena la red neuronal |
+| 12-13 | `puntuar_nosupervisados.py`, `puntuar_autoencoder.py` | Ponen nota a los pagos que aún no la tienen |
+| 14 | `simular_analistas.py` | Los analistas revisan las alertas de cada día |
+| 15 | `integrar_feedback.py` | Junta lo que dicen los analistas con lo que confirma el banco |
+| 16 | `recalibrar_modelo.py` | Cada semana, el sistema aprende de lo confirmado |
+| 17 | `medir_feedback.py` | Mide si las alertas mejoran semana a semana |
+| 18-20 | `evaluar_modelos_nosupervisados.py`, `evaluar_autoencoders.py`, `comparacion_modelos.py` | Comparan los modelos y escriben las conclusiones |
+| 21 | `validacion_reproducibilidad_consistencia.py` | Comprueba que todo cuadra |
+
+El scoring diario (`main.py --scoring`) hace: generar un día nuevo (`generar_lote.py`) → pasos 3 y
+5 a 8 → pasos 12 a 17 → paso 21. Nunca vuelve a entrenar los modelos principales.
 
 ## Correspondencia con los hitos
 
 | Hito | Qué se pedía | Dónde está | Estado |
 |---|---|---|---|
-| 1. Introducción y exploración | Base de datos ClickHouse, carga, informe de limpieza inicial, visualizaciones básicas | `BD_VACIAS.py`, `dataset.py`, `carga_transacciones.py`, `informe_limpieza.py`, `notebooks/exploracion_visualizacion.ipynb` | Hecho |
-| 2. Estadística y preprocesamiento | Limpieza y normalización, outliers (Z-score, IQR, boxplots), patrones simples, dataset limpio para ML | `limpieza.py`, `notebooks/outliers_patrones_tecnicas.ipynb` (tablas en `resultados/hito2/`), `preparacion_datos_ml.py` | Hecho |
-| 3. ML para anomalías | Isolation Forest, One-Class SVM, KMeans, DBSCAN; feature engineering; ajuste de hiperparámetros; scoring | `features.py`, `modelos_nosupervisados.py`, `puntuar_nosupervisados.py`, `evaluar_modelos_nosupervisados.py` | Hecho |
-| 4. Autoencoders | Autoencoder, error de reconstrucción, comparación con los clásicos, scripts reproducibles | `entrenar_autoencoder.py`, `puntuar_autoencoder.py`, `evaluar_autoencoders.py`, `comparacion_modelos.py` | Hecho |
-| 5. Orquestación y despliegue | DAGs, Docker, Kubernetes, ejecuciones periódicas, reproducibilidad | `dags/fraude_dags.py`, `Dockerfile`, `airflow/Dockerfile`, `docker-compose*.yml`, `k8s/`, `generar_lote.py`, `main.py --scoring`, `validacion_reproducibilidad_consistencia.py` | Hecho |
-| 6. Feedback humano y dashboards | Feedback de analistas, ajuste de umbrales, dashboards | Feedback: `simular_analistas.py`, `integrar_feedback.py`, `recalibrar_modelo.py`, `medir_feedback.py`. Umbrales y variables: `ajustar_umbrales.py`. Dashboard (HTML): pendiente | En curso |
-
-## El dataset
-
-Los datos los genera el propio proyecto (`dataset.py`): 2.000 clientes, 30 comercios y unas 117.000
-transacciones en 180 días, repartidas en 13 tablas (clientes, tarjetas, dispositivos, sesiones,
-eventos, transacciones, devoluciones, alertas…). Se han hecho deliberadamente difíciles para que se
-parezcan a los de un banco. Todo se configura en la sección `dataset` de `config.yaml`.
-
-### Tipos de fraude
-
-| Tipo | Qué es |
-|---|---|
-| `card_testing` | Muchas compras pequeñas seguidas para comprobar si una tarjeta robada funciona |
-| `smurfing` | Una cantidad grande repartida en varias compras justo por debajo de un umbral |
-| `account_takeover` | Alguien roba el acceso a la cuenta, cambia datos y compra |
-| `ip_sospechosa` | Compra desde una IP de otro país, a menudo con VPN |
-| `dispositivo_nuevo` | Compra desde un dispositivo que el cliente no había usado nunca |
-| `pico_gasto` | Un gasto mucho mayor de lo habitual para ese cliente |
-| `devolucion_abusiva` | Varias compras que se devuelven poco después |
-| `bot` | Sesión automática: eventos separados por menos de unos segundos |
-| `bust_out` | El cliente se porta bien un tiempo y de golpe agota el crédito |
-| `cash_out_multicomercio` | **Desconocido**: ver abajo |
-
-### Qué lo hace realista
-
-- **Fraude escaso**: el 0,5 % de las transacciones. En tarjetas reales es aún menor; 0,5 % es un
-  compromiso para que queden suficientes fraudes de cada tipo que medir.
-- **Fraude desconocido** (`cash_out_multicomercio`): un patrón nuevo que solo aparece en los últimos
-  40 días, dentro del test. Credenciales robadas usadas desde el propio dispositivo y país del
-  cliente para comprar en varios comercios seguidos. No hay casos en entrenamiento ni variables o
-  reglas pensadas para él: mide si los modelos detectan fraude que nadie había descrito.
-- **Etiquetas con retraso e incompletas**: cada fraude tiene una `fecha_confirmacion` (retraso
-  log-normal, mediana 12 días, como un contracargo) y un 10 % no se confirma nunca. Al entrenar
-  solo cuentan como fraude los confirmados antes del final del periodo de train; el resto cuenta
-  como legítimo (así se elige el modelo y se escogen las legítimas del autoencoder). El test se
-  mide con la etiqueta real, como se haría cuando las etiquetas ya han madurado. La etiqueta real
-  de train queda en `es_fraude_real` / `tipo_fraude_real` de `info_train.parquet`.
-- **Historial antes del fraude**: los primeros 30 días no tienen fraude (`DIAS_SIN_FRAUDE`), para
-  que cada cliente tenga un comportamiento normal con el que compararse. Por el mismo motivo
-  `preparacion_datos_ml.py` descarta esos días. Al final del periodo se deja margen para que los
-  casos largos (la devolución abusiva dura semanas) terminen dentro de los datos.
-- **Errores de datos reales**: ver la sección siguiente.
-
-## Calidad y limpieza de datos (Hitos 1 y 2)
-
-`dataset.py` genera datos limpios y, con `suciedad.activar: true` en `config.yaml`, les añade los
-errores más habituales de los datos reales antes de cargarlos (con una semilla aparte, así que el
-dataset de fondo no cambia):
-
-- **Filas duplicadas**: transacciones, sesiones y eventos que llegan dos veces (reenvíos, reingestas).
-- **Mismo valor escrito de varias formas**: `"España"`, `" españa"`, `"ESPAÑA"`; `"aprobada"`/`"Aprobada "`;
-  emails con mayúsculas o espacios.
-- **Fechas como texto en varios formatos y zonas horarias**: `2026-03-05 11:22:33` (UTC, el
-  habitual), `05/03/2026 11:22:33` (otro sistema) y `2026-03-05T12:22:33+01:00` (hora de Madrid con
-  su desfase, que cambia en verano).
-- **Fechas imposibles o vacías** (`31/02/2026`, mes 13, `""`): no se pueden recuperar.
-- **Importes en otra divisa** (USD, GBP) en vez de euros.
-
-Sin limpiar, estos errores rompen las variables sin dar ningún error: una sesión desde `" España"`
-contaría como IP extranjera para un cliente de `"España"`, una transacción `"Rechazada "` no contaría
-como rechazo, una transacción duplicada contaría dos veces en las ventanas de velocidad, un importe
-en dólares se compararía con el historial en euros y una hora con otro desfase desordenaría las
-ráfagas de pagos.
-
-### Los tres pasos
-
-1. **`carga_transacciones.py`** pasa `transaccion_bruta` (texto, tal como llega) a `transaccion`:
-   reconoce cada formato de fecha y lo convierte a UTC. Las fechas ilegibles van a
-   `transaccion_cuarentena` con el motivo, para revisarlas a mano. Comprueba que
-   `cargadas + cuarentena = brutas`, es decir, que no se pierde ninguna fila.
-2. **`informe_limpieza.py`** mide la calidad de los datos **tal como llegan, antes de limpiarlos**
-   (nulos, duplicados, formatos, divisas, cuarentena, huérfanos, fechas imposibles, outliers) y la
-   guarda en `resultados/informe_limpieza.txt`.
-3. **`limpieza.py`** los corrige en ClickHouse:
-   - Quita las filas idénticas (`OPTIMIZE ... FINAL DEDUPLICATE`). Las filas con el mismo
-     identificador y contenido distinto **no** se tocan: se informan para revisarlas a mano.
-   - Unifica los valores categóricos: agrupa los que solo difieren en mayúsculas o espacios y
-     se queda con la forma mayoritaria. Los países se resuelven mirando a la vez `cliente.pais`,
-     `comercio.pais` y `sesion.ip_pais`.
-   - Pasa los importes a euros con el tipo de cambio de `config.yaml` (simplificación: un tipo fijo;
-     en real sería el del día de la operación).
-   - Pasa los emails a minúsculas y sin espacios.
-   - Al final comprueba que no queda nada pendiente; si queda, el pipeline se para.
-
-### Cómo leer el informe de limpieza
-
-Cada comprobación termina con una de estas marcas:
-
-| Marca | Significado |
-|---|---|
-| `OK` / `limpio` | No hay ningún problema |
-| `ok (motivo)` | Hay valores nulos, pero son esperables (p. ej. `sesion_id` nulo en pagos con datáfono) |
-| `REVISAR (n)` | Se han encontrado `n` filas con ese problema en los datos de origen |
-
-`REVISAR` no es un fallo del pipeline: es lo que el informe tiene que encontrar, porque los errores
-se inyectan a propósito. Los duplicados, los valores escritos de varias formas, las divisas y los
-emails los corrige `limpieza.py` en el paso siguiente. Las transacciones en cuarentena no se
-recuperan. El resto (por ejemplo, devoluciones mayores que la compra o importes atípicos) se
-informa para que una persona decida.
-
-La limpieza recupera el dataset de fondo salvo dos cosas, igual que pasaría con datos reales: las
-transacciones en cuarentena se pierden (~0,1 %) y los importes convertidos pueden variar un céntimo
-por el redondeo.
-
-## Exploración y estadística (Hitos 1 y 2)
-
-| Notebook | Contenido |
-|---|---|
-| `exploracion_visualizacion.ipynb` | Modelo de datos (13 tablas), filas por tabla, estadística descriptiva por clase, variables categóricas, correlaciones, distribución de importes, transacciones por cliente, comercio, dispositivo y tarjeta |
-| `outliers_patrones_tecnicas.ipynb` | Outliers univariantes del importe (boxplots, Z-score, IQR), patrones simples de fraude (picos de gasto, ráfagas de pagos) y técnicas estadísticas de detección. Guarda sus tablas en `resultados/hito2/` para consultarlas sin ejecutarlo |
-| `visualizacion_kmeans.ipynb` | Proyección en 2D de los clusters de KMeans y dónde caen los fraudes |
-
-Los notebooks leen de ClickHouse, así que hace falta haber ejecutado antes `main.py`.
-
-## Modelos clásicos (Hito 3)
-
-### 1. Variables (`features.py`)
-
-Se calculan en SQL sobre ClickHouse y **solo usan información anterior a cada transacción**
-(las ventanas excluyen la transacción actual o terminan en ella), para que el modelo no vea
-el futuro.
-
-| Grupo | Variables | Ayuda a detectar |
-|---|---|---|
-| Importe | `log_importe`, `pct_limite_credito` | bust-out |
-| Tiempo | hora y día de la semana (codificados con seno/coseno), `es_finde`, `es_madrugada`, días desde el alta | fraude nocturno |
-| Canal y método | `es_online`, `canal_app`, `canal_web`, `es_credito`, `rechazada`, `sin_autenticacion` | — |
-| Sesión y dispositivo | `proxy_vpn`, `num_intentos_login`, `ip_extranjera`, `dispositivo_nuevo`, `n_clientes_dispositivo`, eventos de la sesión, `min_seg_entre_eventos` | account takeover, IP sospechosa, bots |
-| Velocidad de la tarjeta | pagos en 10 min / 1 h / 24 h, importe en 10 min, rechazos en 1 h, `seg_desde_anterior_tarjeta` | card testing, smurfing |
-| Velocidad del cliente | `n_cliente_1h` (transacciones por hora), `seg_desde_anterior_cliente`, `n_tarjetas_cliente_24h` (tarjetas distintas) | uso de varias tarjetas seguidas |
-| Historial del cliente | `z_importe_cliente` (z-score del importe frente a su historial), `ratio_importe_habitual`, `n_devoluciones_30d` | pico de gasto, devolución abusiva |
-| Varios comercios (Hito 6) | `n_comercios_cliente_3h` (comercios distintos del cliente en las 3 h anteriores). Solo la usa el recalibrador: los detectores de los hitos 3 y 4 no cambian | el fraude nuevo (`cash_out_multicomercio`) |
-
-La etiqueta (`es_fraude`, `tipo_fraude`) se guarda aparte y **nunca entra al modelo**. Cuando falta
-un valor se usa uno neutro en vez de NULL: un pago presencial no tiene sesión (0), la primera
-transacción de una tarjeta está a "30 días" de la anterior, y con menos de 5 compras previas el
-z-score vale 0.
-
-Al terminar, `features.py` imprime una tabla de señales simples (p. ej. `n_tarjeta_10min >= 3`) con
-el porcentaje de fraude entre las transacciones que la cumplen, para ver qué variables separan bien.
-
-### 2. Reglas (`reglas_alerta.py`)
-
-Además de los modelos, hay una regla por tipo de fraude conocido sobre esas variables (p. ej.
-card testing: `n_tarjeta_10min >= 3 AND importe < 5`). Cada regla tiene una nota de riesgo y genera
-alertas en la tabla `alerta`. Sirven de referencia y cubren fraudes que los detectores de
-anomalías globales no ven (ver [Resultados](#resultados)).
-
-Los umbrales de cada regla están en `config.yaml` (sección `reglas`; `activa: false` la desactiva).
-Los iniciales se pusieron a mano (quedan en `reglas_alerta.UMBRALES_INICIALES`); los actuales salen
-del [ajuste con lo validado](#ajuste-de-umbrales-y-variables-hito-6) del Hito 6.
-
-### 3. Preparación (`preparacion_datos_ml.py`)
-
-1. Se descartan los primeros 30 días (los clientes aún no tienen historial).
-2. Logaritmo en variables muy asimétricas y codificación cíclica de hora y día.
-3. **Partición temporal**: el 70 % más antiguo es train y el 30 % más reciente es test.
-4. `StandardScaler` ajustado **solo con train** y aplicado a test.
-
-### 4. Entrenamiento y elección de configuración (`modelos_nosupervisados.py`)
-
-El train se divide otra vez por fecha: el 85 % más antiguo es el **ajuste** y el 15 % más
-reciente es la **validación** (las mismas filas para todos los modelos).
-
-- Cada configuración de la rejilla se entrena con el ajuste **sin etiquetas**.
-- Se elige la de mayor PR-AUC en validación. Es el único uso de la etiqueta: entrenamiento no
-  supervisado, selección de modelo con un conjunto de validación etiquetado.
-- La configuración elegida se reentrena con 5 semillas para comprobar que el resultado no
-  depende del azar.
-
-| Modelo | Score (más alto = más anómalo) | Notas |
-|---|---|---|
-| Isolation Forest | `-score_samples` | Rejilla: `n_estimators`, `max_samples`, `max_features` |
-| KMeans | Distancia al centroide más cercano | Rejilla: `k` |
-| DBSCAN | Distancia al punto central (core point) más cercano; si es mayor que `eps`, es ruido | No tiene `predict`: se guardan sus puntos centrales. Muestra de 10.000 filas. Rejilla: `eps`, `min_samples` |
-| One-Class SVM | `-decision_function` | Muestra de 10.000 filas. Rejilla: `nu`, `gamma` |
-
-Para cada modelo se guarda en `modelos/`:
-
-- `<modelo>.joblib`: el modelo entrenado.
-- `<modelo>_referencia.joblib`: scores del ajuste, ordenados, para convertir un score en percentil.
-- `<modelo>_scores_{train,val,test}.parquet`: scores en bruto y normalizados (0 = típico, 1 = percentil 99 del ajuste).
-- `resumen_entrenamiento.json`: configuración elegida, PR-AUC de validación y estabilidad.
-
-### 5. Scoring (`puntuar_nosupervisados.py`)
-
-Puntúa con los modelos guardados todas las transacciones de `features_transaccion` que aún no
-tienen score de ese modelo. Aplica exactamente la misma preparación que en el entrenamiento
-(`preparar_features`: mismas variables, transformaciones y escalador, **sin reajustar nada**).
-
-Resultado en la tabla `anomaly_scores`:
-
-| Columna | Significado |
-|---|---|
-| `transaccion_id` | Transacción |
-| `model` | `iforest`, `kmeans`, `dbscan`, `ocsvm` o `autoencoder` |
-| `score` | Score en bruto |
-| `score_pct` | Percentil frente al ajuste (0,99 = más rara que el 99 % de las transacciones de entrenamiento) |
-| `run_id` | Ejecución que lo generó |
-
-Al entrenar solo se guardan en ClickHouse los scores de test; en la primera ejecución el
-scoring rellena el resto (train, validación y los días de calentamiento). Esos scores son
-*dentro de muestra* para las transacciones con las que se entrenó el modelo.
-
-### 6. Evaluación (`evaluar_modelos_nosupervisados.py`)
-
-- Modelo elegido: el de mejor PR-AUC en **validación**. El test solo se usa para medir.
-- Métricas en test: PR-AUC (con intervalo de confianza por bootstrap agrupado por cliente),
-  ROC-AUC y lift.
-- Puntos de operación con umbrales fijados en validación: revisar el 1 % más sospechoso y el
-  umbral de F1 máximo.
-- Recall por tipo de fraude.
-- Salidas en `resultados/`: `comparativa_test.csv`, `bootstrap_eleccion_val.csv`,
-  `recall_por_tipo_test.csv`, `curvas_pr_test.png` y `conclusiones.md`.
-
-## Autoencoder (Hito 4)
-
-Implementado en PyTorch. Usa los mismos datos preparados, la misma validación y el mismo formato
-de scores que los clásicos, así que se compara con ellos en igualdad de métricas.
-
-| Script | En `main.py` | Qué hace |
-|---|---|---|
-| `pipeline/entrenar_autoencoder.py` | sí | Entrena la configuración de `config.yaml` (sección `autoencoder`) y guarda `modelos/autoencoder.pt`, su referencia y los scores |
-| `pipeline/puntuar_autoencoder.py` | sí | Puntúa en `anomaly_scores` las transacciones pendientes (`model = 'autoencoder'`) |
-| `pipeline/evaluar_autoencoders.py` | sí | Métricas del autoencoder, error por variable y `resultados/historico_autoencoders.csv` |
-| `pipeline/comparacion_modelos.py` | sí | Comparativa con los clásicos: `resultados/conclusiones_hito4.md` y `comparativa_final_pr.png` |
-| `pipeline/buscar_autoencoder.py` | no | Prueba la rejilla `busqueda_autoencoder` (~4 min por combinación) y apunta cada una en `resultados/busqueda_autoencoder.csv`; no toca el modelo en uso |
-| `generar_test_autoencoder.py` | no | Genera un dataset nuevo (otra semilla) en la base `fraude_pagos_nuevo` y lo prepara en `datos_ml_nuevo/` con `preparar_test_autoencoder.py` |
-| `evaluar_test_autoencoder.py` | no | Mide el autoencoder entrenado sobre ese dataset que no ha visto nunca |
-
-- **Entrenamiento semi-supervisado**: solo con transacciones legítimas según la etiqueta
-  *conocida* al entrenar (los fraudes aún no confirmados cuentan como legítimos, igual que en
-  la elección de los clásicos). Score = error de reconstrucción (MSE medio por variable).
-- **Parada temprana** con la pérdida de las legítimas de validación (sin ruido).
-- **Elección de arquitectura**: igual que los clásicos, mejor PR-AUC en validación. La
-  configuración elegida se reentrena con `semillas_estabilidad` para comprobar que el resultado
-  no depende del azar (`modelos/autoencoder_resumen.json`).
-
-Prueba con datos nuevos (opcional, no afecta a la base de datos principal):
-
-```bash
-python generar_test_autoencoder.py      # --semilla 777 --dias 75 por defecto
-python evaluar_test_autoencoder.py
-```
-
-## Orquestación y despliegue (Hito 5)
-
-El mismo pipeline se puede ejecutar de cuatro formas. Todas lanzan los mismos scripts de
-`pipeline/`, con las mismas versiones de librerías y la misma semilla:
-
-| Forma | Para qué | Cómo |
-|---|---|---|
-| Local | Desarrollo | `venv/Scripts/python main.py` |
-| Docker Compose | Ejecutar sin instalar Python | `docker compose run --rm pipeline` |
-| Airflow | Orquestar con DAGs, reintentos e interfaz web | `docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build` |
-| Kubernetes | Ejecución programada y escalable | `kubectl apply -k k8s/` |
-
-### Arquitectura
-
-```
-                         ┌──────────────── imagen fraude-pipeline (Dockerfile) ───────────────┐
-                         │ python:3.13-slim + requirements-pipeline.txt + torch CPU           │
-                         │ config.py, config.yaml, main.py, pipeline/                          │
-                         └──────────────────────────────┬─────────────────────────────────────┘
-                                                        │
-   main.py               (completo: BORRA y regenera)   │      ┌─────────────────────────────┐
-   main.py --reutilizar-datos   (reentrenamiento)  ─────┼────► │ ClickHouse (fraude_pagos)   │
-   main.py --scoring     (lote nuevo -> puntuar)        │      │ tablas de origen, features, │
-                                                        │      │ alerta, anomaly_scores      │
-                                                        │      └─────────────────────────────┘
-                                                        ▼
-                                  volumen de artefactos: datos_ml/  modelos/  resultados/  historico/
-                                  (lo escribe el entrenamiento; el scoring solo lo lee)
-```
-
-- **Los datos no van en la imagen.** ClickHouse es su propio contenedor (con volumen persistente) y
-  los artefactos (escalador, modelos, resultados) van a un volumen. La imagen solo lleva código y
-  dependencias, así que vale para entrenar y para puntuar.
-- **Versiones fijas.** `requirements-pipeline.txt` tiene las mismas versiones que el entorno local
-  (Python 3.13, scikit-learn 1.9.1, pandas 3.0.6, torch 2.14.1): un `.joblib` de scikit-learn solo
-  se carga de forma fiable con la versión que lo guardó. ClickHouse también va fijado (26.9).
-- **Configuración por variables de entorno.** `config.py` lee `CLICKHOUSE_HOST`, `_PORT`, `_USER`,
-  `_PASSWORD` y `_DATABASE`, que tienen prioridad sobre `config.yaml`. En Docker y Kubernetes el
-  host es el nombre del servicio (`clickhouse`) y la contraseña viene de un Secret.
-
-### Los tres flujos
-
-| Flujo | `main.py` | DAG de Airflow | Kubernetes | Cuándo |
-|---|---|---|---|---|
-| Setup + entrenamiento | `main.py` | `fraude_setup` y luego `fraude_entrenamiento` | Job `job-pipeline-completo.yaml` | Una vez, a mano |
-| Reentrenamiento | `main.py --reutilizar-datos` | `fraude_entrenamiento` | CronJob `fraude-entrenamiento` | Domingos 05:00 |
-| Scoring | `main.py --scoring` | `fraude_scoring` | CronJob `fraude-scoring` | Cada día a las 03:00 |
-
-El **scoring** hace: `generar_lote.py` (un día de transacciones nuevas) → `carga_transacciones.py`
-→ `limpieza.py` → `crear_tabla_enriquecida.py` → `features.py` → `reglas_alerta.py` →
-`puntuar_nosupervisados.py` y `puntuar_autoencoder.py` (solo lo pendiente, con los modelos
-guardados: nunca entrena) → feedback de analistas (`simular_analistas.py` → `integrar_feedback.py`
-→ `recalibrar_modelo.py` → `medir_feedback.py`) → validación.
-
-El **reentrenamiento** hace además, tras el feedback, `ajustar_umbrales.py`: rehace la propuesta de
-umbrales y variables con lo validado y avisa si `config.yaml` tiene otros valores (no lo cambia).
-
-`generar_lote.py` simula la llegada diaria de datos, ya que el dataset es sintético: crea un día de
-transacciones de los mismos clientes, tarjetas y dispositivos (los reconstruye con la semilla),
-con unos pocos fraudes conocidos sin confirmar todavía y los mismos errores de carga que el
-dataset inicial. En producción este paso sería la ingesta real.
-
-Todos los pasos se pueden **reintentar** sin duplicar nada: la carga, la limpieza y las variables se
-recalculan enteras; el scoring solo puntúa lo que no tiene score; y `generar_lote.py` inserta
-`transaccion_bruta` la última y, si un lote anterior se quedó a medias, borra sus restos y lo
-vuelve a generar igual (mismo día, misma semilla).
-
-### Airflow
-
-[dags/fraude_dags.py](dags/fraude_dags.py) define los tres DAGs. Cada tarea es un script de
-`pipeline/` (BashOperator) y se ejecuta en paralelo lo que no depende entre sí (los clásicos y el
-autoencoder se entrenan a la vez). La imagen de [airflow/Dockerfile](airflow/Dockerfile) es
-Airflow 3.1 con un entorno virtual aparte para el pipeline, para que sus versiones no choquen con
-las de Airflow.
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
-# http://localhost:8080  ->  activar y lanzar fraude_setup, luego fraude_entrenamiento;
-#                            fraude_scoring queda programado a diario
-```
-
-No se deben lanzar `fraude_entrenamiento` y `fraude_scoring` a la vez: los dos reconstruyen las
-tablas de ETL (cada DAG tiene `max_active_runs=1`, pero entre DAGs no hay bloqueo).
-
-### Kubernetes
-
-[k8s/](k8s/) tiene todo lo necesario (se aplica con Kustomize):
-
-| Fichero | Qué crea |
-|---|---|
-| `namespace.yaml`, `configmap.yaml`, `secret.yaml` | Namespace `fraude`, la configuración de `config.py` y la contraseña |
-| `clickhouse.yaml` | ClickHouse como StatefulSet con volumen de 5 GiB y su Service |
-| `pvc-artefactos.yaml` | Volumen para `datos_ml/`, `modelos/`, `resultados/` e `historico/` |
-| `job-pipeline-completo.yaml` | Job: `python main.py` (no está en la kustomization: se lanza a mano) |
-| `cronjob-scoring.yaml` | CronJob diario: `python main.py --scoring` |
-| `cronjob-entrenamiento.yaml` | CronJob semanal: `python main.py --reutilizar-datos` |
-
-Cada pod del pipeline tiene un initContainer que prepara las carpetas del volumen y espera a que
-ClickHouse responda. Los CronJobs usan `concurrencyPolicy: Forbid` y horarios separados.
-
-```bash
-docker build -t fraude-pipeline:latest .
-kind create cluster --name fraude                       # o Docker Desktop / minikube
-kind load docker-image fraude-pipeline:latest --name fraude
-kubectl apply -k k8s/
-kubectl create -f k8s/job-pipeline-completo.yaml        # primera ejecución
-kubectl -n fraude logs -f job/<nombre-del-job>
-kubectl -n fraude create job --from=cronjob/fraude-scoring scoring-manual   # scoring sin esperar
-```
-
-En un clúster remoto la imagen se sube a un registro (y se cambia `images` en
-`k8s/kustomization.yaml`), la contraseña se crea como Secret fuera del repositorio y, si hay
-varios nodos, el volumen de artefactos necesita una StorageClass ReadWriteMany.
-
-### Validación de reproducibilidad y consistencia
-
-`validacion_reproducibilidad_consistencia.py` cierra cada entrenamiento y cada scoring (si falla,
-la tarea o el Job terminan en error) comprobando que:
-
-- están todos los artefactos (modelos, escalador, parquets);
-- ClickHouse es coherente: una fila de variables por transacción, todas puntuadas por cada modelo,
-  sin scores duplicados ni de transacciones inexistentes;
-- volver a preparar los datos da el mismo `X_test.parquet` (también después de añadir lotes: las
-  variables solo miran al pasado);
-- los modelos guardados (clásicos y autoencoder) reproducen sus scores;
-- con `--reentrenar` (en el DAG de entrenamiento): reentrenar los clásicos con la misma semilla da
-  los mismos scores.
-
-Deja su informe en `resultados/validacion_<fecha>.txt`.
-
-### Prueba del despliegue
-
-Probado en un clúster local de un nodo (kind) con `kubectl apply -k k8s/`:
-
-- **Job del pipeline completo**: los 17 pasos en 8-16 minutos según la carga del equipo (el
-  autoencoder es más de la mitad) y validación "todo correcto".
-- **CronJob de scoring lanzado a mano tres veces**: cada ejecución añade un día (01, 02 y 03/09,
-  ~600-670 transacciones), lo limpia y lo puntúa con los 5 modelos en menos de 1 minuto. La
-  validación da "todo correcto" en las tres: todas las transacciones tienen score de cada modelo,
-  sin duplicados, y las variables y scores de test no cambian al añadir datos. Repetir un día da
-  exactamente el mismo lote.
-
-Dos problemas que aparecieron en estas pruebas y están corregidos:
-
-- `features.py` ordenaba algunas ventanas solo por `timestamp`: con dos transacciones (o eventos
-  de un bot) en el mismo segundo, el orden del empate podía cambiar entre ejecuciones y con él
-  variables como el tiempo desde la transacción anterior. Ahora desempata por id.
-- Los hilos OpenMP ociosos giraban en vacío y, con la CPU compartida, el autoencoder iba unas 10
-  veces más lento en el contenedor: las imágenes fijan `OMP_WAIT_POLICY=PASSIVE`.
-
-El CronJob de scoring no tiene reintentos (`backoffLimit: 0`): repetir `main.py --scoring` entero
-generaría otro día de datos. Si falla, el del día siguiente puntúa también lo pendiente.
-- **Airflow**: la imagen carga los tres DAGs sin errores, con las mismas versiones de librerías
-  que el entorno local.
-
-## Feedback de analistas (Hito 6)
-
-KMeans marca lo **raro**, no lo que es fraude. El feedback de los analistas cierra el ciclo: cada
-día revisan las alertas, sus veredictos se juntan con los contracargos del banco y cada semana se
-recalibra el orden de las alertas con lo aprendido.
-
-| Script | Qué hace |
-|---|---|
-| `simular_analistas.py` | Al cerrar cada día, los analistas revisan el 1 % de transacciones con más puntuación (~7). Como no hay analistas reales, el veredicto es la etiqueta real con algo de error (8 % junior, 2 % senior) y llega entre 2 h y 2 días después. Guarda `feedback_analistas`. Si hay varios días pendientes (la primera vez, todo el test) los recorre en orden y recalibra cada semana por el camino. |
-| `integrar_feedback.py` | Junta lo que se sabía en un momento dado: fraudes confirmados por el banco (con ~12 días de retraso) y veredictos de los analistas. Si se contradicen manda el banco. Deja `etiquetas_conocidas`. |
-| `recalibrar_modelo.py` | Cada 7 días (o si se ha reentrenado KMeans) entrena un HistGradientBoosting con las etiquetas conocidas: entran el percentil de KMeans y las mismas variables que los modelos. Las transacciones revisadas pesan 10 veces más: enseñan qué alertas fueron falsas alarmas. Desde entonces las alertas se ordenan con él. |
-| `medir_feedback.py` | Precisión y recall de la cola de alertas semana a semana, comparados en los mismos días con KMeans sin recalibrar y con un recalibrado que solo usa los contracargos del banco. |
-
-Tabla `feedback_analistas`: `transaccion_id`, `fecha_alerta`, `fecha_revision`, `analista_id`
-(tabla `analista`), `veredicto` (`fraude` / `legitima`), `tipo_fraude`, `comentario`, y además
-`puntuacion` y `modelo` (con qué score y qué modelo entró la alerta en la cola).
-
-Todo es reproducible (semilla por día) y se puede repetir sin duplicar: solo se revisan los días
-puntuados que aún no tienen feedback. Si se regenera la base de datos, se borra el recalibrador
-anterior y se empieza otra vez con KMeans.
-
-Resultado en el periodo de test (6 semanas y media, ~7 alertas al día):
-
-- Semana 1 (KMeans, sin feedback todavía): el 26 % de las alertas son fraude. Semana 2
-  (recalibrado): el 51 %. Pero cada semana tiene una mezcla de fraude distinta; la comparación
-  justa es en los mismos días. Desde la semana 4 se aplica el
-  [ajuste de umbrales y variables](#ajuste-de-umbrales-y-variables-hito-6), igual en las tres filas:
-
-| Semanas 2 a 7 (mismos días y presupuesto) | Fraudes en la cola | Precisión | Recall |
-|---|---|---|---|
-| KMeans sin recalibrar | 70 | 29 % | 40 % |
-| Recalibrado solo con el banco | 97 | 40 % | 55 % |
-| Recalibrado con banco + analistas | 87 | 36 % | 49 % |
-
-- **Recalibrar con etiquetas mejora claramente** las alertas (+39 % de fraude encontrado con el
-  mismo trabajo).
-- **El feedback de los analistas no mejora** sobre los contracargos del banco: aquí el banco
-  confirma el 90 % del fraude y hay cientos de casos, y ~7 revisiones al día pesan poco. Sale algo
-  por debajo (87 frente a 97; sin el ajuste de variables, 91 frente a 98). Donde el feedback es
-  imprescindible es en los lotes diarios nuevos: el banco aún no ha confirmado nada y los
-  veredictos de los analistas son las únicas etiquetas recientes.
-- Detalle en [resultados/conclusiones_feedback.md](resultados/conclusiones_feedback.md) y
-  `resultados/feedback_semanal.png`.
-
-## Ajuste de umbrales y variables (Hito 6)
-
-Tras unas semanas de feedback, el equipo ajusta el sistema con lo que se ha validado.
-`ajustar_umbrales.py` lo hace en una **fecha de decisión** (`ajuste.semanas_validacion`: 3 semanas
-después del inicio del test, el 8 de agosto). Solo usa lo que se sabía ese día: fraudes
-confirmados por el banco y veredictos de los analistas. Después **comprueba** el resultado en los
-días siguientes con la etiqueta real, que no se ha usado para decidir, igual que el test.
-
-| Qué se ajusta | Cómo se decide (con lo validado) |
-|---|---|
-| Umbrales de las reglas | Rejilla de umbrales por regla. Se elige la de más F1 (precisión sobre cualquier fraude, recall sobre su tipo) en transacciones de hace más de 30 días, cuando el banco ya ha confirmado la mayoría. Solo cambia si el F1 mejora al menos 0,02; la regla se desactiva si su precisión no llega al 10 %. |
-| Umbral de la cola de alertas | Con los veredictos de los analistas: puntuación del recalibrado por debajo de la cual las alertas casi nunca eran fraude (dejar de revisarlas no pierde más del 5 % del fraude validado y ahorra al menos el 10 % de las revisiones). |
-| Variables del recalibrador | Importancia por permutación en las semanas de feedback: se quitan las que no aportan si así mejora la PR-AUC de validación. Variables nuevas (`ajuste.variables_candidatas`) para los tipos de fraude que no llegan a la cola: se añaden si separan ese tipo (AUC >= 0,75) sin empeorar la validación. |
-
-El script no toca `config.yaml`: imprime la propuesta para copiarla (secciones `reglas` y
-`feedback`), como `buscar_autoencoder.py`. La propuesta actual ya está copiada. Los ajustes del
-recalibrador (umbral y variables) se aplican **desde la fecha de decisión**: lo anterior, que es la
-evidencia del ajuste, no cambia al adoptarlos, y repetir el ajuste da la misma propuesta. Las reglas
-se recalculan sobre todo el histórico, porque no influyen en lo que revisan los analistas.
-
-Resultado (detalle en `resultados/ajuste_umbrales.md`, `ajuste_reglas.csv` y `ajuste_variables.csv`):
-
-| Comprobación (24 días tras la decisión) | Antes | Después |
-|---|---|---|
-| Reglas: alertas al día | 27,1 | 7,4 |
-| Reglas: precisión | 10 % | 28 % |
-| Reglas: recall | 60 % | 48 % |
-| Cola de analistas: fraudes encontrados (152-155 alertas) | 51 | 47 |
-
-- **Reglas: el ajuste funciona.** Cambian 5 reglas y `devolucion_abusiva` se desactiva (1 % de
-  precisión con cualquier umbral). Los analistas recibirían casi 4 veces menos alertas por reglas,
-  con casi el triple de precisión, a cambio de perder 12 puntos de recall. `bot` es el caso más
-  claro: de 3,5 a 0,7 alertas al día y de 14 % a 69 % de precisión, sin perder casi recall.
-- **Umbral de la cola: apenas cambia nada.** Los veredictos muestran que las alertas con
-  puntuación por debajo de 0,78 solo eran fraude en un 18 %, frente a más del 80 % por encima de
-  0,96. Pero después de la decisión el recalibrado puntúa más alto y el umbral solo quita 3 alertas.
-- **Variables: la validación no se sostiene.** Quitar 17 variables subía la PR-AUC de validación de
-  0,63 a 0,68, y `n_comercios_cliente_3h` separa el fraude nuevo con AUC 0,96. Pero en la
-  comprobación la cola encuentra 3-4 fraudes menos. Una causa es que en las semanas de validación no
-  había ningún `card_testing` conocido, así que las variables de velocidad de la tarjeta parecían
-  inútiles; quitarlas baja el recall de `card_testing` de 36 % a 27 %. La variable nueva tampoco
-  ayuda todavía: el banco solo había confirmado 3 casos del fraude nuevo.
-- **Lección: ajustar con la validación funciona cuando hay muchas etiquetas maduras** (reglas: 344
-  fraudes en 96 días) **y engaña cuando hay pocas** (variables: 74 fraudes en 3 semanas y no de
-  todos los tipos). Se deja adoptado lo que decidió la validación, porque cambiarlo mirando la
-  comprobación sería hacer trampa. En la siguiente revisión, con más etiquetas, lo indicado es
-  volver a poner las variables quitadas.
-
-## Resultados
-
-Medidos en test (el 30 % más reciente del periodo), con el modelo elegido en validación. Un
-modelo al azar sacaría una PR-AUC de 0,007 (la proporción de fraude en test).
-
-| Modelo | PR-AUC val | PR-AUC test | IC 95 % test | ROC-AUC | Fraude encontrado revisando el 1 % |
-|---|---|---|---|---|---|
-| **KMeans** (elegido) | 0,137 | **0,404** | 0,30 – 0,52 | 0,930 | 42 % |
-| One-Class SVM | 0,097 | 0,366 | 0,26 – 0,48 | 0,898 | 42 % |
-| DBSCAN | 0,127 | 0,327 | 0,23 – 0,43 | 0,933 | 32 % |
-| Autoencoder | 0,079 | 0,225 | 0,15 – 0,34 | 0,862 | 32 % |
-| Isolation Forest | 0,032 | 0,151 | 0,08 – 0,27 | 0,913 | 25 % |
-
-- En validación, KMeans **empata** estadísticamente con DBSCAN, One-Class SVM y el autoencoder:
-  no se puede asegurar que sea mejor, solo que no es peor.
-- **Detecta bien**: account takeover, bust-out, dispositivo nuevo, bot y card testing (73–100 %).
-- **Se le escapan**: smurfing, IP sospechosa, pico de gasto y devolución abusiva. Son fraudes que
-  solo se salen de lo normal en una o dos variables, y un detector de anomalías mira todas a la
-  vez. Para ellos funcionan mejor las reglas de `reglas_alerta.py`.
-- **El fraude desconocido** (`cash_out_multicomercio`) no lo detecta ningún modelo (0 %): imita a
-  un cliente normal. Necesita el feedback de los analistas (Hito 6).
-
-Detalle en [resultados/conclusiones.md](resultados/conclusiones.md) y
-[resultados/conclusiones_hito4.md](resultados/conclusiones_hito4.md). Las cifras cambian si se
-cambia la semilla o `config.yaml`.
-
-## Tests
-
-```bash
-venv/Scripts/python -m pytest tests
-```
-
-| Test | Qué comprueba |
-|---|---|
-| `test_limpieza.py` | Ensuciar y limpiar devuelve los datos originales; la forma correcta de cada valor; divisas recuperadas al céntimo; las fechas en otro formato o zona horaria son el mismo instante |
-| `test_carga.py` | La conversión de fechas de `carga_transacciones.py` con casos conocidos (invierno, verano, imposibles); ninguna transacción se pierde; todo en euros. Necesita ClickHouse |
-| `test_preparacion.py` | La partición train/test es temporal y sin solape; el escalador solo ve train; al entrenar solo se conocen los fraudes confirmados antes del corte |
-| `test_features_sin_futuro.py` | Las variables de ventana (pagos en 10 min/1 h/24 h) solo cuentan transacciones anteriores; una fila por transacción; países normalizados. Necesita ClickHouse con el pipeline ejecutado (si no, se salta) |
-
-## Carpetas
-
-| Carpeta | Contenido |
-|---|---|
-| `pipeline/` | Scripts del pipeline |
-| `notebooks/` | Exploración, outliers y visualizaciones |
-| `dags/` | DAGs de Airflow |
-| `airflow/` | Imagen de Airflow con el entorno del pipeline |
-| `k8s/` | Manifiestos de Kubernetes (Kustomize) |
-| `datos_ml/` | Datos preparados para los modelos |
-| `modelos/` | Modelos entrenados y scores |
-| `resultados/` | Informe de limpieza, métricas, gráficos y conclusiones (`hito2/`: tablas del notebook de outliers) |
-| `historico/` | Copia de cada ejecución |
-| `legacy/` | Código antiguo que ya no se usa (ver su `LEEME.md`) |
-| `tests/` | Tests automáticos (`pytest`) |
-
-## Limitaciones
-
-- **Los datos son sintéticos**, porque el enunciado pide generarlos. Se han hecho difíciles a
-  propósito (fraude escaso, un tipo desconocido, etiquetas con retraso, errores de carga), pero las
-  variables se diseñaron conociendo los 9 patrones del generador, así que en esos tipos las métricas
-  son optimistas. El tipo desconocido es la mejor estimación de cómo se comportaría el sistema
-  ante fraude nuevo.
-- **Volumen**: 2.000 clientes y unas 117.000 transacciones. DBSCAN y One-Class SVM se entrenan con
-  una muestra de 10.000 filas.
-- **Pocos fraudes para elegir**: solo 26 fraudes confirmados en validación, así que la elección de
-  modelo tiene bastante margen de error (de ahí los empates).
-- **Errores de datos simulados**: solo los que se inyectan. Los datos reales traen otros
-  (identificadores reasignados, cambios de esquema, tipos de cambio diarios) que habría que añadir
-  al informe y a la limpieza.
-- **Despliegue**: probado en un clúster local de un nodo (kind). Airflow corre en Docker Compose
-  con LocalExecutor y lanza los scripts en su propio contenedor; en un clúster real lo natural
-  sería Airflow con su chart de Helm y KubernetesPodOperator con la imagen `fraude-pipeline`.
-  El volumen de artefactos es ReadWriteOnce (un solo nodo).
-- **Lotes nuevos simulados**: `generar_lote.py` sustituye a una ingesta real y no añade el fraude
-  desconocido ni casos que duran semanas (bust-out, devolución abusiva).
+| 1. Introducción y exploración | Base de datos, carga de datos, informe de limpieza, primeros gráficos | `BD_VACIAS.py`, `dataset.py`, `carga_transacciones.py`, `informe_limpieza.py`, `notebooks/exploracion_visualizacion.ipynb` | Hecho |
+| 2. Estadística y preprocesamiento | Limpieza, valores atípicos (Z-score, IQR), patrones de fraude, dataset limpio | `limpieza.py`, `notebooks/outliers_patrones_tecnicas.ipynb`, `preparacion_datos_ml.py` | Hecho |
+| 3. ML para anomalías | Isolation Forest, One-Class SVM, KMeans, DBSCAN; variables; ajuste; puntuación | `features.py`, `modelos_nosupervisados.py`, `puntuar_nosupervisados.py`, `evaluar_modelos_nosupervisados.py` | Hecho |
+| 4. Autoencoders | Red neuronal, error de reconstrucción, comparación con los clásicos | `entrenar_autoencoder.py`, `puntuar_autoencoder.py`, `evaluar_autoencoders.py`, `comparacion_modelos.py` | Hecho |
+| 5. Orquestación y despliegue | Airflow, Docker, Kubernetes, ejecuciones periódicas, reproducibilidad | `dags/`, `Dockerfile`, `docker-compose*.yml`, `k8s/`, `generar_lote.py`, `validacion_reproducibilidad_consistencia.py` | Hecho |
+| 6. Analistas y dashboards | Feedback de analistas, ajuste de umbrales, dashboards, patrones por cliente/comercio/dispositivo/hora | Feedback: `simular_analistas.py`, `integrar_feedback.py`, `recalibrar_modelo.py`, `medir_feedback.py` | Feedback hecho. Umbrales y dashboard (HTML): pendientes |
