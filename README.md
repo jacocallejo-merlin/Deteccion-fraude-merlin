@@ -3,6 +3,11 @@
 Este proyecto es un sistema que **busca pagos fraudulentos** entre miles de pagos normales y avisa
 de los más sospechosos para que una persona los revise.
 
+Este documento está pensado para que **cualquiera lo entienda, aunque no sepa nada de fraude ni de
+inteligencia artificial**. Primero explica la idea, después cómo funciona por dentro y al final
+cómo ejecutarlo.
+
+---
 
 ## Índice
 
@@ -280,14 +285,40 @@ cosas que mira el nuevo modelo.
 
 Por último, `medir_feedback.py` comprueba semana a semana si las alertas mejoran.
 
+### Ajustar umbrales y variables con lo validado
+
+Las reglas y el modelo se diseñaron al principio, sin saber cómo funcionarían. Tras **3 semanas
+de funcionamiento** (la *fecha de decisión*), el equipo mira lo que ya está validado (lo que
+confirmó el banco y lo que dijeron los analistas) y ajusta tres cosas (`ajustar_umbrales.py`):
+
+1. **Los umbrales de las reglas.** Para cada regla se prueban varios valores (por ejemplo, card
+   testing con 2, 3, 4… pagos en 10 minutos) y se queda el que mejor equilibra aciertos y falsas
+   alarmas. Si una regla casi nunca acierta, se apaga.
+2. **Un umbral mínimo para la cola de alertas:** ¿merece la pena revisar las alertas con la nota
+   más baja, o casi nunca son fraude?
+3. **Las variables del modelo recalibrado:** quitar las que no aportan y añadir variables nuevas
+   para el fraude que se escapa.
+
+Tres reglas para no engañarse:
+
+- **Solo se usa lo que se sabía ese día.** Nada de la respuesta real.
+- **Un cambio se adopta solo si mejora claramente.** Con pocos fraudes, una mejora pequeña puede ser
+  suerte: para quitar variables se exige además que la mejora aguante al repetir la medida con
+  remuestreos de los datos (en el 95 % de 200).
+- **Después se comprueba** en los días siguientes, que no se usaron para decidir, con la respuesta
+  real.
+
+El script no toca la configuración: propone los valores y una persona los copia a `config.yaml`.
+Se aplican desde la fecha de decisión; antes el sistema funciona como al principio.
+
 ## La automatización
 
 Todo el proceso se ejecuta solo:
 
 | Cuándo | Qué se hace |
 |---|---|
-| **Cada día** | Llegan los pagos nuevos → se limpian → se describen → se puntúan → los analistas revisan → si ha pasado una semana, el sistema aprende |
-| **Cada semana** (domingo) | Se vuelven a entrenar los modelos con todos los datos |
+| **Cada día** (03:00) | Llegan los pagos nuevos y las confirmaciones del banco → se limpian → se describen → se puntúan → los analistas revisan → si ha pasado una semana, el sistema aprende |
+| **Cada semana** (domingo, 05:00) | Se vuelven a entrenar los modelos con todos los datos y se revisa el ajuste de umbrales |
 | **Una vez, al empezar** | Se crea la base de datos y se cargan los datos iniciales |
 
 Se puede ejecutar de cuatro formas, de más sencilla a más "profesional":
@@ -378,24 +409,40 @@ aprenda a reconocerlo.
 
 ### Lo que mejora al aprender (Hito 6)
 
-Comparando **los mismos días con el mismo trabajo** (unas 7 alertas al día):
+Comparando **los mismos días con el mismo trabajo** (el 1 % de los pagos: unas 6-7 alertas al día):
 
 | Cómo se ordenan las alertas | Fraudes encontrados | Precisión | Recall |
 |---|---|---|---|
-| Solo KMeans (sin aprender) | 67 | 28 % | 39 % |
-| Aprendiendo de lo que confirma el banco | 95 | 40 % | 55 % |
-| Aprendiendo del banco + los analistas | 92 | 38 % | 53 % |
+| Solo KMeans (sin aprender) | 70 | 28 % | 40 % |
+| Aprendiendo de lo que confirma el banco | 98 | 39 % | 56 % |
+| Aprendiendo del banco + los analistas | 94 | 37 % | 53 % |
 
 **Cómo leerlo:**
 
 - ✅ **Aprender de los fraudes confirmados mejora mucho.** Con el mismo trabajo, se encuentra un
-  37 % más de fraude.
+  40 % más de fraude.
 - ⚠️ **Lo que aportan los analistas no se nota en estos datos.** El banco ya confirma unos 500
   fraudes, y 7 revisiones al día pesan poco al lado. Es un resultado honesto y se cuenta tal cual.
 - 💡 **Los analistas sí son imprescindibles con los pagos más recientes.** El banco tarda unos
   12 días en confirmar, así que lo de esta semana solo lo saben los analistas.
-- 📈 La semana 1 tenía un 23 % de alertas que eran fraude y la semana 6 un 47 %. Pero cuidado: cada
+- 📈 La semana 1 tenía un 26 % de alertas que eran fraude y la semana 6 un 50 %. Pero cuidado: cada
   semana tiene un tipo de fraude distinto, así que la comparación justa es la de la tabla.
+
+### El ajuste de umbrales y variables (Hito 6)
+
+Decidido el 8 de agosto (3 semanas después de empezar) con lo validado hasta ese día, y comprobado
+en las semanas siguientes con la respuesta real (`resultados/ajuste_umbrales.md`):
+
+| Qué | Decisión | Resultado en las semanas siguientes |
+|---|---|---|
+| **Umbrales de las reglas** | Cambian 5 reglas (más exigentes) y se apaga la de devoluciones (acertaba el 1 %) | De 27 a 7 alertas al día; precisión del 10 % al 28 %; recall del 60 % al 48 % |
+| **Umbral mínimo de la cola** | No se pone: solo ahorraría el 9,8 % de las revisiones (se pide al menos el 10 %) | — |
+| **Quitar variables** | No se quita ninguna: la mejora no era estable (aguantaba en el 94 % de los remuestreos, se pide el 95 %) | — |
+| **Variable nueva** `n_comercios_cliente_3h` (comercios distintos del cliente en 3 h) | Se añade: separa muy bien el fraude nuevo que el banco ya había confirmado | 52 fraudes en la cola frente a 51: igual (dentro del ruido). El fraude nuevo pasa del 12 % al 16 % |
+
+**Cómo leerlo:** las reglas mejoran mucho (4 veces menos alertas y casi el triple de precisión, a
+cambio de algo de recall). En el modelo recalibrado, el ajuste casi no cambia nada, y se dice así:
+con tan pocos fraudes validados no se podía decidir más sin arriesgarse a empeorar.
 
 ### Una cosa que parece rara: ¿por qué sale mejor en el examen que en la práctica?
 
@@ -422,10 +469,10 @@ Contarlas da credibilidad. Son estas:
 - **3 de cada 4 alertas son falsas alarmas.** Es normal en fraude, pero hay margen de mejora.
 - **Los fraudes "de una sola cosa"** (pico de gasto, IP sospechosa, devoluciones) se escapan al
   detector. Necesitan reglas.
-- **El banco nunca confirma los fraudes de los días nuevos simulados** (`generar_lote.py`). En la
-  vida real sí llegarían. *(Pendiente de corregir.)*
-- **Las reglas y el modelo van por separado.** Lo ideal sería una única cola de alertas con las
-  dos cosas. *(Pendiente: parte de "ajuste de umbrales" del Hito 6.)*
+- **Las reglas y el modelo dan dos listas de alertas separadas.** Los umbrales de cada una ya se
+  ajustan con lo validado, pero lo ideal sería una única cola que ordene las dos cosas juntas.
+- **El ajuste de umbrales se decide con pocos fraudes** (unas decenas validados en 3 semanas). Por
+  eso solo se adopta lo que mejora con claridad, y hay que repetirlo cuando haya más datos.
 - **Probado en pequeño.** 2.000 clientes y un clúster de Kubernetes de un solo ordenador.
 
 ## Preguntas que os van a hacer
@@ -513,7 +560,7 @@ docker compose run --rm pipeline python main.py --scoring      # un día más
 docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
 #   1. lanzar fraude_setup (crea los datos)
 #   2. lanzar fraude_entrenamiento (entrena)
-#   3. fraude_scoring se lanza solo cada día
+#   3. activar fraude_scoring (cada día a las 03:00) y fraude_entrenamiento (domingos a las 05:00)
 
 # Kubernetes (clúster local con kind)
 docker build -t fraude-pipeline:latest .
@@ -524,7 +571,7 @@ kubectl create -f k8s/job-pipeline-completo.yaml
 ```
 
 **Importante:** no lanzar a la vez el entrenamiento y el scoring diario, porque los dos rehacen las
-mismas tablas.
+mismas tablas. Por eso en Airflow y en Kubernetes tienen horas distintas.
 
 Todos los ajustes (semilla, tamaño de los datos, porcentaje de alertas, errores de los analistas…)
 están en **`config.yaml`**, comentados.
@@ -537,6 +584,7 @@ están en **`config.yaml`**, comentados.
 | Las curvas de los 5 modelos | `resultados/curvas_pr_test.png` |
 | La comparación con la red neuronal (Hito 4) | `resultados/conclusiones_hito4.md`, `comparativa_final_pr.png` |
 | **Si mejora al aprender** (Hito 6) | `resultados/feedback_semanal.png`, `conclusiones_feedback.md` |
+| **El ajuste de umbrales y variables** (Hito 6) | `resultados/ajuste_umbrales.md` (y `ajuste_reglas.csv`, `ajuste_variables.csv`) |
 | La calidad de los datos antes de limpiar | `resultados/informe_limpieza.txt` |
 | Si la última ejecución cuadra | `resultados/validacion_<fecha>.txt` |
 | Los números en tablas | `resultados/comparativa_test.csv`, `recall_por_tipo_test.csv`, `feedback_semanal.csv` |
@@ -592,11 +640,13 @@ Y dentro de **ClickHouse** (base de datos `fraude_pagos`):
 | 15 | `integrar_feedback.py` | Junta lo que dicen los analistas con lo que confirma el banco |
 | 16 | `recalibrar_modelo.py` | Cada semana, el sistema aprende de lo confirmado |
 | 17 | `medir_feedback.py` | Mide si las alertas mejoran semana a semana |
-| 18-20 | `evaluar_modelos_nosupervisados.py`, `evaluar_autoencoders.py`, `comparacion_modelos.py` | Comparan los modelos y escriben las conclusiones |
-| 21 | `validacion_reproducibilidad_consistencia.py` | Comprueba que todo cuadra |
+| 18 | `ajustar_umbrales.py` | Propone umbrales de reglas, umbral de la cola y variables con lo validado |
+| 19-21 | `evaluar_modelos_nosupervisados.py`, `evaluar_autoencoders.py`, `comparacion_modelos.py` | Comparan los modelos y escriben las conclusiones |
+| 22 | `validacion_reproducibilidad_consistencia.py` | Comprueba que todo cuadra |
 
-El scoring diario (`main.py --scoring`) hace: generar un día nuevo (`generar_lote.py`) → pasos 3 y
-5 a 8 → pasos 12 a 17 → paso 21. Nunca vuelve a entrenar los modelos principales.
+El scoring diario (`main.py --scoring`) hace: generar un día nuevo (`generar_lote.py`, que trae
+también las confirmaciones del banco de ese día) → pasos 3 y 5 a 8 → pasos 12 a 17 → paso 22.
+Nunca vuelve a entrenar los modelos principales ni a ajustar umbrales (eso es una decisión periódica).
 
 ## Correspondencia con los hitos
 
@@ -607,4 +657,4 @@ El scoring diario (`main.py --scoring`) hace: generar un día nuevo (`generar_lo
 | 3. ML para anomalías | Isolation Forest, One-Class SVM, KMeans, DBSCAN; variables; ajuste; puntuación | `features.py`, `modelos_nosupervisados.py`, `puntuar_nosupervisados.py`, `evaluar_modelos_nosupervisados.py` | Hecho |
 | 4. Autoencoders | Red neuronal, error de reconstrucción, comparación con los clásicos | `entrenar_autoencoder.py`, `puntuar_autoencoder.py`, `evaluar_autoencoders.py`, `comparacion_modelos.py` | Hecho |
 | 5. Orquestación y despliegue | Airflow, Docker, Kubernetes, ejecuciones periódicas, reproducibilidad | `dags/`, `Dockerfile`, `docker-compose*.yml`, `k8s/`, `generar_lote.py`, `validacion_reproducibilidad_consistencia.py` | Hecho |
-| 6. Analistas y dashboards | Feedback de analistas, ajuste de umbrales, dashboards, patrones por cliente/comercio/dispositivo/hora | Feedback: `simular_analistas.py`, `integrar_feedback.py`, `recalibrar_modelo.py`, `medir_feedback.py` | Feedback hecho. Umbrales y dashboard (HTML): pendientes |
+| 6. Analistas y dashboards | Feedback de analistas, ajuste de umbrales, dashboards, patrones por cliente/comercio/dispositivo/hora | Feedback: `simular_analistas.py`, `integrar_feedback.py`, `recalibrar_modelo.py`, `medir_feedback.py`. Umbrales y variables: `ajustar_umbrales.py`, `config.yaml` (`reglas`, `feedback`) | Feedback y ajuste de umbrales y variables hechos. Dashboards y análisis de patrones: pendientes |

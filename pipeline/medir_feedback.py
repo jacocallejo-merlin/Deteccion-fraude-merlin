@@ -161,8 +161,8 @@ def conclusiones(sem, feedback):
     else:
         L.append(f'- El feedback de los analistas {"añade" if extra > 0 else "quita"} {abs(extra):.0f} fraudes '
                  'frente a recalibrar solo con el banco.')
-    L.append('- Donde el feedback es imprescindible es en los lotes nuevos (generar_lote.py): el banco aún no ha '
-             'confirmado nada, así que los veredictos de los analistas son las únicas etiquetas recientes.')
+    L.append('- Donde el feedback es imprescindible es en los días más recientes: el banco tarda ~12 días en '
+             'confirmar, así que los veredictos de los analistas son las únicas etiquetas de la última semana.')
     L.append(f'- Errores de los analistas: {len(errores)} de {len(feedback)} veredictos '
              f'({len(errores) / len(feedback):.1%}); '
              + ', '.join(f'{n} {(errores["nivel"] == n).sum()} de {(feedback["nivel"] == n).sum()}'

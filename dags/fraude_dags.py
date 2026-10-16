@@ -13,6 +13,8 @@ restos de un lote a medias, así que las tareas se pueden reintentar sin duplica
 La validación sale con error si algo falla: la tarea queda en rojo.
 
 No lanzar fraude_entrenamiento y fraude_scoring a la vez: los dos reconstruyen las tablas de ETL.
+Por eso tienen horas distintas (las mismas que los CronJob de k8s/): scoring a las 03:00 y
+entrenamiento los domingos a las 05:00. Con '@daily' y '@weekly' coincidirían cada domingo a las 00:00.
 """
 import os
 from datetime import datetime, timedelta
@@ -106,7 +108,7 @@ with DAG(
 with DAG(
     dag_id='fraude_entrenamiento',
     description='ETL, entrenamiento de los 5 modelos, scoring, evaluación y validación',
-    schedule='@weekly',                    # semanal, como el CronJob de Kubernetes (None = solo a mano)
+    schedule='0 5 * * 0',                  # domingos a las 05:00, como el CronJob de k8s (None = solo a mano)
     start_date=INICIO,
     catchup=False,
     max_active_runs=1,
@@ -154,7 +156,7 @@ with DAG(
 with DAG(
     dag_id='fraude_scoring',
     description='Puntúa las transacciones nuevas con los modelos ya entrenados',
-    schedule='@daily',                     # cada cuánto se puntúa
+    schedule='0 3 * * *',                  # cada día a las 03:00 (no coincide con el entrenamiento)
     start_date=INICIO,
     catchup=False,                         # no recuperar ejecuciones pasadas
     max_active_runs=1,

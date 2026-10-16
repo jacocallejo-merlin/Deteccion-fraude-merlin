@@ -112,7 +112,9 @@ def cargar_recalibrador():
     if not RUTA_RECALIBRADOR.exists():
         return None
     recal = joblib.load(RUTA_RECALIBRADOR)
-    if recal['run_id_base'] != run_id_base() or             recal.get('variables_extra', []) != variables_extra_en(recal['corte']) or             recal.get('variables_quitadas', []) != variables_quitadas_en(recal['corte']):
+    if (recal['run_id_base'] != run_id_base()
+            or recal.get('variables_extra', []) != variables_extra_en(recal['corte'])
+            or recal.get('variables_quitadas', []) != variables_quitadas_en(recal['corte'])):
         return None
     return recal
 

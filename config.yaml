@@ -49,6 +49,8 @@ suciedad:
 # con lo validado hasta la fecha de decisión (ajustar_umbrales.py, Hito 6; ver
 # resultados/ajuste_umbrales.md). Cambian pico_gasto, card_testing, account_takeover,
 # dispositivo_nuevo y bot; devolucion_abusiva se desactiva (1 % de precisión con cualquier umbral).
+# En los días posteriores a la decisión las reglas pasan de 27 a 7 alertas al día, con precisión
+# del 10 % al 28 % y recall del 60 % al 48 %.
 reglas:
   pico_gasto:         {activa: true, z_minimo: 3.5, ratio_minimo: 6}
   card_testing:       {activa: true, pagos_10min_minimo: 3, importe_maximo: 5}
@@ -125,18 +127,26 @@ feedback:
   peso_revisadas: 10
   # Ajustes adoptados tras la validación (ajustar_umbrales.py propone los valores). Se aplican desde
   # la fecha de decisión (ajuste.semanas_validacion); antes el sistema funciona como al principio.
-  umbral_minimo: 0.6993        # puntuación mínima del recalibrado para entrar en la cola (0 = sin umbral)
+  # Lo que se adopta es exactamente lo que propone ajustar_umbrales.py (resultados/ajuste_umbrales.md):
+  # - sin umbral mínimo: solo ahorraría ~10 % de las revisiones (mínimo exigido, ajuste.ahorro_minimo)
+  # - no se quita ninguna variable: quitar las que no aportan mejora la validación, pero no de forma
+  #   estable (ajuste.confianza_minima); además en validación no hay card_testing y se habrían ido
+  #   justo sus variables
+  # - se añade n_comercios_cliente_3h: separa el fraude nuevo (cash_out_multicomercio) que el banco y
+  #   los analistas confirmaron en las semanas de validación
+  umbral_minimo: 0             # puntuación mínima del recalibrado para entrar en la cola (0 = sin umbral)
   variables_extra: [n_comercios_cliente_3h]   # variables de features_transaccion que se añaden al recalibrador
-  variables_quitadas:          # variables de los modelos que el recalibrador deja de usar
-    [es_online, n_tarjeta_1h, n_tarjeta_10min, dias_desde_alta_tope, tiene_historial, es_credito,
-     n_rechazadas_tarjeta_1h, n_clientes_dispositivo, dia_cos, es_finde, dia_sin, cambio_dato_sesion,
-     n_devoluciones_30d, n_cliente_1h, es_madrugada, n_tarjeta_24h, sin_autenticacion]
+  variables_quitadas: []       # variables de los modelos que el recalibrador deja de usar
 
 # Hito 6: ajuste de umbrales y variables con lo validado (ajustar_umbrales.py)
 ajuste:
   semanas_validacion: 3        # fecha de decisión: tras 3 semanas de feedback se ajusta con lo validado
   dias_madurez: 30             # reglas: solo transacciones de hace >= 30 días (el banco ya ha confirmado ~85 %)
   mejora_minima: 0.02          # un cambio se adopta solo si mejora la validación (F1 o PR-AUC) al menos esto
+  # Quitar variables: además, la mejora tiene que mantenerse en este porcentaje de remuestreos
+  # (bootstrap) de la validación. Con ~75 fraudes conocidos, +0,02 de PR-AUC puede salir por suerte
+  # y la lista de variables quitadas cambiaba de una ejecución a otra.
+  confianza_minima: 0.95
   precision_minima_regla: 0.10 # por debajo, la regla se desactiva: más de 9 de cada 10 alertas serían falsas
   perdida_maxima_fraude: 0.05  # umbral de la cola: dejar de revisar como mucho el 5 % del fraude validado
   ahorro_minimo: 0.10          # ... y solo si ahorra al menos el 10 % de las revisiones

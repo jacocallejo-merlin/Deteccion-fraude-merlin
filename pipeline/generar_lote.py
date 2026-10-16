@@ -1,7 +1,19 @@
+"""
+Añade un día (o --dias) de transacciones nuevas a las tablas de origen, como si llegara el lote
+diario del banco: transacciones legítimas, unos pocos casos de fraude conocido y los mismos errores
+de formato que el dataset inicial. Después hay que lanzar carga_transacciones.py y el resto del ETL.
+
+También llegan las confirmaciones del banco (contracargos) de ese día: de los fraudes aún sin
+confirmar, los de días anteriores y los del propio lote, se confirman los que tocan con el mismo
+retraso que en el dataset inicial (dataset.etiquetas en config.yaml). Sin esto, en la operación
+diaria el banco no confirmaría nunca nada y el recalibrado solo aprendería de los analistas.
+"""
 import argparse
+import math
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from statistics import NormalDist
 
 import numpy as np
 
@@ -14,6 +26,71 @@ TABLAS_LOTE = ["sesion", "evento", "devolucion", "transaccion"]   # transaccion 
 TIPOS_FRAUDE_LOTE = ["pico_gasto", "card_testing", "smurfing", "account_takeover",
                      "ip_sospechosa", "dispositivo_nuevo", "bot"]
 AJUSTES_MUTACION = {"mutations_sync": 2}
+
+_ETIQUETAS = CONFIG["dataset"]["etiquetas"]
+P_NUNCA_CONFIRMADO = _ETIQUETAS["p_nunca_confirmado"]
+# log del retraso de la confirmación en días (log-normal, igual que dataset.asignar_confirmaciones)
+LOG_RETRASO = NormalDist(math.log(_ETIQUETAS["retraso_mediana_dias"]), _ETIQUETAS["retraso_sigma"])
+
+
+def _cdf_retraso(dias):
+    return LOG_RETRASO.cdf(math.log(dias)) if dias > 0 else 0.0
+
+
+def fecha_confirmacion(transaccion_id, momento, inicio, fin, semilla):
+    """Fecha en que el banco confirma un fraude que seguía sin confirmar al empezar el lote, si cae
+    dentro del lote (inicio, fin]; si no, None. Se condiciona a lo que ya se sabe: no se había
+    confirmado antes de inicio (puede ser de los que no se confirman nunca, o tardar más).
+    Mismo fraude y mismo lote -> misma respuesta."""
+    a = max((inicio - momento).total_seconds() / 86400, 0.0)   # días que ya lleva sin confirmar
+    b = (fin - momento).total_seconds() / 86400
+    if b <= 0:
+        return None
+    fa, fb = _cdf_retraso(a), _cdf_retraso(b)
+    sigue_pendiente = P_NUNCA_CONFIRMADO + (1 - P_NUNCA_CONFIRMADO) * (1 - fa)
+    p_en_el_lote = (1 - P_NUNCA_CONFIRMADO) * (fb - fa) / sigue_pendiente
+    rng = np.random.default_rng([semilla, 2000, int(transaccion_id), inicio.toordinal()])
+    if rng.random() >= p_en_el_lote:
+        return None
+    # retraso condicionado a caer dentro del lote: inversa de la distribución entre fa y fb
+    u = min(max(fa + (fb - fa) * rng.random(), 1e-12), 1 - 1e-12)
+    fecha = momento + timedelta(days=math.exp(LOG_RETRASO.inv_cdf(u)))
+    return min(max(fecha, inicio, momento), fin - timedelta(seconds=1)).replace(microsecond=0)
+
+
+def confirmar_lote(fab, inicio, fin, semilla):
+    """Confirmaciones de los fraudes del propio lote (en Python, antes de cargarlo)."""
+    n = 0
+    for t in fab.tablas["transaccion"]:
+        if t["es_fraude"] == 1:
+            t["fecha_confirmacion"] = fecha_confirmacion(t["transaccion_id"], t["timestamp"],
+                                                         inicio, fin, semilla)
+            n += t["fecha_confirmacion"] is not None
+    return n
+
+
+def confirmar_pendientes(client, inicio, fin, semilla):
+    """Confirmaciones que llegan en este lote de fraudes de días anteriores. Se escriben en
+    transaccion_bruta (carga_transacciones.py las pasa a transaccion). Las fechas van como segundos
+    Unix para no depender de la zona horaria del ordenador."""
+    pendientes = client.query(
+        "SELECT transaccion_id, toUnixTimestamp(timestamp) FROM transaccion "
+        "WHERE es_fraude = 1 AND fecha_confirmacion IS NULL AND timestamp < {i:DateTime('UTC')}",
+        parameters={"i": inicio.replace(tzinfo=timezone.utc)}).result_rows
+    confirmadas = {}
+    for tid, segundos in pendientes:
+        momento = datetime.fromtimestamp(segundos, timezone.utc).replace(tzinfo=None)
+        fecha = fecha_confirmacion(tid, momento, inicio, fin, semilla)
+        if fecha is not None:
+            confirmadas[int(tid)] = int(fecha.replace(tzinfo=timezone.utc).timestamp())
+    if confirmadas:
+        ids, fechas = list(confirmadas), list(confirmadas.values())
+        client.command(
+            f"ALTER TABLE transaccion_bruta UPDATE fecha_confirmacion = "
+            f"toDateTime(transform(transaccion_id, {ids}, {fechas}, 0), 'UTC') "
+            f"WHERE es_fraude = 1 AND fecha_confirmacion IS NULL AND transaccion_id IN {tuple(ids) + (0,)}",
+            settings=AJUSTES_MUTACION)
+    return len(confirmadas), len(pendientes)
 
 
 def conectar():
@@ -147,13 +224,18 @@ def main():
 
     txns = fab.tablas["transaccion"]
     n_fraude = sum(t["es_fraude"] for t in txns)
-    print(f"Generadas {len(txns):,} transacciones ({n_fraude} de fraude en {n_casos} casos, sin confirmar)")
+    n_conf_lote = confirmar_lote(fab, inicio, fin, semilla)   # antes de ensuciar: necesita las fechas
+    print(f"Generadas {len(txns):,} transacciones ({n_fraude} de fraude en {n_casos} casos, "
+          f"{n_conf_lote} ya confirmadas por el banco dentro del lote)")
 
     suciedad = CONFIG.get("suciedad", {})
     if suciedad.get("activar"):
         ds.ensuciar(fab, semilla + inicio.toordinal(), suciedad)
 
     print("\nCargando en ClickHouse...")
+    # Antes que el lote: si la carga falla a medias, al repetir el mismo día sale lo mismo
+    n_conf, n_pend = confirmar_pendientes(client, inicio, fin, semilla)
+    print(f"  confirmaciones del banco: {n_conf} de {n_pend} fraudes anteriores que seguían sin confirmar")
     cargar(client, fab)
     print("Listo. Siguiente paso: carga_transacciones.py")
 

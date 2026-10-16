@@ -50,6 +50,8 @@ PRECISION_MINIMA_REGLA = _cfg['precision_minima_regla']
 PERDIDA_MAXIMA = _cfg['perdida_maxima_fraude']
 AHORRO_MINIMO = _cfg['ahorro_minimo']
 CANDIDATAS = _cfg['variables_candidatas']
+CONFIANZA_MINIMA = _cfg['confianza_minima']
+N_REMUESTREOS = 200
 PRESUPUESTO = CONFIG['feedback']['presupuesto']
 COLUMNA_BASE = f'pct_{MODELO_BASE}'
 SEMILLA = CONFIG['semilla']
@@ -195,7 +197,7 @@ def ajustar_umbral_cola(client, decision):
     tabla = (pd.DataFrame({'tramo': tramos, 'fraude': fraude}).groupby('tramo', observed=True)['fraude']
              .agg(alertas='size', fraude='sum', precision='mean'))
     if mejor_ahorro < AHORRO_MINIMO:
-        motivo = (f'el mejor umbral solo ahorraría el {mejor_ahorro:.0%} de las revisiones '
+        motivo = (f'el mejor umbral solo ahorraría el {mejor_ahorro:.1%} de las revisiones '
                   f'(mínimo {AHORRO_MINIMO:.0%})')
         return 0.0, tabla, motivo
     u = float(np.floor(mejor_u * 1e4) / 1e4)   # redondeo hacia abajo: nunca se pierde más de lo permitido
@@ -204,6 +206,18 @@ def ajustar_umbral_cola(client, decision):
 
 
 # ------------------------------------------------------------------- 3. variables del recalibrador
+def prob_mejora(y, s_a, s_b, n=N_REMUESTREOS):
+    """Fracción de remuestreos de la validación (bootstrap, por separado fraudes y legítimas) en que
+    el score b tiene más PR-AUC que el a. Con 0,5 la diferencia es puro azar."""
+    rng = np.random.default_rng(SEMILLA)
+    fraudes, legitimas = np.flatnonzero(y), np.flatnonzero(~y)
+    gana = 0
+    for _ in range(n):
+        i = np.r_[rng.choice(fraudes, len(fraudes)), rng.choice(legitimas, len(legitimas))]
+        gana += average_precision_score(y[i], s_b[i]) > average_precision_score(y[i], s_a[i])
+    return gana / n
+
+
 def cola_por_dia(dias, score, n_por_dia, umbral=0.0):
     """Máscara de las alertas: las n de más puntuación de cada día (y por encima del umbral)."""
     orden = pd.DataFrame({'dia': dias, 's': score}).sort_values('s', ascending=False, kind='stable')
@@ -228,15 +242,19 @@ def ajustar_variables(client, X, info, decision):
 
     def pr_auc(cols):
         modelo = entrenar(X.loc[ent, cols], y[ent], peso[ent])
-        return average_precision_score(y[val], modelo.predict_proba(X.loc[val, cols])[:, 1]), modelo
+        score = modelo.predict_proba(X.loc[val, cols])[:, 1]
+        return average_precision_score(y[val], score), modelo, score
 
-    ap_base, modelo = pr_auc(base)
+    ap_base, modelo, s_base = pr_auc(base)
     imp = permutation_importance(modelo, X.loc[val, base], y[val], scoring='average_precision',
                                  n_repeats=5, random_state=SEMILLA)
     importancia = pd.Series(imp.importances_mean, index=base).sort_values(ascending=False)
     sin_aporte = [c for c in importancia.index[importancia <= 0] if c != COLUMNA_BASE]
-    ap_sin = pr_auc([c for c in base if c not in sin_aporte])[0] if sin_aporte else ap_base
-    quitar = sin_aporte if ap_sin >= ap_base + MEJORA_MINIMA else []
+    ap_sin, _, s_sin = pr_auc([c for c in base if c not in sin_aporte]) if sin_aporte else (ap_base, None, s_base)
+    # Con pocas decenas de fraudes, +0,02 de PR-AUC puede ser suerte: solo se quitan si la mejora se
+    # mantiene al remuestrear la validación
+    confianza = prob_mejora(y[val], s_base, s_sin) if sin_aporte else 0.0
+    quitar = sin_aporte if ap_sin >= ap_base + MEJORA_MINIMA and confianza >= CONFIANZA_MINIMA else []
     usadas = [c for c in base if c not in quitar]
     ap_usadas = ap_sin if quitar else ap_base
 
@@ -254,7 +272,7 @@ def ajustar_variables(client, X, info, decision):
     nuevas, filas = [], []
     legitimas = val & ~y
     for c in CANDIDATAS:
-        ap_c = pr_auc(usadas + [c])[0]
+        ap_c = pr_auc(usadas + [c])[0]   # una variable nueva se añade si no empeora (ver abajo)
         separa = {tp: roc_auc_score(np.r_[np.ones((val & (tipo == tp)).sum()), np.zeros(legitimas.sum())],
                                     np.r_[X.loc[val & (tipo == tp), c], X.loc[legitimas, c]])
                   for tp in se_escapan}
@@ -265,6 +283,7 @@ def ajustar_variables(client, X, info, decision):
         filas.append({'variable': c, 'pr_auc_validacion': ap_c, 'tipo_que_separa': mejor_tipo,
                       'auc_en_ese_tipo': separa.get(mejor_tipo), 'adoptada': adoptar})
     return {'pr_auc_base': ap_base, 'pr_auc_sin_aporte': ap_sin, 'sin_aporte': sin_aporte, 'quitar': quitar,
+            'confianza_quitar': confianza,
             'importancia': importancia, 'tipos': tipos, 'se_escapan': se_escapan, 'sin_casos': sin_casos,
             'candidatas': pd.DataFrame(filas), 'nuevas': nuevas, 'variables': usadas + nuevas,
             'fraudes_validacion': int(y[val].sum()), 'fraudes_validacion_reales': int(info.loc[val, 'es_fraude'].sum())}
@@ -358,10 +377,17 @@ def informe(decision, reglas, tabla_reglas, total_reglas, umbral, tabla_umbral, 
     imp = var['importancia']
     L.append('- Más importantes: ' + ', '.join(f'{k} {v:.3f}' for k, v in imp.head(6).items()) + '.')
     if var['sin_aporte']:
+        mejora = var['pr_auc_sin_aporte'] - var['pr_auc_base']
+        if var['quitar']:
+            decision_txt = 'se quitan.'
+        elif mejora < MEJORA_MINIMA:
+            decision_txt = f'no mejora al menos {MEJORA_MINIMA}, se mantienen todas.'
+        else:
+            decision_txt = (f'mejora {mejora:+.3f}, pero solo en el {var["confianza_quitar"]:.0%} de {N_REMUESTREOS} '
+                            f'remuestreos de la validación (se exige el {CONFIANZA_MINIMA:.0%}): con tan pocos fraudes '
+                            'puede ser suerte, se mantienen todas.')
         L.append(f'- {len(var["sin_aporte"])} variables no aportan en validación (importancia <= 0). Sin ellas la '
-                 f'PR-AUC de validación es {var["pr_auc_sin_aporte"]:.3f}: '
-                 + ('se quitan.' if var['quitar'] else f'no mejora al menos {MEJORA_MINIMA}, se mantienen todas '
-                    '(con tan pocos fraudes la importancia de una variable concreta es ruido).'))
+                 f'PR-AUC de validación es {var["pr_auc_sin_aporte"]:.3f}: ' + decision_txt)
     if var['sin_casos']:
         L.append(f'- Ojo: en la validación no hay ningún caso conocido de {", ".join(var["sin_casos"])}. Las variables '
                  'que sirven sobre todo para esos tipos parecen inútiles aquí aunque no lo sean.')
@@ -425,7 +451,8 @@ def main():
         X, info = matriz(df, extra=CANDIDATAS)
     var = ajustar_variables(client, X, info, decision)
     print(f'PR-AUC de validación: {var["pr_auc_base"]:.3f} con todas; {var["pr_auc_sin_aporte"]:.3f} sin las '
-          f'{len(var["sin_aporte"])} que no aportan -> se quitan: {var["quitar"] or "ninguna"}')
+          f'{len(var["sin_aporte"])} que no aportan (mejor en el {var["confianza_quitar"]:.0%} de los remuestreos) '
+          f'-> se quitan: {var["quitar"] or "ninguna"}')
     print(var['tipos'].to_string())
     print(var['candidatas'].to_string(index=False))
 
