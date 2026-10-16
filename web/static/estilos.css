@@ -1,0 +1,136 @@
+:root {
+  --fondo: #f3f5f9;
+  --tarjeta: #ffffff;
+  --texto: #1d2433;
+  --suave: #6b7489;
+  --borde: #e3e7ef;
+  --marino: #14213d;
+  --acento: #2f6fde;
+  --fraude: #e0524d;
+  --legitima: #5b7db1;
+  --alerta: #f0a03c;
+  --anomala: #8a63d2;
+  --bien: #2f9e63;
+  --sombra: 0 1px 3px rgba(20, 33, 61, .08), 0 1px 2px rgba(20, 33, 61, .04);
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
+  background: var(--fondo);
+  color: var(--texto);
+  font-size: 14px;
+}
+
+/* ------------------------------------------------------------------ cabecera */
+.cabecera {
+  display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 14px 28px; background: var(--marino); color: #fff;
+}
+.marca { display: flex; align-items: center; gap: 14px; }
+.logo {
+  width: 42px; height: 42px; border-radius: 10px; display: grid; place-items: center;
+  background: linear-gradient(135deg, #2f6fde, #8a63d2); font-weight: 700; font-size: 20px;
+}
+.cabecera h1 { margin: 0; font-size: 19px; font-weight: 600; }
+.cabecera p { margin: 2px 0 0; color: #b9c3d9; font-size: 13px; }
+.controles { display: flex; align-items: center; gap: 8px; }
+.controles label { color: #b9c3d9; font-size: 13px; }
+.controles select, .controles button {
+  font: inherit; border-radius: 8px; border: 1px solid #34456b; padding: 7px 12px;
+  background: #1f3156; color: #fff; cursor: pointer;
+}
+.controles button:hover { background: #2a4170; }
+
+/* ------------------------------------------------------------------ pestañas */
+.pestanas {
+  display: flex; gap: 4px; padding: 0 28px; background: #fff; border-bottom: 1px solid var(--borde);
+  overflow-x: auto; position: sticky; top: 0; z-index: 5;
+}
+.pestanas button {
+  font: inherit; border: 0; background: none; padding: 13px 14px; color: var(--suave); cursor: pointer;
+  border-bottom: 3px solid transparent; white-space: nowrap;
+}
+.pestanas button:hover { color: var(--texto); }
+.pestanas button.activa { color: var(--acento); border-bottom-color: var(--acento); font-weight: 600; }
+
+main { padding: 22px 28px 10px; max-width: 1500px; margin: 0 auto; }
+.seccion { display: none; }
+.seccion.activa { display: block; }
+
+/* ------------------------------------------------------------------ KPIs */
+.kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 18px; }
+.kpi {
+  background: var(--tarjeta); border-radius: 12px; padding: 14px 16px; box-shadow: var(--sombra);
+  border-top: 4px solid var(--acento);
+}
+.kpi .etiqueta { color: var(--suave); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.kpi .valor { font-size: 26px; font-weight: 650; margin: 6px 0 2px; }
+.kpi .detalle { color: var(--suave); font-size: 12.5px; }
+.kpi.fraude { border-top-color: var(--fraude); }
+.kpi.alerta { border-top-color: var(--alerta); }
+.kpi.anomala { border-top-color: var(--anomala); }
+.kpi.bien { border-top-color: var(--bien); }
+
+/* ------------------------------------------------------------------ tarjetas */
+.rejilla { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.tarjeta { background: var(--tarjeta); border-radius: 12px; padding: 16px 18px; box-shadow: var(--sombra); min-width: 0; }
+.tarjeta.ancha { grid-column: 1 / -1; }
+.tarjeta h2 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+.nota { color: var(--suave); font-size: 12.5px; margin: 2px 0 10px; line-height: 1.45; }
+.grafica { position: relative; height: 260px; }
+.grafica.alta { height: 320px; }
+
+@media (max-width: 900px) {
+  .rejilla { grid-template-columns: 1fr; }
+  main, .cabecera, .pestanas { padding-left: 14px; padding-right: 14px; }
+}
+
+/* ------------------------------------------------------------------ tablas */
+.tabla-contenedor { overflow-x: auto; max-height: 520px; overflow-y: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th {
+  text-align: left; font-weight: 600; color: var(--suave); font-size: 11.5px; text-transform: uppercase;
+  letter-spacing: .03em; padding: 8px 10px; border-bottom: 1px solid var(--borde); background: #fafbfd;
+  position: sticky; top: 0; white-space: nowrap;
+}
+td { padding: 7px 10px; border-bottom: 1px solid #f0f2f6; vertical-align: top; }
+tr:hover td { background: #f7f9fd; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+tr.es-fraude td:first-child { box-shadow: inset 3px 0 0 var(--fraude); }
+
+.etiqueta-pill {
+  display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600;
+  white-space: nowrap; margin: 1px 2px 1px 0;
+}
+.pill-fraude { background: #fde8e7; color: #b42d28; }
+.pill-legitima { background: #e9eef7; color: #3e5a86; }
+.pill-alerta { background: #fdf0dc; color: #9a5d0b; }
+.pill-anomala { background: #efe8fb; color: #5d3ba3; }
+.pill-bien { background: #e3f4ea; color: #1f7046; }
+.pill-gris { background: #eef0f4; color: #596277; }
+
+.barrita { display: inline-flex; align-items: center; gap: 6px; }
+.barrita span.fondo { width: 54px; height: 6px; background: #edf0f5; border-radius: 3px; overflow: hidden; display: inline-block; }
+.barrita span.relleno { display: block; height: 100%; background: var(--anomala); }
+
+/* ------------------------------------------------------------------ filtros */
+.barra-filtros { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chips button, .barra-filtros select {
+  font: inherit; border: 1px solid var(--borde); background: #fff; padding: 6px 12px; border-radius: 999px;
+  cursor: pointer; color: var(--texto);
+}
+.chips button.activa { background: var(--acento); border-color: var(--acento); color: #fff; }
+.barra-filtros select { border-radius: 8px; }
+
+.aviso {
+  background: #fff6e5; border: 1px solid #f3d9a4; color: #7a5300; padding: 10px 12px; border-radius: 8px;
+  font-size: 13px;
+}
+.cargando { color: var(--suave); padding: 10px 0; }
+
+footer { text-align: center; color: var(--suave); font-size: 12px; padding: 18px; }
+code { background: #eef1f6; padding: 1px 5px; border-radius: 4px; }

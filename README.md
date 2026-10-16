@@ -532,6 +532,7 @@ copy .env.example .env                               # y escribe la contraseña 
 | Rehacerlo todo **sin** regenerar los datos | `venv\Scripts\python.exe main.py --reutilizar-datos` | ~12 min |
 | Empezar desde un paso concreto | `venv\Scripts\python.exe main.py --desde entrenar_autoencoder` | depende |
 | **Simular un día nuevo** (como hace Airflow cada día) | `venv\Scripts\python.exe main.py --scoring` | ~5 min |
+| **Ver los resultados en la web** (y abrir http://localhost:8000) | `venv\Scripts\python.exe -m uvicorn web.app:app` | al momento |
 | Pasar los tests | `venv\Scripts\python.exe -m pytest tests` | 1 min |
 
 Si un paso falla, el pipeline se para ahí y dice cuál ha sido.
@@ -555,6 +556,7 @@ venv\Scripts\python.exe pipeline\medir_feedback.py
 # Docker, sin instalar Python
 docker compose run --rm --build pipeline                       # = python main.py
 docker compose run --rm pipeline python main.py --scoring      # un día más
+docker compose --profile web up -d --build                     # la web, en http://localhost:8000
 
 # Airflow (después, abrir http://localhost:8080)
 docker compose -f docker-compose.yml -f docker-compose.airflow.yml up -d --build
@@ -580,6 +582,7 @@ están en **`config.yaml`**, comentados.
 
 | Para ver… | Abre |
 |---|---|
+| **Todo de forma visual**: resumen, últimas transacciones y alertas, patrones de fraude, anomalías, analistas y modelos | La web: http://localhost:8000 (ver abajo) |
 | **El resumen de los modelos**: cuál gana, qué detecta, cuánto fiarse | `resultados/conclusiones.md` |
 | Las curvas de los 5 modelos | `resultados/curvas_pr_test.png` |
 | La comparación con la red neuronal (Hito 4) | `resultados/conclusiones_hito4.md`, `comparativa_final_pr.png` |
@@ -601,6 +604,24 @@ Y dentro de **ClickHouse** (base de datos `fraude_pagos`):
 | `feedback_analistas` | Lo que dijeron los analistas de cada alerta |
 | `etiquetas_conocidas` | Lo que se sabe que es fraude (banco + analistas) |
 
+### La web
+
+En vez de un panel de PowerBI, el proyecto tiene su propia página web (`web/`). Un pequeño servidor
+(FastAPI) lee ClickHouse y `resultados/` y una página HTML con gráficas (Chart.js) lo enseña. Solo
+lee: no cambia nada. Se arranca con `venv\Scripts\python.exe -m uvicorn web.app:app` (o con Docker,
+ver arriba) y se abre http://localhost:8000. Arriba se elige el periodo (todo, últimos 30 o 7 días).
+
+| Pestaña | Qué enseña |
+|---|---|
+| **Resumen** | Cifras clave (transacciones, fraude, alertas, revisiones, anómalas), actividad diaria, fraude por tipo, últimas alertas y últimos fraudes |
+| **Transacciones** | Las últimas, con su nota de sospecha, las reglas que saltaron, el veredicto del analista y la etiqueta real. Filtros: fraude, con alerta, anómalas, revisadas |
+| **Patrones** | Fraude por hora, día de la semana, canal, dispositivo, categoría de comercio y país de la IP; señales de riesgo; comercios y clientes con más fraude |
+| **Alertas y analistas** | Alertas de cada regla (cuántas eran fraude), si la cola de los analistas mejora semana a semana, acierto de cada analista y últimas revisiones |
+| **Anomalías** | Para cada uno de los 5 modelos: dónde cae el fraude según su nota y las transacciones más raras |
+| **Modelos y ajuste** | Comparativa de los 5 modelos, qué tipo de fraude detecta cada uno y el ajuste de umbrales de las reglas |
+
+La documentación de los datos que da el servidor está en http://localhost:8000/api/docs.
+
 ## Mapa del proyecto
 
 ### Carpetas
@@ -613,6 +634,7 @@ Y dentro de **ClickHouse** (base de datos `fraude_pagos`):
 | `notebooks/` | Exploración de los datos y gráficos (Hitos 1 y 2) |
 | `dags/` | Los flujos de Airflow |
 | `k8s/` | La configuración de Kubernetes |
+| `web/` | La web con los resultados (servidor en `app.py`, página en `static/`) |
 | `tests/` | Comprobaciones automáticas |
 | `datos_ml/` | Los datos ya preparados para los modelos (se genera) |
 | `modelos/` | Los modelos entrenados (se genera) |
@@ -657,4 +679,4 @@ Nunca vuelve a entrenar los modelos principales ni a ajustar umbrales (eso es un
 | 3. ML para anomalías | Isolation Forest, One-Class SVM, KMeans, DBSCAN; variables; ajuste; puntuación | `features.py`, `modelos_nosupervisados.py`, `puntuar_nosupervisados.py`, `evaluar_modelos_nosupervisados.py` | Hecho |
 | 4. Autoencoders | Red neuronal, error de reconstrucción, comparación con los clásicos | `entrenar_autoencoder.py`, `puntuar_autoencoder.py`, `evaluar_autoencoders.py`, `comparacion_modelos.py` | Hecho |
 | 5. Orquestación y despliegue | Airflow, Docker, Kubernetes, ejecuciones periódicas, reproducibilidad | `dags/`, `Dockerfile`, `docker-compose*.yml`, `k8s/`, `generar_lote.py`, `validacion_reproducibilidad_consistencia.py` | Hecho |
-| 6. Analistas y dashboards | Feedback de analistas, ajuste de umbrales, dashboards, patrones por cliente/comercio/dispositivo/hora | Feedback: `simular_analistas.py`, `integrar_feedback.py`, `recalibrar_modelo.py`, `medir_feedback.py`. Umbrales y variables: `ajustar_umbrales.py`, `config.yaml` (`reglas`, `feedback`) | Feedback y ajuste de umbrales y variables hechos. Dashboards y análisis de patrones: pendientes |
+| 6. Analistas y dashboards | Feedback de analistas, ajuste de umbrales, dashboards, patrones por cliente/comercio/dispositivo/hora | Feedback: `simular_analistas.py`, `integrar_feedback.py`, `recalibrar_modelo.py`, `medir_feedback.py`. Umbrales y variables: `ajustar_umbrales.py`, `config.yaml` (`reglas`, `feedback`). Dashboard y patrones: la web (`web/`) | Hecho |

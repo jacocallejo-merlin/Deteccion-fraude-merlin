@@ -15,3 +15,6 @@ scikit-learn==1.9.1
 scipy==1.18.1
 seaborn==0.13.2
 tzdata==2026.4
+# La web (web/app.py): API y página con los resultados
+fastapi==0.143.2
+uvicorn==0.54.0
