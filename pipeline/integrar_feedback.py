@@ -1,7 +1,9 @@
 """
 Junta las dos fuentes de etiquetas que tendría un banco en un momento dado (Hito 6):
   - banco:    fraudes confirmados (contracargo, reclamación del cliente), con días o semanas de retraso
-  - analista: veredictos de feedback_analistas, que llegan en 1-2 días pero solo de las alertas revisadas
+  - analista: veredictos de feedback_analistas, que llegan en 1-2 días pero solo de las alertas revisadas,
+              y los que da una persona en la web (revision_web). Si los dos revisan la misma
+              transacción, cuenta el de la web (una persona real frente al analista simulado)
 y deja el resultado en la tabla etiquetas_conocidas (solo lo que se sabía antes del corte).
 
 Si se contradicen manda el banco: un contracargo confirmado es definitivo, y así se ven los errores
@@ -31,6 +33,24 @@ def crear_tabla(client):
     ''')
 
 
+def crear_tabla_revision_web(client):
+    """Veredictos que se dan en la web. fecha_revision es la hora del sistema (la de los datos: el
+    final del último día puntuado), para que entren en la siguiente recalibración; fecha_real es la
+    hora del ordenador, para saber cuándo se hizo de verdad."""
+    client.command('''
+        CREATE TABLE IF NOT EXISTS revision_web (
+            transaccion_id  UInt32,
+            veredicto       LowCardinality(String),     -- fraude o legitima
+            comentario      String,
+            usuario         String,
+            comercio        UInt32,                     -- 0 = desde la vista de la entidad
+            fecha_revision  DateTime,
+            fecha_real      DateTime DEFAULT now()
+        ) ENGINE = MergeTree
+        ORDER BY (transaccion_id, fecha_real)
+    ''')
+
+
 def con_columnas(df, tipos):
     """query_df devuelve un DataFrame sin columnas si no hay filas (p. ej. el banco aún no ha
     confirmado ningún fraude): se crea vacío con sus columnas y tipos para que el merge funcione."""
@@ -46,11 +66,21 @@ def etiquetas_conocidas_a(client, corte):
         FROM transaccion
         WHERE es_fraude = 1 AND fecha_confirmacion <= {c:DateTime}
     ''', parameters={'c': corte})
+    crear_tabla_revision_web(client)
+    # Un veredicto por transacción: el último de la web si lo hay; si no, el del analista simulado
     analistas = client.query_df('''
-        SELECT transaccion_id, veredicto, tipo_fraude AS tipo_analista, fecha_revision
-        FROM feedback_analistas
-        WHERE fecha_revision <= {c:DateTime}
+        SELECT transaccion_id, argMax(veredicto, orden) AS veredicto, argMax(tipo, orden) AS tipo_analista,
+               argMax(fecha_revision, orden) AS fecha_revision
+        FROM (SELECT transaccion_id, veredicto, toString(tipo_fraude) AS tipo, fecha_revision,
+                     (0, fecha_revision) AS orden
+              FROM feedback_analistas WHERE fecha_revision <= {c:DateTime}
+              UNION ALL
+              SELECT transaccion_id, veredicto, '' AS tipo, fecha_revision, (1, fecha_real) AS orden
+              FROM revision_web WHERE fecha_revision <= {c:DateTime})
+        GROUP BY transaccion_id
     ''', parameters={'c': corte})
+    if len(analistas):
+        analistas['tipo_analista'] = analistas['tipo_analista'].replace({'': None, 'None': None})
     banco = con_columnas(banco, {'transaccion_id': 'uint32', 'tipo_banco': 'object',
                                  'fecha_confirmacion': 'datetime64[ns]'})
     analistas = con_columnas(analistas, {'transaccion_id': 'uint32', 'veredicto': 'object',

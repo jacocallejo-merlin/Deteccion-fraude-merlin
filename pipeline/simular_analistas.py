@@ -56,6 +56,35 @@ def crear_tabla(client):
         ) ENGINE = MergeTree
         ORDER BY (fecha_alerta, transaccion_id)
     ''')
+    # Nota de riesgo de TODAS las transacciones de cada día, con el modelo que ordenaba la cola ese
+    # día (la que ve la web y de la que salen las alertas). Replacing: si se vuelve a simular un
+    # día, la fila nueva sustituye a la anterior.
+    client.command('''
+        CREATE TABLE IF NOT EXISTS riesgo_transaccion (
+            transaccion_id     UInt32,
+            dia                Date,
+            score              Float64,                 -- nota de riesgo (más alta = más sospechosa)
+            posicion           UInt32,                  -- 1 = la de más riesgo de su día
+            transacciones_dia  UInt32,
+            modelo             LowCardinality(String),  -- kmeans o recalibrado_<fecha>
+            en_cola            UInt8,                   -- entró en el presupuesto de los analistas
+            ts                 DateTime DEFAULT now()
+        ) ENGINE = ReplacingMergeTree(ts)
+        ORDER BY transaccion_id
+    ''')
+
+
+def guardar_riesgo(client, dia, info, score, modelo, revisadas):
+    """Guarda la nota y la posición en el ranking del día de todas las transacciones del día."""
+    orden = np.argsort(-score, kind='stable')          # mismo orden que la cola
+    posicion = np.empty(len(score), dtype='uint32')
+    posicion[orden] = np.arange(1, len(score) + 1)
+    client.insert_df('riesgo_transaccion', pd.DataFrame({
+        'transaccion_id': info['transaccion_id'].astype('uint32').to_numpy(),
+        'dia': dia, 'score': np.asarray(score, dtype=float), 'posicion': posicion,
+        'transacciones_dia': np.uint32(len(score)), 'modelo': modelo,
+        'en_cola': info['transaccion_id'].isin(revisadas).astype('uint8').to_numpy(),
+    }))
 
 
 def dias_pendientes(client):
@@ -102,6 +131,7 @@ def revisar_dia(client, dia, analistas):
             'modelo': modelo,
         })
     revision = pd.DataFrame(filas)
+    guardar_riesgo(client, dia, info, score, modelo, set(cola['transaccion_id']))
     if not filas:
         print(f'{dia}: {len(df):>4} transacciones, ninguna por encima del umbral mínimo ({UMBRAL_MINIMO})')
         return revision

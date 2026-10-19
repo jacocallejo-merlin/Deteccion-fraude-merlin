@@ -46,8 +46,8 @@ services:
       - ./resultados:/app/resultados
       - ./historico:/app/historico
 
-  # La web con los resultados (http://localhost:8000). Misma imagen que el pipeline; solo lee
-  # ClickHouse y resultados/. Perfil propio para que "docker compose up -d" siga arrancando solo
+  # La web para el cliente (http://localhost:8000). Misma imagen que el pipeline; lee ClickHouse
+  # y guarda las revisiones y los avisos leídos. Perfil propio para que "docker compose up -d" siga arrancando solo
   # la base de datos:   docker compose --profile web up -d --build
   web:
     build: .

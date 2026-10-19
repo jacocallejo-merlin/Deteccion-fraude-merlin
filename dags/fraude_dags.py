@@ -71,9 +71,11 @@ def feedback(ajustar=False):
     ajustar=True añade el ajuste de umbrales y variables con lo validado (solo en el entrenamiento:
     es una decisión periódica, no diaria). Devuelve la primera tarea para engancharla."""
     analistas = paso('simular_analistas', 'simular_analistas.py')
+    avisos = paso('generar_avisos', 'generar_avisos.py')     # cola de alertas y avisos de la web
     integrar = paso('integrar_feedback', 'integrar_feedback.py')
     recalibrar = paso('recalibrar_modelo', 'recalibrar_modelo.py')
     medir = paso('medir_feedback', 'medir_feedback.py')
+    analistas >> avisos
     analistas >> integrar >> recalibrar >> medir
     if ajustar:
         medir >> paso('ajustar_umbrales', 'ajustar_umbrales.py')

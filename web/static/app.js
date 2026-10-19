@@ -1,88 +1,77 @@
 'use strict';
-// Página del proyecto antifraude: pide los datos a la API (web/app.py) y dibuja gráficas y tablas.
-// Cada pestaña se carga la primera vez que se abre; al cambiar el periodo se vuelve a cargar.
+// MERLIN Antifraude: bandeja de alertas, resumen, buscador y avisos. Pide los datos a web/app.py.
 
-const COLOR = {
-  fraude: '#e0524d', legitima: '#5b7db1', alerta: '#f0a03c', anomala: '#8a63d2',
-  bien: '#2f9e63', gris: '#a3acbf', acento: '#2f6fde',
-};
-const NOMBRE_MODELO = {
-  iforest: 'Isolation Forest', kmeans: 'KMeans', dbscan: 'DBSCAN', ocsvm: 'One-Class SVM', autoencoder: 'Autoencoder',
-};
+const COLOR = { critico: '#d93f3a', alto: '#ee8a1d', medio: '#e6b800', fraude: '#d93f3a', legitima: '#2f9e63',
+  pendiente: '#5b7db1', vigilancia: '#b9c6dc', sin_incidencia: '#9aa3b2', acento: '#2f6fde' };
+const NIVEL_TEXTO = { critico: 'Crítico', alto: 'Alto', medio: 'Medio' };
+const NIVEL_PLURAL = { critico: 'críticos', alto: 'altos', medio: 'medios' };
+const ESTADO_TEXTO = { pendiente: 'Por resolver', vigilancia: 'En vigilancia', fraude: 'Fraude', legitima: 'Legítima',
+  sin_incidencia: 'Sin incidencia' };
+const RESULTADO = { fraude: 'Era fraude', legitima: 'Era una compra legítima', sin_incidencia: 'Cerrado sin incidencia' };
+const ABIERTOS = ['pendiente', 'vigilancia'];
+const REFRESCO_MS = 60000;
 
 Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
-Chart.defaults.color = '#6b7489';
+Chart.defaults.color = '#687288';
 Chart.defaults.plugins.legend.labels.boxWidth = 12;
 Chart.defaults.maintainAspectRatio = false;
 
-const estado = { pestana: 'resumen', cargadas: new Set(), filtroTx: 'todas', modelo: null };
+const leer = (clave, defecto) => { try { return localStorage.getItem(clave) ?? defecto; } catch { return defecto; } };
+const guardar = (clave, valor) => { try { localStorage.setItem(clave, valor); } catch { /* sin almacenamiento */ } };
+
+const estado = {
+  pestana: 'alertas', comercio: leer('comercio', '0'), filtroEstado: 'pendientes', filtroAvisos: 'no_leidos',
+  usuario: leer('usuario', 'Analista'), demo: leer('demo', '0') === '1', comercios: {},
+  noLeidos: null, caso: null,
+  ordenAlertas: leer('ordenAlertas', 'riesgo'), ordenTransacciones: leer('ordenTransacciones', 'reciente'),
+};
 const graficas = {};
 
 // ------------------------------------------------------------------------------ formato
 const nf = new Intl.NumberFormat('es-ES');
 const num = (n) => (n == null ? '–' : nf.format(n));
-const eur = (n) => (n == null ? '–' : n.toLocaleString('es-ES', {
-  style: 'currency', currency: 'EUR', maximumFractionDigits: Math.abs(n) >= 1000 ? 0 : 2,
-}));
-const pct = (x, d = 1) => (x == null || !isFinite(x) ? '–'
-  : `${(x * 100).toLocaleString('es-ES', { minimumFractionDigits: d, maximumFractionDigits: d })} %`);
-const fecha = (s) => {
-  if (!s) return '–';
-  const d = new Date(s);
-  const dos = (n) => String(n).padStart(2, '0');
-  return `${dos(d.getDate())}/${dos(d.getMonth() + 1)}/${String(d.getFullYear()).slice(2)} ${dos(d.getHours())}:${dos(d.getMinutes())}`;
-};
-const diaCorto = (s) => new Date(`${s}T00:00:00`).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' });
-const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
-  '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
-}[c]));
-const cociente = (a, b) => (b ? a / b : null);
+const eur = (n) => (n == null ? '–' : n.toLocaleString('es-ES', { style: 'currency', currency: 'EUR' }));
+const pct = (x) => (x == null || !isFinite(x) ? '–' : `${Math.round(x * 100)} %`);
+const dos = (n) => String(n).padStart(2, '0');
+const fechaHora = (s) => { const d = new Date(s); return `${dos(d.getDate())}/${dos(d.getMonth() + 1)} ${dos(d.getHours())}:${dos(d.getMinutes())}`; };
+const hora = (s) => { const d = new Date(s); return `${dos(d.getHours())}:${dos(d.getMinutes())}`; };
+const fechaLarga = (s) => new Date(`${String(s).slice(0, 10)}T00:00:00`).toLocaleDateString('es-ES', { day: 'numeric', month: 'long', year: 'numeric' });
+const diaCorto = (s) => new Date(`${String(s).slice(0, 10)}T00:00:00`).toLocaleDateString('es-ES', { day: '2-digit', month: 'short' });
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const tarjeta = (t) => (t ? `•••• ${esc(String(t).slice(-4))}` : 'tarjeta');
+const nivelPill = (n) => (n ? `<span class="pill ${n}">${NIVEL_TEXTO[n]}</span>` : '');
+const estadoPill = (e, detalle = '') => (e ? `<span class="pill ${e}" title="${esc(detalle)}">${ESTADO_TEXTO[e]}</span>` : '');
+const abierto = (e) => ABIERTOS.includes(e);
+// Siempre "de cada 10", para que los niveles se comparen de un vistazo: 0,63 -> "6 de cada 10 son
+// fraude"; 0,33 -> "3 de cada 10". Solo por debajo del 10 % se pasa a "1 de cada N"
+const sobreDiez = (p) => Math.min(Math.round(p * 10), p < 1 ? 9 : 10);
+const proporcion = (p) => (p == null ? '' : p >= 0.1 ? `${sobreDiez(p)} de cada 10` : `1 de cada ${Math.round(1 / p)}`);
+const fraseFraude = (p) => (p == null ? '' : `${proporcion(p)} ${p >= 0.15 ? 'son' : 'es'} fraude`);
+// Puesto del pago entre los del día: 0,0015 -> "top 0,2 % del día" (solo si está entre el 3 % de más riesgo)
+const puesto = (x) => (x == null || x > 0.03 ? ''
+  : `top ${Math.max(x * 100, 0.1).toLocaleString('es-ES', { maximumFractionDigits: 1 })} % del día`);
+const realPill = (r) => (estado.demo && r ? `<span class="pill real" title="Verdad del simulador (solo en modo demostración)">Real: ${esc(Array.isArray(r) ? r.join(', ') : r)}</span>` : '');
 
-function pill(texto, clase) { return `<span class="etiqueta-pill pill-${clase}">${esc(texto)}</span>`; }
-function etiquetaReal(f) {
-  return f.es_fraude ? pill(f.tipo_fraude || 'fraude', 'fraude') : pill('legítima', 'legitima');
-}
-function barraScore(p) {
-  if (p == null) return '–';
-  const clase = p >= 0.99 ? 'anomala' : 'gris';
-  return `<span class="barrita"><span class="fondo"><span class="relleno" style="width:${(p * 100).toFixed(1)}%;`
-    + `background:${clase === 'anomala' ? COLOR.anomala : COLOR.gris}"></span></span>${p.toFixed(3)}</span>`;
-}
-function veredicto(v) {
-  if (!v) return '–';
-  return v === 'fraude' ? pill('fraude', 'fraude') : pill('legítima', 'legitima');
-}
-
-// ------------------------------------------------------------------------------ API y pintado
-function dias() { return document.getElementById('periodo').value; }
-
-async function api(ruta, parametros = {}) {
+// ------------------------------------------------------------------------------ API
+async function api(ruta, parametros = {}, cuerpo = null) {
   const url = new URL(ruta, window.location.origin);
   Object.entries(parametros).forEach(([k, v]) => url.searchParams.set(k, v));
-  const respuesta = await fetch(url);
-  const cuerpo = await respuesta.json().catch(() => ({}));
-  if (!respuesta.ok) throw new Error(cuerpo.detail || `Error ${respuesta.status} en ${ruta}`);
-  return cuerpo;
+  if (estado.demo) url.searchParams.set('demo', 'true');
+  const opciones = cuerpo ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cuerpo) } : {};
+  const r = await fetch(url, opciones);
+  const datos = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const detalle = Array.isArray(datos.detail) ? datos.detail.map((d) => d.msg).join('; ') : datos.detail;
+    throw new Error(detalle || `Error ${r.status}`);
+  }
+  return datos;
 }
+const comercio = () => estado.comercio;
 
 function grafica(id, config) {
   if (graficas[id]) graficas[id].destroy();
   graficas[id] = new Chart(document.getElementById(id), config);
 }
-
-/** columnas: [{titulo, valor: fila => html, num: bool}] */
-function tabla(id, columnas, filas, claseFila = () => '') {
-  const contenedor = document.getElementById(id);
-  if (!filas || !filas.length) {
-    contenedor.innerHTML = '<p class="cargando">Sin datos en este periodo.</p>';
-    return;
-  }
-  const cabecera = columnas.map((c) => `<th class="${c.num ? 'num' : ''}">${esc(c.titulo)}</th>`).join('');
-  const cuerpo = filas.map((f) => `<tr class="${claseFila(f)}">${columnas
-    .map((c) => `<td class="${c.num ? 'num' : ''}">${c.valor(f)}</td>`).join('')}</tr>`).join('');
-  contenedor.innerHTML = `<table><thead><tr>${cabecera}</tr></thead><tbody>${cuerpo}</tbody></table>`;
-}
-const filaFraude = (f) => (f.es_fraude ? 'es-fraude' : '');
 
 function kpis(id, lista) {
   document.getElementById(id).innerHTML = lista.map((k) => `
@@ -93,480 +82,471 @@ function kpis(id, lista) {
     </div>`).join('');
 }
 
-function mostrarError(seccion, error) {
-  const s = document.getElementById(seccion);
-  let caja = s.querySelector(':scope > .aviso');
-  if (!caja) {
-    caja = document.createElement('div');
-    caja.className = 'aviso';
-    s.prepend(caja);
-  }
-  caja.textContent = error.message;
-}
-function quitarError(seccion) {
-  document.getElementById(seccion).querySelector(':scope > .aviso')?.remove();
+function mostrarError(id, e) {
+  document.getElementById(id).innerHTML = `<div class="error">${esc(e.message)}</div>`;
 }
 
-// Barras con el porcentaje de fraude de cada valor (tooltip: fraudes de transacciones)
-function barrasTasa(id, filas, etiqueta, horizontal = false) {
-  grafica(id, {
-    type: 'bar',
-    data: {
-      labels: filas.map(etiqueta),
-      datasets: [{ label: '% fraude', data: filas.map((f) => f.tasa * 100), backgroundColor: COLOR.fraude, borderRadius: 4 }],
-    },
-    options: {
-      indexAxis: horizontal ? 'y' : 'x',
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: (c) => {
-              const f = filas[c.dataIndex];
-              return `${pct(f.tasa, 2)} fraude (${num(f.fraudes)} de ${num(f.transacciones)})`;
-            },
-          },
-        },
-      },
-      scales: { [horizontal ? 'x' : 'y']: { ticks: { callback: (v) => `${v} %` } } },
-    },
-  });
+function flotante(titulo, texto, alPulsar) {
+  const caja = document.createElement('div');
+  caja.className = 'flotante';
+  caja.innerHTML = `<b>${esc(titulo)}</b>${esc(texto)}`;
+  caja.addEventListener('click', () => { caja.remove(); if (alPulsar) alPulsar(); });
+  document.getElementById('avisos-flotantes').append(caja);
+  setTimeout(() => caja.remove(), 12000);
 }
 
-// Barras de transacciones + línea con el % de fraude en un segundo eje
-function barrasYTasa(id, filas, etiqueta) {
-  grafica(id, {
-    data: {
-      labels: filas.map(etiqueta),
-      datasets: [
-        { type: 'bar', label: 'Transacciones', data: filas.map((f) => f.transacciones),
-          backgroundColor: '#c9d5ea', borderRadius: 3, yAxisID: 'y', order: 2 },
-        { type: 'line', label: '% fraude', data: filas.map((f) => (f.fraudes / f.transacciones) * 100),
-          borderColor: COLOR.fraude, backgroundColor: COLOR.fraude, tension: 0.3, yAxisID: 'y1', order: 1 },
-      ],
-    },
-    options: {
-      interaction: { mode: 'index', intersect: false },
-      scales: {
-        y: { beginAtZero: true, title: { display: true, text: 'transacciones' } },
-        y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false },
-          ticks: { callback: (v) => `${v} %` } },
-      },
-      plugins: { tooltip: { callbacks: { label: (c) => (c.dataset.yAxisID === 'y1'
-        ? `% fraude: ${c.parsed.y.toFixed(2)} %` : `Transacciones: ${num(c.parsed.y)}`) } } },
-    },
-  });
+// ------------------------------------------------------------------------------ contexto
+async function cargarContexto() {
+  const c = await api('/api/contexto');
+  estado.contexto = c;
+  document.getElementById('reloj').textContent =
+    `Datos hasta el ${fechaLarga(c.hoy)} · en marcha desde el ${fechaLarga(c.inicio)}`;
+  // El nivel medio es opcional (config.yaml): sin él, no hay filtro para verlo
+  estado.niveles = c.niveles;
+  if (!c.niveles.includes('medio')) document.getElementById('opcion-medios')?.remove();
+  const sel = document.getElementById('comercio');
+  sel.innerHTML = '<option value="0">Todos los comercios</option>'
+    + c.comercios.map((x) => `<option value="${x.id}">${esc(x.nombre)}</option>`).join('');
+  c.comercios.forEach((x) => { estado.comercios[x.id] = x.nombre; });
+  if (!estado.comercios[estado.comercio]) estado.comercio = '0';
+  sel.value = estado.comercio;
 }
 
-// ------------------------------------------------------------------------------ pestañas
-async function cargarResumen() {
-  const d = dias();
-  const [r, serie, patrones, alertas, fraudes] = await Promise.all([
-    api('/api/resumen', { dias: d }), api('/api/serie', { dias: d }), api('/api/patrones', { dias: d }),
-    api('/api/alertas', { dias: d, limite: 8 }), api('/api/transacciones', { filtro: 'fraude', limite: 8 }),
-  ]);
-  const t = r.transacciones;
-  document.getElementById('rango').textContent = `Datos del ${new Date(t.desde).toLocaleDateString('es-ES')} al `
-    + `${new Date(t.hasta).toLocaleDateString('es-ES')} · ${num(t.transacciones)} transacciones · `
-    + `${num(t.clientes)} clientes · ${num(t.comercios)} comercios`;
-
-  const lista = [
-    { etiqueta: 'Transacciones', valor: num(t.transacciones),
-      detalle: `${eur(t.importe)} · ${num(t.rechazadas)} rechazadas` },
-    { etiqueta: 'Fraude', clase: 'fraude', valor: num(t.fraudes),
-      detalle: `${pct(cociente(t.fraudes, t.transacciones), 2)} de las transacciones · ${eur(t.importe_fraude)}` },
-    { etiqueta: 'Confirmado por el banco', clase: 'fraude', valor: pct(cociente(t.confirmados_banco, t.fraudes), 0),
-      detalle: `${num(t.confirmados_banco)} de ${num(t.fraudes)} fraudes; el resto aún no (o nunca)` },
-  ];
-  if (r.reglas) {
-    lista.push({ etiqueta: 'Alertas de las reglas', clase: 'alerta', valor: num(r.reglas.transacciones),
-      detalle: `transacciones alertadas · ${pct(cociente(r.reglas.fraudes, r.reglas.transacciones))} eran fraude` });
-  }
-  if (r.analistas) {
-    lista.push({ etiqueta: 'Revisadas por analistas', clase: 'bien', valor: num(r.analistas.revisadas),
-      detalle: `${pct(cociente(r.analistas.fraude_real, r.analistas.revisadas))} eran fraude` });
-  }
-  if (r.anomalias) {
-    lista.push({ etiqueta: `Anómalas (${NOMBRE_MODELO[r.modelo_base] || r.modelo_base})`, clase: 'anomala',
-      valor: num(r.anomalias.anomalas),
-      detalle: `más raras que el ${Math.round(r.umbral_anomalia * 100)} % · ${pct(cociente(r.anomalias.fraudes, r.anomalias.anomalas))} eran fraude` });
-  }
-  kpis('kpis', lista);
-
-  grafica('g-serie', {
-    data: {
-      labels: serie.map((f) => diaCorto(f.dia)),
-      datasets: [
-        { type: 'bar', label: 'Transacciones', data: serie.map((f) => f.transacciones), backgroundColor: '#d3dcec', yAxisID: 'y', order: 4 },
-        { type: 'line', label: 'Fraudes', data: serie.map((f) => f.fraudes), borderColor: COLOR.fraude, backgroundColor: COLOR.fraude, yAxisID: 'y1', pointRadius: 0, tension: 0.25, borderWidth: 2, order: 1 },
-        { type: 'line', label: 'Con alerta de reglas', data: serie.map((f) => f.alertas), borderColor: COLOR.alerta, backgroundColor: COLOR.alerta, yAxisID: 'y1', pointRadius: 0, tension: 0.25, borderWidth: 1.5, order: 2 },
-        { type: 'line', label: 'Anómalas', data: serie.map((f) => f.anomalas), borderColor: COLOR.anomala, backgroundColor: COLOR.anomala, yAxisID: 'y1', pointRadius: 0, tension: 0.25, borderWidth: 1.5, order: 3 },
-      ],
-    },
-    options: {
-      interaction: { mode: 'index', intersect: false },
-      scales: {
-        x: { ticks: { maxTicksLimit: 14 } },
-        y: { beginAtZero: true, title: { display: true, text: 'transacciones' } },
-        y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, title: { display: true, text: 'fraudes / alertas' } },
-      },
-    },
-  });
-
-  grafica('g-donut', {
-    type: 'doughnut',
-    data: {
-      labels: ['Legítimas', 'Fraude'],
-      datasets: [{ data: [t.transacciones - t.fraudes, t.fraudes], backgroundColor: [COLOR.legitima, COLOR.fraude], borderWidth: 0 }],
-    },
-    options: {
-      cutout: '62%',
-      plugins: { tooltip: { callbacks: { label: (c) => `${c.label}: ${num(c.parsed)} (${pct(c.parsed / t.transacciones, 2)})` } } },
-    },
-  });
-
-  const tipos = patrones.por_tipo;
-  grafica('g-tipos', {
-    type: 'bar',
-    data: { labels: tipos.map((f) => f.tipo), datasets: [{ label: 'Transacciones fraudulentas', data: tipos.map((f) => f.transacciones), backgroundColor: COLOR.fraude, borderRadius: 4 }] },
-    options: {
-      indexAxis: 'y',
-      plugins: { legend: { display: false }, tooltip: { callbacks: { afterLabel: (c) => `Importe: ${eur(tipos[c.dataIndex].importe)}` } } },
-    },
-  });
-
-  tabla('t-res-alertas', [
-    { titulo: 'Fecha', valor: (f) => fecha(f.fecha) },
-    { titulo: 'Regla', valor: (f) => pill(f.regla, 'alerta') },
-    { titulo: 'Importe', num: true, valor: (f) => eur(f.importe) },
-    { titulo: 'Etiqueta', valor: etiquetaReal },
-  ], alertas.ultimas, filaFraude);
-  tabla('t-res-fraudes', [
-    { titulo: 'Fecha', valor: (f) => fecha(f.timestamp) },
-    { titulo: 'Tipo', valor: (f) => pill(f.tipo_fraude, 'fraude') },
-    { titulo: 'Importe', num: true, valor: (f) => eur(f.importe) },
-    { titulo: 'Score', valor: (f) => barraScore(f.score_pct) },
-    { titulo: 'Reglas', valor: (f) => (f.reglas?.length ? f.reglas.map((x) => pill(x, 'alerta')).join('') : '–') },
-  ], fraudes);
-}
-
-async function cargarTransacciones() {
-  const limite = document.getElementById('limite-tx').value;
-  const filas = await api('/api/transacciones', { filtro: estado.filtroTx, limite });
-  tabla('t-transacciones', [
-    { titulo: 'Fecha', valor: (f) => fecha(f.timestamp) },
-    { titulo: 'ID', num: true, valor: (f) => f.transaccion_id },
-    { titulo: 'Cliente', num: true, valor: (f) => f.cliente_id },
-    { titulo: 'Comercio', valor: (f) => `${esc(f.comercio)}<br><span class="nota">${esc(f.categoria)}</span>` },
-    { titulo: 'Canal', valor: (f) => esc(f.canal) },
-    { titulo: 'Importe', num: true, valor: (f) => eur(f.importe) },
-    { titulo: 'Estado', valor: (f) => (f.estado === 'rechazada' ? pill('rechazada', 'gris') : esc(f.estado)) },
-    { titulo: 'Score', valor: (f) => barraScore(f.score_pct) },
-    { titulo: 'Reglas', valor: (f) => (f.reglas?.length ? f.reglas.map((x) => pill(x, 'alerta')).join('') : '–') },
-    { titulo: 'Analista', valor: (f) => veredicto(f.veredicto) },
-    { titulo: 'Etiqueta', valor: etiquetaReal },
-  ], filas, filaFraude);
-}
-
-async function cargarPatrones() {
-  const p = await api('/api/patrones', { dias: dias() });
-  barrasYTasa('g-hora', p.por_hora, (f) => `${f.hora} h`);
-  barrasYTasa('g-semana', p.por_dia_semana, (f) => f.nombre);
-  grafica('g-senales', {
-    type: 'bar',
-    data: {
-      labels: p.senales.map((f) => f.senal),
-      datasets: [{ label: '% fraude', data: p.senales.map((f) => f.tasa * 100),
-        backgroundColor: p.senales.map((f) => (f.senal.startsWith('Todas') ? COLOR.gris : COLOR.fraude)), borderRadius: 4 }],
-    },
-    options: {
-      indexAxis: 'y',
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: (c) => {
-        const f = p.senales[c.dataIndex];
-        return `${pct(f.tasa, 2)} fraude (${num(f.fraudes)} de ${num(f.transacciones)})`;
-      } } } },
-      scales: { x: { ticks: { callback: (v) => `${v} %` } } },
-    },
-  });
-  barrasTasa('g-canal', p.por_canal, (f) => f.valor);
-  barrasTasa('g-dispositivo', p.por_dispositivo, (f) => f.valor);
-  barrasTasa('g-categoria', [...p.por_categoria].sort((a, b) => b.tasa - a.tasa), (f) => f.valor, true);
-  barrasTasa('g-pais', [...p.por_pais_ip].sort((a, b) => b.tasa - a.tasa), (f) => f.valor, true);
-  tabla('t-comercios', [
-    { titulo: 'Comercio', valor: (f) => `${esc(f.comercio)}<br><span class="nota">${esc(f.categoria)}</span>` },
-    { titulo: 'Transacciones', num: true, valor: (f) => num(f.transacciones) },
-    { titulo: 'Fraudes', num: true, valor: (f) => num(f.fraudes) },
-    { titulo: '% fraude', num: true, valor: (f) => pct(f.tasa, 2) },
-  ], p.top_comercios);
-  tabla('t-clientes', [
-    { titulo: 'Cliente', valor: (f) => `${esc(f.nombre)}<br><span class="nota">#${f.cliente_id}</span>` },
-    { titulo: 'Fraudes', num: true, valor: (f) => `${num(f.fraudes)} / ${num(f.transacciones)}` },
-    { titulo: 'Importe', num: true, valor: (f) => eur(f.importe_fraude) },
-    { titulo: 'Tipos', valor: (f) => f.tipos.map((x) => pill(x, 'fraude')).join('') },
-  ], p.top_clientes);
+// ------------------------------------------------------------------------------ alertas
+function tarjetaCaso(c) {
+  const comercios = c.comercios.length === 1 ? esc(c.comercios[0])
+    : `${c.comercios.length} comercios: ${esc(c.comercios.slice(0, 3).join(', '))}${c.comercios.length > 3 ? '…' : ''}`;
+  const tramo = hora(c.desde) === hora(c.hasta) ? hora(c.desde) : `${hora(c.desde)}–${hora(c.hasta)}`;
+  return `
+    <div class="caso ${c.nivel} ${abierto(c.estado) ? '' : 'revisado'}" data-metodo="${c.metodo_id}" data-dia="${c.dia}">
+      <div class="franja"></div>
+      <div class="cuerpo">
+        <div class="linea1">${nivelPill(c.nivel)}
+          <span class="titulo">Tarjeta ${tarjeta(c.tarjeta)}</span>
+          <span class="nota" style="margin:0">cliente #${c.cliente_id}</span>${realPill(c.real)}</div>
+        <div class="linea2">${c.transacciones} pago${c.transacciones > 1 ? 's' : ''} sospechoso${c.transacciones > 1 ? 's' : ''}
+          · ${diaCorto(c.dia)} ${tramo} · ${comercios}</div>
+        <div>${c.motivos.slice(0, 4).map((m) => `<span class="motivo">${esc(m)}</span>`).join('')}</div>
+      </div>
+      <div class="lado">
+        <span class="importe">${eur(c.importe)}</span>
+        ${abierto(c.estado) ? `<span class="accion-corta ${c.nivel}">${esc(c.accion)}</span>` : estadoPill(c.estado, c.estado_detalle)}
+        ${puesto(c.percentil) ? `<span class="riesgo">${puesto(c.percentil)}</span>` : ''}
+      </div>
+    </div>`;
 }
 
 async function cargarAlertas() {
-  const [a, an] = await Promise.all([api('/api/alertas', { dias: dias(), limite: 60 }), api('/api/analistas', { limite: 60 })]);
-  const reglas = a.por_regla;
-  grafica('g-reglas', {
-    type: 'bar',
-    data: {
-      labels: reglas.map((f) => f.regla),
-      datasets: [
-        { label: 'Eran fraude', data: reglas.map((f) => f.fraudes), backgroundColor: COLOR.fraude, borderRadius: 3 },
-        { label: 'Falsas alarmas', data: reglas.map((f) => f.alertas - f.fraudes), backgroundColor: COLOR.alerta, borderRadius: 3 },
-      ],
-    },
-    options: {
-      indexAxis: 'y',
-      scales: { x: { stacked: true }, y: { stacked: true } },
-      plugins: { tooltip: { callbacks: { footer: (items) => `Precisión: ${pct(reglas[items[0].dataIndex].precision)}` } } },
-    },
+  const datos = await api('/api/alertas', {
+    comercio: comercio(), estado: estado.filtroEstado, orden: estado.ordenAlertas,
+    nivel: document.getElementById('filtro-nivel').value, dias: document.getElementById('filtro-dias-alertas').value,
   });
-
-  if (an.semanal) {
-    const s = an.semanal;
-    const serie = (clave, texto, color, guiones = []) => ({
-      label: texto, data: s.map((f) => (f[clave] == null ? null : f[clave] * 100)), borderColor: color,
-      backgroundColor: color, borderDash: guiones, tension: 0.25,
-    });
-    grafica('g-semanal', {
-      type: 'line',
-      data: {
-        labels: s.map((f) => `Sem. ${f.semana} (${diaCorto(f.desde)})`),
-        datasets: [
-          serie('precision', 'Cola real (banco + analistas)', COLOR.bien),
-          serie('precision_solo_banco', 'Recalibrado solo con el banco', COLOR.acento, [6, 4]),
-          serie('precision_kmeans', 'Detector sin recalibrar', COLOR.gris, [2, 3]),
-        ],
-      },
-      options: {
-        interaction: { mode: 'index', intersect: false },
-        scales: { y: { beginAtZero: true, ticks: { callback: (v) => `${v} %` }, title: { display: true, text: 'alertas que eran fraude' } } },
-        plugins: { tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${c.parsed.y?.toFixed(1)} %` } } },
-      },
-    });
-  }
-
-  tabla('t-alertas', [
-    { titulo: 'Fecha', valor: (f) => fecha(f.fecha) },
-    { titulo: 'Regla', valor: (f) => pill(f.regla, 'alerta') },
-    { titulo: 'Riesgo', num: true, valor: (f) => f.nota_riesgo.toFixed(2) },
-    { titulo: 'Transacción', num: true, valor: (f) => f.transaccion_id },
-    { titulo: 'Cliente', num: true, valor: (f) => f.cliente_id },
-    { titulo: 'Comercio', valor: (f) => esc(f.comercio) },
-    { titulo: 'Importe', num: true, valor: (f) => eur(f.importe) },
-    { titulo: 'Estado', valor: (f) => pill(f.estado, 'gris') },
-    { titulo: 'Etiqueta', valor: etiquetaReal },
-  ], a.ultimas, filaFraude);
-  tabla('t-por-analista', [
-    { titulo: 'Analista', valor: (f) => `${esc(f.analista)}<br><span class="nota">${esc(f.nivel)}</span>` },
-    { titulo: 'Revisadas', num: true, valor: (f) => num(f.revisadas) },
-    { titulo: 'Marcó fraude', num: true, valor: (f) => num(f.marcadas_fraude) },
-    { titulo: 'Acierto', num: true, valor: (f) => pill(pct(f.acierto), f.acierto >= 0.95 ? 'bien' : 'alerta') },
-  ], an.por_analista);
-  tabla('t-revisiones', [
-    { titulo: 'Revisada', valor: (f) => fecha(f.fecha_revision) },
-    { titulo: 'Analista', valor: (f) => `${esc(f.analista)}<br><span class="nota">${esc(f.nivel)}</span>` },
-    { titulo: 'Veredicto', valor: (f) => veredicto(f.veredicto) },
-    { titulo: 'Real', valor: etiquetaReal },
-    { titulo: 'Comentario', valor: (f) => `<span class="nota">${esc(f.comentario)}</span>` },
-  ], an.ultimas, (f) => ((f.veredicto === 'fraude') !== (f.es_fraude === 1) ? 'es-fraude' : ''));
-}
-
-async function cargarAnomalias() {
-  const parametros = { dias: dias(), limite: 50 };
-  if (estado.modelo) parametros.modelo = estado.modelo;      // la primera vez, el detector elegido
-  const a = await api('/api/anomalias', parametros);
-  estado.modelo = a.modelo;
-  document.getElementById('modelos-anomalia').innerHTML = a.modelos.map((m) => `<button data-modelo="${esc(m)}" `
-    + `class="${m === a.modelo ? 'activa' : ''}">${esc(NOMBRE_MODELO[m] || m)}</button>`).join('');
-
-  const r = a.resumen;
-  kpis('kpis-anomalia', [
-    { etiqueta: `Anómalas (≥ percentil ${Math.round(a.umbral * 100)})`, clase: 'anomala', valor: num(r.anomalas),
-      detalle: `${pct(cociente(r.anomalas, r.transacciones), 2)} de las transacciones` },
-    { etiqueta: 'De ellas, fraude (precisión)', clase: 'fraude', valor: pct(cociente(r.anomalas_fraude, r.anomalas)),
-      detalle: `${num(r.anomalas_fraude)} fraudes · al azar sería ${pct(cociente(r.fraudes, r.transacciones), 2)}` },
-    { etiqueta: 'Fraude detectado (recall)', clase: 'bien', valor: pct(cociente(r.anomalas_fraude, r.fraudes)),
-      detalle: `${num(r.anomalas_fraude)} de ${num(r.fraudes)} fraudes del periodo` },
+  const r = datos.resumen;
+  const p = r.probabilidad;
+  const sel = document.getElementById('filtro-dias-alertas');
+  const periodo = sel.value === '0' ? 'desde el inicio' : `· últimos ${sel.value} días`;
+  const enPeriodo = sel.value === '0' ? 'desde el inicio' : `en los últimos ${sel.value} días`;
+  // Lo que importa: cuántos siguen por resolver y qué hacer; el total del periodo, como contexto
+  const kpiNivel = (n) => ({
+    etiqueta: `${NIVEL_TEXTO[n]}s por resolver`, clase: n, valor: num(r.por_nivel[n]),
+    detalle: `<b>→ ${esc(r.acciones[n])}</b>${p[n].prob != null ? ` · ${fraseFraude(p[n].prob)}` : ''}
+      <br>de ${num(r.total_por_nivel[n])} detectados ${enPeriodo}`,
+  });
+  const cerrados = r.cerrados.fraude + r.cerrados.legitima + r.cerrados.sin_incidencia;
+  kpis('kpis-alertas', [
+    kpiNivel('critico'),
+    kpiNivel('alto'),
+    { etiqueta: 'Importe en riesgo', valor: eur(r.importe_en_riesgo), detalle: 'en casos altos y críticos por resolver' },
+    r.por_nivel.medio != null
+      ? { etiqueta: 'En vigilancia', clase: 'medio', valor: num(r.por_nivel.medio),
+        detalle: `casos medios · ${fraseFraude(p.medio.prob) || 'pocos son fraude'} · se cierran solos` }
+      : { etiqueta: `Casos cerrados ${periodo}`, clase: 'bien', valor: num(cerrados),
+        detalle: `<b>${num(r.cerrados.fraude)} fraude</b> · ${num(r.cerrados.legitima)} legítimos<br>${num(r.cerrados.sin_incidencia)} sin incidencia (${r.dias_cierre} días sin reclamación)` },
   ]);
+  document.getElementById('nav-pendientes').textContent = (r.por_nivel.critico + r.por_nivel.alto) || '';
+  const lista = document.getElementById('lista-casos');
+  if (!datos.casos.length) {
+    lista.innerHTML = estado.filtroEstado === 'pendientes'
+      ? '<div class="vacio"><b>Nada por resolver</b>No hay casos abiertos con estos filtros.</div>'
+      : '<div class="vacio"><b>Sin casos</b>No hay casos con estos filtros.</div>';
+    return;
+  }
+  lista.innerHTML = datos.casos.map(tarjetaCaso).join('');
+}
 
-  const h = a.histograma;
-  const tramo = (t) => `${t.toFixed(2)}–${(t + 0.05).toFixed(2)}`;
-  grafica('g-histograma', {
+// ------------------------------------------------------------------------------ ficha del caso
+function tarjetaPago(t, conAcciones) {
+  const motivos = t.motivos.length ? `<ul>${t.motivos.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>` : '';
+  const acciones = conAcciones && t.nivel && abierto(t.estado) ? `
+    <div class="acciones">
+      <button class="boton fraude pequeno" data-revisar="fraude" data-ids="${t.transaccion_id}">Es fraude</button>
+      <button class="boton legitima pequeno" data-revisar="legitima" data-ids="${t.transaccion_id}">Es legítima</button>
+    </div>` : '';
+  return `
+    <div class="pago ${t.nivel}">
+      <div class="cab">
+        <div><b>${hora(t.timestamp)} · ${esc(t.comercio)}</b>
+          <div class="nota" style="margin:2px 0 0">${esc(t.categoria)} · ${esc(t.canal)}${t.dispositivo ? ` · ${esc(t.dispositivo)}` : ''}${t.ip_pais ? ` · IP ${esc(t.ip_pais)}` : ''}${t.estado_pago === 'rechazada' ? ' · pago rechazado' : ''} · #${t.transaccion_id}</div></div>
+        <div style="text-align:right"><b>${eur(t.importe)}</b><div>${nivelPill(t.nivel)} ${estadoPill(t.estado, t.estado_detalle)} ${realPill(t.real)}</div>
+          ${puesto(t.percentil) ? `<div class="riesgo">${puesto(t.percentil)}</div>` : ''}</div>
+      </div>
+      ${motivos}
+      ${t.comentario ? `<div class="nota">Comentario: ${esc(t.comentario)}</div>` : ''}
+      ${t.estado && !abierto(t.estado) ? `<div class="nota">${esc(t.estado_detalle)}</div>` : ''}
+      ${acciones}
+    </div>`;
+}
+
+// Qué hacer con el caso (si está abierto) o cómo se cerró
+function bloqueRecomendacion(c) {
+  if (!c.nivel) return '';
+  if (!abierto(c.estado)) {
+    return `<div class="recomendacion cerrado ${c.estado}">
+      <div class="etiqueta">Caso cerrado</div><b>${RESULTADO[c.estado]}</b>
+      <p>${esc(c.estado_detalle.charAt(0).toUpperCase() + c.estado_detalle.slice(1))}.</p></div>`;
+  }
+  const p = c.probabilidad;
+  return `<div class="recomendacion ${c.nivel}">
+    <div class="etiqueta">Qué hacer</div><b>${esc(c.accion.corta)}</b>
+    <p>${esc(c.accion.texto)}</p>
+    ${p.prob != null ? `<p class="nota">Probabilidad de fraude: de los casos ${NIVEL_PLURAL[c.nivel]} ya cerrados,
+      ${fraseFraude(p.prob)} (${pct(p.prob)} de ${num(p.casos)}).</p>` : ''}</div>`;
+}
+
+// La entidad da el veredicto; el comercio solo aporta lo que sabe (es opcional)
+function bloqueDecision(c, ids, n) {
+  const cierre = `Si nadie lo revisa, el caso se cierra solo: como fraude si llega el contracargo del banco, o sin
+    incidencia si pasan ${c.dias_cierre} días sin reclamación.`;
+  if (c.vista === 'comercio') {
+    return `<div class="decision">
+      <b>¿Sabes algo de este caso? (opcional)</b>
+      <p class="nota">No tienes que decidir si es fraude: la entidad revisa los casos graves. ${cierre} Si tienes
+        información, ayuda a cerrarlo antes y a que el sistema aprenda.</p>
+      <textarea id="comentario" placeholder="Comentario (opcional): p. ej. he llamado al cliente y reconoce la compra"></textarea>
+      <div class="botones">
+        <button class="boton legitima" data-revisar="legitima" data-ids="${ids}">El cliente reconoce la compra</button>
+        <button class="boton fraude" data-revisar="fraude" data-ids="${ids}">Confirmo que es fraude</button>
+      </div></div>`;
+  }
+  return `<div class="decision">
+    <b>Veredicto para ${n === 1 ? 'el pago abierto' : `los ${n} pagos abiertos`} del caso (opcional)</b>
+    <p class="nota">${cierre}</p>
+    <textarea id="comentario" placeholder="Comentario (opcional): p. ej. el titular no reconoce las compras"></textarea>
+    <div class="botones">
+      <button class="boton fraude" data-revisar="fraude" data-ids="${ids}">Es fraude</button>
+      <button class="boton legitima" data-revisar="legitima" data-ids="${ids}">${n === 1 ? 'Es legítimo' : 'Son legítimos'}</button>
+      <span class="nota" style="margin:0">Revisa: <b>${esc(estado.usuario)}</b>. El sistema aprende de este veredicto en la próxima recalibración.</span>
+    </div></div>`;
+}
+
+async function abrirCaso(metodo, dia) {
+  estado.caso = { metodo, dia };
+  document.getElementById('velo').hidden = false;
+  document.getElementById('ficha').hidden = false;
+  const cuerpo = document.getElementById('ficha-cuerpo');
+  cuerpo.innerHTML = '<p class="nota">Cargando…</p>';
+  try {
+    const c = await api('/api/caso', { metodo_id: metodo, dia, comercio: comercio() });
+    const enComercio = c.vista === 'comercio';
+    const alertadas = c.transacciones.filter((t) => t.nivel);
+    const abiertas = alertadas.filter((t) => abierto(t.estado));
+    const total = alertadas.reduce((s, t) => s + t.importe, 0);
+    const tj = c.tarjeta || {};
+    document.getElementById('ficha-titulo').innerHTML = `
+      <h2>${nivelPill(c.nivel)} Tarjeta ${tarjeta(tj.tarjeta)}</h2>
+      <div class="sub">${fechaLarga(c.dia)} · ${alertadas.length} pago${alertadas.length !== 1 ? 's' : ''} con alerta por ${eur(total)}
+        ${c.estado ? ` · ${estadoPill(c.estado, c.estado_detalle)}` : ''}</div>`;
+    const titular = enComercio
+      ? `<div class="dato"><div class="etiqueta">Cliente</div><div class="valor">#${tj.cliente_id}</div>
+          <div class="detalle">${esc(tj.pais)}</div></div>`
+      : `<div class="dato"><div class="etiqueta">Titular</div><div class="valor">${esc(tj.cliente)}</div>
+          <div class="detalle">#${tj.cliente_id} · ${esc(tj.pais)} · cliente desde ${tj.alta ? new Date(tj.alta).getFullYear() : '–'}</div></div>`;
+    const datosTarjeta = enComercio
+      ? `<div class="dato"><div class="etiqueta">Tarjeta</div><div class="valor">${esc(tj.tipo)}</div></div>`
+      : `<div class="dato"><div class="etiqueta">Tarjeta</div><div class="valor">${esc(tj.tipo)} · ${esc(tj.entidad)}</div>
+          <div class="detalle">${tj.limite ? `límite ${eur(tj.limite)}` : 'sin límite de crédito'}</div></div>`;
+    cuerpo.innerHTML = `
+      ${bloqueRecomendacion(c)}
+      <div class="datos">${titular}${datosTarjeta}
+        <div class="dato"><div class="etiqueta">Pagos con alerta</div><div class="valor">${alertadas.length}</div>
+          <div class="detalle">${abiertas.length ? `${abiertas.length} sin cerrar` : 'todos cerrados'}</div></div>
+      </div>
+      ${c.nivel && abierto(c.estado) && abiertas.length
+        ? bloqueDecision(c, abiertas.map((t) => t.transaccion_id).join(','), abiertas.length) : ''}
+      <h3>${enComercio ? 'Pagos de esta tarjeta ese día en tu comercio' : 'Pagos de la tarjeta ese día'}</h3>
+      ${c.transacciones.map((t) => tarjetaPago(t, !enComercio && abiertas.length > 1)).join('')}
+      <h3>${enComercio ? 'Compras anteriores de esta tarjeta en tu comercio' : 'Historial anterior de la tarjeta'}</h3>
+      ${c.historial.length ? `<div class="tarjeta"><div class="tabla-contenedor"><table>
+        <thead><tr><th>Fecha</th><th>Comercio</th><th>Canal</th><th class="num">Importe</th><th>Alerta</th></tr></thead>
+        <tbody>${c.historial.map((t) => `<tr><td>${fechaHora(t.timestamp)}</td><td>${esc(t.comercio)}</td><td>${esc(t.canal)}</td>
+          <td class="num">${eur(t.importe)}</td><td>${nivelPill(t.nivel)} ${estadoPill(t.estado, t.estado_detalle)}</td></tr>`).join('')}</tbody>
+      </table></div></div>` : '<p class="nota">Sin pagos anteriores.</p>'}`;
+  } catch (e) {
+    mostrarError('ficha-cuerpo', e);
+  }
+}
+
+function cerrarCaso() {
+  document.getElementById('velo').hidden = true;
+  document.getElementById('ficha').hidden = true;
+  estado.caso = null;
+}
+
+async function revisar(veredicto, ids) {
+  const comentario = document.getElementById('comentario')?.value || '';
+  try {
+    await api('/api/revisiones', {}, {
+      transaccion_ids: ids, veredicto, comentario, usuario: estado.usuario, comercio: Number(comercio()),
+    });
+    const s = ids.length !== 1 ? 's' : '';
+    flotante('Gracias, queda registrado', `${ids.length} pago${s} marcado${s} como ${veredicto === 'fraude' ? 'fraude' : `legítimo${s}`}. El sistema lo tendrá en cuenta al aprender.`);
+    if (estado.caso) await abrirCaso(estado.caso.metodo, estado.caso.dia);
+    recargar(['alertas', 'resumen', 'transacciones']);
+  } catch (e) {
+    flotante('No se ha podido guardar', e.message);
+  }
+}
+
+// ------------------------------------------------------------------------------ resumen
+async function cargarResumen() {
+  const r = await api('/api/resumen', { comercio: comercio(), dias: document.getElementById('filtro-dias-resumen').value });
+  document.getElementById('titulo-resumen').textContent =
+    `Resumen del ${diaCorto(r.desde)} al ${diaCorto(r.hoy)}${comercio() !== '0' ? ` · ${estado.comercios[comercio()]}` : ''}`;
+  kpis('kpis-resumen', [
+    { etiqueta: 'Casos de alerta', valor: num(r.casos), detalle: `<b>${num(r.abiertos)} por resolver</b> · ${num(r.criticos_abiertos)} críticos` },
+    { etiqueta: 'Importe en riesgo', clase: 'alto', valor: eur(r.importe_en_riesgo), detalle: 'en casos altos y críticos por resolver' },
+    { etiqueta: 'Fraude confirmado', clase: 'critico', valor: num(r.fraudes_confirmados), detalle: `pagos, por ${eur(r.importe_fraude)}` },
+    { etiqueta: 'Fraude detectado (pagos)', clase: 'bien', valor: pct(r.cobertura_pagos),
+      detalle: `${num(r.fraudes_con_alerta)} de ${num(r.fraudes_confirmados)} pagos fraudulentos tuvieron alerta` },
+    { etiqueta: 'Fraude detectado (importe)', clase: 'bien', valor: pct(r.cobertura_importe),
+      detalle: `${eur(r.importe_con_alerta)} de ${eur(r.importe_fraude)} defraudados tuvieron alerta` },
+    { etiqueta: 'Acierto en casos graves', clase: 'bien', valor: pct(r.acierto_graves),
+      detalle: `de ${num(r.graves_cerrados)} casos altos y críticos cerrados eran fraude` },
+  ]);
+  const d = r.por_dia;
+  grafica('g-dias', {
     data: {
-      labels: h.map((f) => tramo(f.tramo)),
+      labels: d.map((x) => diaCorto(x.dia)),
       datasets: [
-        { type: 'bar', label: 'Fraudes', data: h.map((f) => f.fraudes), backgroundColor: COLOR.fraude,
-          borderRadius: 3, yAxisID: 'y', order: 2 },
-        { type: 'line', label: '% de fraude en el tramo', data: h.map((f) => (f.fraudes / f.transacciones) * 100),
-          borderColor: COLOR.anomala, backgroundColor: COLOR.anomala, tension: 0.25, yAxisID: 'y1', order: 1 },
+        ...estado.niveles.map((n) => ({ type: 'bar', label: `Casos ${NIVEL_TEXTO[n].toLowerCase()}s`, data: d.map((x) => x[n]), backgroundColor: COLOR[n], stack: 'casos', order: 2 })),
+        { type: 'line', label: 'Fraude confirmado', data: d.map((x) => x.fraude), borderColor: COLOR.acento, backgroundColor: COLOR.acento, tension: 0.25, pointRadius: 2, order: 1 },
       ],
     },
-    options: {
-      interaction: { mode: 'index', intersect: false },
-      scales: {
-        x: { title: { display: true, text: 'percentil del score' } },
-        y: { beginAtZero: true, title: { display: true, text: 'fraudes' } },
-        y1: { beginAtZero: true, position: 'right', grid: { drawOnChartArea: false }, ticks: { callback: (v) => `${v} %` } },
-      },
-      plugins: { tooltip: { callbacks: { afterBody: (items) => {
-        const f = h[items[0].dataIndex];
-        return `${num(f.fraudes)} fraudes de ${num(f.transacciones)} transacciones`;
-      } } } },
-    },
+    options: { interaction: { mode: 'index', intersect: false }, scales: { x: { stacked: true, ticks: { maxTicksLimit: 15 } }, y: { stacked: true, beginAtZero: true } } },
   });
-
-  tabla('t-anomalias', [
-    { titulo: 'Fecha', valor: (f) => fecha(f.timestamp) },
-    { titulo: 'ID', num: true, valor: (f) => f.transaccion_id },
-    { titulo: 'Cliente', num: true, valor: (f) => f.cliente_id },
-    { titulo: 'Comercio', valor: (f) => esc(f.comercio) },
-    { titulo: 'Canal', valor: (f) => esc(f.canal) },
-    { titulo: 'Importe', num: true, valor: (f) => eur(f.importe) },
-    { titulo: 'Score', num: true, valor: (f) => f.score.toFixed(3) },
-    { titulo: 'Percentil', valor: (f) => barraScore(f.score_pct) },
-    { titulo: 'Etiqueta', valor: etiquetaReal },
-  ], a.top, filaFraude);
+  const e = r.estados;
+  grafica('g-estados', {
+    type: 'doughnut',
+    data: (() => {   // solo los estados que aparecen (sin nivel medio no hay "en vigilancia")
+      const k = ['pendiente', 'vigilancia', 'fraude', 'legitima', 'sin_incidencia'].filter((x) => e[x]);
+      const texto = { pendiente: 'Por resolver', vigilancia: 'En vigilancia', fraude: 'Fraude', legitima: 'Legítimos', sin_incidencia: 'Sin incidencia' };
+      return { labels: k.map((x) => texto[x]), datasets: [{ data: k.map((x) => e[x]), backgroundColor: k.map((x) => COLOR[x]), borderWidth: 0 }] };
+    })(),
+    options: { cutout: '62%', plugins: { tooltip: { callbacks: { label: (c) => `${c.label}: ${num(c.parsed)} casos` } } } },
+  });
+  const tarjetaComercios = document.getElementById('tarjeta-comercios');
+  tarjetaComercios.hidden = comercio() !== '0';
+  if (comercio() === '0') {
+    grafica('g-comercios', {
+      type: 'bar',
+      data: { labels: r.comercios.map((x) => x.comercio), datasets: [
+        { label: 'Pagos con alerta', data: r.comercios.map((x) => x.alertas), backgroundColor: '#c9d5ea' },
+        { label: 'De ellos, fraude', data: r.comercios.map((x) => x.fraude), backgroundColor: COLOR.fraude },
+      ] },
+      options: { indexAxis: 'y', scales: { x: { beginAtZero: true } } },
+    });
+  }
 }
 
-async function cargarModelos() {
-  const m = await api('/api/modelos');
-  if (m.comparativa) {
-    const c = m.comparativa;
-    const nombre = (f) => `${NOMBRE_MODELO[f.detector] || f.detector}${f.elegido ? ' ★' : ''}`;
-    grafica('g-prauc', {
-      type: 'bar',
-      data: {
-        labels: c.map(nombre),
-        datasets: [
-          { label: 'Validación (elige)', data: c.map((f) => f['PR-AUC_val']), backgroundColor: '#c9d5ea', borderRadius: 3 },
-          { label: 'Test (mide)', data: c.map((f) => f['PR-AUC']), backgroundColor: COLOR.acento, borderRadius: 3 },
-        ],
-      },
-      options: { scales: { y: { beginAtZero: true, max: 1 } } },
-    });
-    grafica('g-presupuesto', {
-      type: 'bar',
-      data: {
-        labels: c.map(nombre),
-        datasets: [
-          { label: 'Precisión', data: c.map((f) => f['pres_precision_%']), backgroundColor: COLOR.fraude, borderRadius: 3 },
-          { label: 'Recall', data: c.map((f) => f['pres_recall_%']), backgroundColor: COLOR.bien, borderRadius: 3 },
-        ],
-      },
-      options: { scales: { y: { beginAtZero: true, ticks: { callback: (v) => `${v} %` } } } },
-    });
-    tabla('t-comparativa', [
-      { titulo: 'Detector', valor: (f) => (f.elegido ? `<b>${esc(nombre(f))}</b>` : esc(nombre(f))) },
-      { titulo: 'PR-AUC validación', num: true, valor: (f) => f['PR-AUC_val'].toFixed(3) },
-      { titulo: 'PR-AUC test', num: true, valor: (f) => f['PR-AUC'].toFixed(3) },
-      { titulo: 'IC 95 %', num: true, valor: (f) => `${f.IC95_inf.toFixed(2)} – ${f.IC95_sup.toFixed(2)}` },
-      { titulo: 'ROC-AUC', num: true, valor: (f) => f['ROC-AUC'].toFixed(3) },
-      { titulo: 'Lift', num: true, valor: (f) => f.lift.toFixed(1) },
-      { titulo: 'Alertas/día (1 %)', num: true, valor: (f) => f.pres_alertas_dia.toFixed(1) },
-      { titulo: 'Precisión', num: true, valor: (f) => `${f['pres_precision_%'].toFixed(1)} %` },
-      { titulo: 'Recall', num: true, valor: (f) => `${f['pres_recall_%'].toFixed(1)} %` },
-    ], c);
-  }
-
-  if (m.recall_por_tipo) {
-    const filas = m.recall_por_tipo;
-    const clave = Object.keys(filas[0])[0];          // primera columna: el tipo de fraude
-    const detectores = Object.keys(filas[0]).filter((k) => k !== clave && k !== 'n');
-    const celda = (v) => {
-      const a = Math.max(0, Math.min(1, v / 100));
-      return `<span style="display:inline-block;min-width:52px;padding:2px 6px;border-radius:4px;`
-        + `background:rgba(47,158,99,${(0.08 + a * 0.6).toFixed(2)})">${v.toFixed(0)} %</span>`;
-    };
-    tabla('t-recall-tipo', [
-      { titulo: 'Tipo de fraude', valor: (f) => esc(f[clave]) },
-      { titulo: 'Casos', num: true, valor: (f) => num(f.n) },
-      ...detectores.map((d) => ({ titulo: NOMBRE_MODELO[d] || d, num: true, valor: (f) => celda(f[d]) })),
-    ], filas);
-  }
-
-  if (m.ajuste_reglas) {
-    const filas = m.ajuste_reglas;
-    const reglas = [...new Set(filas.map((f) => f.regla))];
-    const de = (regla, version) => filas.find((f) => f.regla === regla && f.version === version);
-    grafica('g-ajuste', {
-      type: 'bar',
-      data: {
-        labels: reglas,
-        datasets: [
-          { label: 'Alertas/día con umbrales iniciales', data: reglas.map((r) => de(r, 'inicial').comprobacion_alertas_dia), backgroundColor: COLOR.gris, borderRadius: 3 },
-          { label: 'Alertas/día con umbrales ajustados', data: reglas.map((r) => de(r, 'ajustado').comprobacion_alertas_dia), backgroundColor: COLOR.alerta, borderRadius: 3 },
-        ],
-      },
-      options: { scales: { y: { beginAtZero: true, title: { display: true, text: 'alertas al día' } } } },
-    });
-    tabla('t-ajuste', [
-      { titulo: 'Regla', valor: (f) => esc(f.regla) },
-      { titulo: 'Umbrales ajustados', valor: (f) => {
-        const aj = de(f.regla, 'ajustado');
-        return aj.activa ? esc(aj.umbrales) : pill('desactivada', 'gris');
-      } },
-      { titulo: 'Precisión', num: true, valor: (f) => `${pct(f.comprobacion_precision, 0)} → ${pct(de(f.regla, 'ajustado').comprobacion_precision, 0)}` },
-      { titulo: 'Recall de su tipo', num: true, valor: (f) => `${pct(f.comprobacion_recall_tipo, 0)} → ${pct(de(f.regla, 'ajustado').comprobacion_recall_tipo, 0)}` },
-    ], filas.filter((f) => f.version === 'inicial'));
-  }
-  const cfg = m.ajuste_config;
-  document.getElementById('ajuste-config').innerHTML = `Recalibrador (desde la fecha de decisión): umbral mínimo de la cola `
-    + `<b>${cfg.umbral_minimo ?? 0}</b>; variables añadidas: <b>${esc(cfg.variables_extra.join(', ') || 'ninguna')}</b>; `
-    + `variables quitadas: <b>${cfg.variables_quitadas.length}</b>. Detalle en <code>resultados/ajuste_umbrales.md</code>.`;
+// ------------------------------------------------------------------------------ transacciones
+async function cargarTransacciones() {
+  const filas = await api('/api/transacciones', {
+    comercio: comercio(), q: document.getElementById('buscar').value,
+    solo_alertas: document.getElementById('solo-alertas').checked, orden: estado.ordenTransacciones, limite: 100,
+  });
+  const cont = document.getElementById('t-transacciones');
+  if (!filas.length) { cont.innerHTML = '<p class="nota">No hay transacciones que coincidan.</p>'; return; }
+  cont.innerHTML = `<table><thead><tr><th>Fecha</th><th>ID</th><th>Tarjeta</th><th>Cliente</th><th>Comercio</th>
+    <th>Canal</th><th class="num">Importe</th><th>Alerta</th><th>Estado</th>${estado.demo ? '<th>Real</th>' : ''}</tr></thead><tbody>
+    ${filas.map((t) => `<tr class="clicable" data-metodo="${t.metodo_id}" data-dia="${String(t.timestamp).slice(0, 10)}">
+      <td>${fechaHora(t.timestamp)}</td><td class="num">${t.transaccion_id}</td><td>${tarjeta(t.tarjeta)}</td>
+      <td class="num">${t.cliente_id}</td><td>${esc(t.comercio)}</td><td>${esc(t.canal)}</td>
+      <td class="num">${eur(t.importe)}</td><td>${nivelPill(t.nivel)}${puesto(t.percentil) ? ` <span class="riesgo">${puesto(t.percentil)}</span>` : ''}</td>
+      <td>${estadoPill(t.estado, t.estado_detalle)}</td>
+      ${estado.demo ? `<td>${realPill(t.real)}</td>` : ''}</tr>`).join('')}
+    </tbody></table>`;
 }
 
-const CARGADORES = {
-  resumen: cargarResumen, transacciones: cargarTransacciones, patrones: cargarPatrones,
-  alertas: cargarAlertas, anomalias: cargarAnomalias, modelos: cargarModelos,
-};
+// ------------------------------------------------------------------------------ avisos
+function filaAviso(a) {
+  return `<div class="aviso ${a.leido ? '' : 'no-leido'}" data-aviso="${a.aviso_id}" data-metodo="${a.metodo_id}" data-dia="${a.dia}">
+    ${nivelPill(a.nivel)}
+    <div><div class="texto">${esc(a.mensaje)}</div><div class="fecha">${fechaLarga(a.dia)}</div></div>
+    <b>${eur(a.importe)}</b></div>`;
+}
 
-async function cargar(pestana, forzar = false) {
-  if (!forzar && estado.cargadas.has(pestana)) return;
+async function cargarAvisos() {
+  const datos = await api('/api/avisos', { comercio: comercio(), limite: 200, solo_no_leidos: estado.filtroAvisos === 'no_leidos' });
+  actualizarCampana(datos);
+  const lista = document.getElementById('lista-avisos');
+  lista.innerHTML = datos.avisos.length ? datos.avisos.map(filaAviso).join('')
+    : '<div class="vacio"><b>Nada nuevo</b>No hay avisos sin leer.</div>';
+}
+
+function actualizarCampana(datos) {
+  const burbuja = document.getElementById('campana-num');
+  burbuja.hidden = !datos.no_leidos;
+  burbuja.textContent = datos.no_leidos > 99 ? '99+' : datos.no_leidos;
+  document.getElementById('nav-avisos').textContent = datos.no_leidos || '';
+}
+
+async function comprobarAvisos(primeraVez = false) {
+  try {
+    const datos = await api('/api/avisos', { comercio: comercio(), limite: 8 });
+    // El pipeline ha puntuado un día nuevo (Airflow, cada noche): se recarga todo lo que se ve
+    if (estado.contexto && datos.hoy !== estado.contexto.hoy) {
+      await cargarContexto();
+      recargar(['alertas', 'resumen', 'transacciones', 'avisos']);
+    }
+    actualizarCampana(datos);
+    document.getElementById('panel-lista').innerHTML = datos.avisos.length ? datos.avisos.map(filaAviso).join('')
+      : '<p class="nota" style="padding:12px 14px">No hay avisos.</p>';
+    // Avisos nuevos desde la última comprobación: aviso flotante
+    if (!primeraVez && estado.noLeidos !== null && datos.no_leidos > estado.noLeidos) {
+      const nuevo = datos.avisos.find((a) => !a.leido);
+      const n = datos.no_leidos - estado.noLeidos;
+      flotante(`${n} aviso${n > 1 ? 's' : ''} nuevo${n > 1 ? 's' : ''}${datos.criticos_no_leidos ? ' · hay casos críticos' : ''}`,
+        nuevo ? nuevo.mensaje : '', nuevo ? () => abrirCaso(nuevo.metodo_id, nuevo.dia) : null);
+      recargar(['alertas', 'avisos', 'resumen']);
+    }
+    estado.noLeidos = datos.no_leidos;
+  } catch { /* se reintenta en el siguiente ciclo */ }
+}
+
+async function marcarLeidos(cuerpo) {
+  await api('/api/avisos/leidos', {}, { ...cuerpo, comercio: Number(comercio()) });
+  await comprobarAvisos(true);
+  if (estado.pestana === 'avisos') cargarAvisos();
+}
+
+// ------------------------------------------------------------------------------ navegación
+const CARGADORES = { alertas: cargarAlertas, resumen: cargarResumen, transacciones: cargarTransacciones, avisos: cargarAvisos };
+const cargadas = new Set();
+const CONTENEDOR_ERROR = { alertas: 'lista-casos', resumen: 'kpis-resumen', transacciones: 't-transacciones', avisos: 'lista-avisos' };
+
+async function cargar(pestana) {
   try {
     await CARGADORES[pestana]();
-    estado.cargadas.add(pestana);
-    quitarError(pestana);
+    cargadas.add(pestana);
   } catch (e) {
-    mostrarError(pestana, e);
-    console.error(e);
+    mostrarError(CONTENEDOR_ERROR[pestana], e);
   }
 }
-
+function recargar(pestanas) {
+  pestanas.forEach((p) => cargadas.delete(p));
+  if (pestanas.includes(estado.pestana)) cargar(estado.pestana);
+}
 function abrir(pestana) {
   estado.pestana = pestana;
   document.querySelectorAll('#pestanas button').forEach((b) => b.classList.toggle('activa', b.dataset.pestana === pestana));
   document.querySelectorAll('.seccion').forEach((s) => s.classList.toggle('activa', s.id === pestana));
-  cargar(pestana);
+  if (!cargadas.has(pestana)) cargar(pestana);
 }
 
 // ------------------------------------------------------------------------------ eventos
 document.getElementById('pestanas').addEventListener('click', (e) => {
-  if (e.target.dataset.pestana) abrir(e.target.dataset.pestana);
+  const b = e.target.closest('button[data-pestana]');
+  if (b) abrir(b.dataset.pestana);
 });
-document.getElementById('periodo').addEventListener('change', () => {
-  estado.cargadas.clear();
-  cargar(estado.pestana, true);
-  if (estado.pestana !== 'resumen') cargar('resumen', true);   // el rango de la cabecera sale del resumen
+document.getElementById('comercio').addEventListener('change', (e) => {
+  estado.comercio = e.target.value;
+  guardar('comercio', estado.comercio);
+  estado.noLeidos = null;
+  recargar(['alertas', 'resumen', 'transacciones', 'avisos']);
+  comprobarAvisos(true);
 });
-document.getElementById('actualizar').addEventListener('click', () => {
-  estado.cargadas.clear();
-  cargar(estado.pestana, true);
+document.getElementById('filtro-estado').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-valor]');
+  if (!b) return;
+  estado.filtroEstado = b.dataset.valor;
+  document.querySelectorAll('#filtro-estado button').forEach((x) => x.classList.toggle('activa', x === b));
+  cargar('alertas');
 });
-document.getElementById('filtros-tx').addEventListener('click', (e) => {
-  if (!e.target.dataset.filtro) return;
-  estado.filtroTx = e.target.dataset.filtro;
-  document.querySelectorAll('#filtros-tx button').forEach((b) => b.classList.toggle('activa', b === e.target));
-  cargar('transacciones', true);
+['filtro-nivel', 'filtro-dias-alertas'].forEach((id) => document.getElementById(id).addEventListener('change', () => cargar('alertas')));
+// Orden de las listas (se recuerda en este navegador)
+[['orden-alertas', 'ordenAlertas', 'alertas'], ['orden-transacciones', 'ordenTransacciones', 'transacciones']].forEach(([id, clave, pestana]) => {
+  const sel = document.getElementById(id);
+  sel.value = estado[clave];
+  sel.addEventListener('change', () => { estado[clave] = sel.value; guardar(clave, sel.value); cargar(pestana); });
 });
-document.getElementById('limite-tx').addEventListener('change', () => cargar('transacciones', true));
-document.getElementById('modelos-anomalia').addEventListener('click', (e) => {
-  if (!e.target.dataset.modelo) return;
-  estado.modelo = e.target.dataset.modelo;
-  cargar('anomalias', true);
+document.getElementById('filtro-dias-resumen').addEventListener('change', () => cargar('resumen'));
+let temporizador;
+document.getElementById('buscar').addEventListener('input', () => { clearTimeout(temporizador); temporizador = setTimeout(() => cargar('transacciones'), 300); });
+document.getElementById('solo-alertas').addEventListener('change', () => cargar('transacciones'));
+document.getElementById('filtro-avisos').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-valor]');
+  if (!b) return;
+  estado.filtroAvisos = b.dataset.valor;
+  document.querySelectorAll('#filtro-avisos button').forEach((x) => x.classList.toggle('activa', x === b));
+  cargar('avisos');
+});
+document.getElementById('leer-todos').addEventListener('click', () => marcarLeidos({ todos: true }));
+document.getElementById('panel-leer-todos').addEventListener('click', () => marcarLeidos({ todos: true }));
+
+// Abrir un caso desde cualquier lista (casos, transacciones, avisos)
+document.addEventListener('click', (e) => {
+  const revision = e.target.closest('[data-revisar]');
+  if (revision) {
+    revisar(revision.dataset.revisar, revision.dataset.ids.split(',').map(Number));
+    return;
+  }
+  const ir = e.target.closest('[data-ir]');
+  if (ir) { document.getElementById('panel-avisos').hidden = true; abrir(ir.dataset.ir); return; }
+  const item = e.target.closest('[data-metodo][data-dia]');
+  if (item && !e.target.closest('#ficha')) {
+    if (item.dataset.aviso) marcarLeidos({ aviso_ids: [item.dataset.aviso] });
+    document.getElementById('panel-avisos').hidden = true;
+    abrirCaso(item.dataset.metodo, item.dataset.dia);
+  }
+});
+document.getElementById('campana').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const panel = document.getElementById('panel-avisos');
+  panel.hidden = !panel.hidden;
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.campana-zona')) document.getElementById('panel-avisos').hidden = true;
+});
+document.getElementById('velo').addEventListener('click', cerrarCaso);
+document.getElementById('cerrar-ficha').addEventListener('click', cerrarCaso);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') cerrarCaso(); });
+
+const botonUsuario = document.getElementById('cambiar-usuario');
+botonUsuario.textContent = estado.usuario;
+botonUsuario.addEventListener('click', () => {
+  const nombre = (window.prompt('¿Quién revisa las alertas?', estado.usuario) || '').trim();
+  if (!nombre) return;
+  estado.usuario = nombre.slice(0, 80);
+  guardar('usuario', estado.usuario);
+  botonUsuario.textContent = estado.usuario;
+});
+const casillaDemo = document.getElementById('modo-demo');
+casillaDemo.checked = estado.demo;
+casillaDemo.addEventListener('change', () => {
+  estado.demo = casillaDemo.checked;
+  guardar('demo', estado.demo ? '1' : '0');
+  recargar(['alertas', 'resumen', 'transacciones', 'avisos']);
 });
 
-cargar('resumen');
+// ------------------------------------------------------------------------------ inicio
+(async () => {
+  try {
+    await cargarContexto();
+  } catch (e) {
+    mostrarError('lista-casos', e);
+    return;
+  }
+  cargar('alertas');
+  comprobarAvisos(true);
+  setInterval(() => comprobarAvisos(), REFRESCO_MS);
+})();

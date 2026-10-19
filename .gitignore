@@ -13,3 +13,5 @@ historico/
 informe_limpieza_*.txt
 __pycache__/
 *.pyc
+# Configuracion local de Claude Code (no es del proyecto)
+.claude/

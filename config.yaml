@@ -151,3 +151,16 @@ ajuste:
   perdida_maxima_fraude: 0.05  # umbral de la cola: dejar de revisar como mucho el 5 % del fraude validado
   ahorro_minimo: 0.10          # ... y solo si ahorra al menos el 10 % de las revisiones
   variables_candidatas: [n_comercios_cliente_3h]   # variables nuevas que se prueban en el recalibrador
+
+# Alertas y avisos de la web (generar_avisos.py y web/). Cada transacción tiene un nivel según su
+# puesto en el ranking de riesgo de su día (la nota del modelo que ordena la cola) y las reglas:
+alertas:
+  critico: 0.005               # crítico: está en el 0,5 % de más riesgo del día
+  alto: 0.01                   # alto: en el 1 % (lo que revisan los analistas) o salta una regla con nota >= nota_regla_alto
+  medio: null                  # nivel medio ("vigilar", sin acción): null = no se usa. Con 0.03 serían el 3 % o
+                               # cualquier regla: ~15 alertas más al día para solo ~6 % del dinero defraudado
+  nota_regla_alto: 0.8
+  avisar_desde: alto           # se crea un aviso por cada caso (misma tarjeta y día) de este nivel o más
+  dias_cierre: 30              # sin revisión ni contracargo en 30 días, la alerta se cierra sola "sin incidencia"
+                               # (a los 30 días el banco ya ha confirmado ~85 % del fraude; si llega después, se reabre como fraude)
+  webhook_url: null            # si se pone una URL (Slack, Teams, sistema del cliente), se le envían los avisos nuevos

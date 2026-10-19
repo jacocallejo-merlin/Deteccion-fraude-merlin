@@ -267,6 +267,8 @@ Como no tenemos analistas reales, **se simulan** (`simular_analistas.py`):
 - Tardan entre 2 horas y 2 días en responder.
 - Todo se guarda en la tabla `feedback_analistas` (qué pago, quién lo revisó, cuándo, qué dijo y
   un comentario).
+- Lo que una persona marca en la web (`revision_web`) cuenta igual, y si coincide en el mismo pago,
+  manda sobre el analista simulado.
 
 Hay **dos fuentes** para saber qué era fraude, y se juntan (`integrar_feedback.py`):
 
@@ -533,7 +535,7 @@ copy .env.example .env                               # y escribe la contraseña 
 | Desde cero, solo con el dataset original (sin los días del scoring diario) | `venv\Scripts\python.exe main.py --desde-cero --solo-original` | ~15 min |
 | Empezar desde un paso concreto | `venv\Scripts\python.exe main.py --desde entrenar_autoencoder` | depende |
 | **Simular un día nuevo** (como hace Airflow cada día) | `venv\Scripts\python.exe main.py --scoring` | ~5 min |
-| **Ver los resultados en la web** (y abrir http://localhost:8000) | `venv\Scripts\python.exe -m uvicorn web.app:app` | al momento |
+| **Abrir la web** (y entrar en http://localhost:8000) | `venv\Scripts\python.exe -m uvicorn web.app:app` | al momento |
 | Pasar los tests | `venv\Scripts\python.exe -m pytest tests` | 1 min |
 
 Si un paso falla, el pipeline se para ahí y dice cuál ha sido.
@@ -588,7 +590,7 @@ están en **`config.yaml`**, comentados.
 
 | Para ver… | Abre |
 |---|---|
-| **Todo de forma visual**: resumen, últimas transacciones y alertas, patrones de fraude, anomalías, analistas y modelos | La web: http://localhost:8000 (ver abajo) |
+| **Los pagos sospechosos y los avisos**, como los vería el cliente | La web: http://localhost:8000 (ver abajo) |
 | **El resumen de los modelos**: cuál gana, qué detecta, cuánto fiarse | `resultados/conclusiones.md` |
 | Las curvas de los 5 modelos | `resultados/curvas_pr_test.png` |
 | La comparación con la red neuronal (Hito 4) | `resultados/conclusiones_hito4.md`, `comparativa_final_pr.png` |
@@ -608,23 +610,74 @@ Y dentro de **ClickHouse** (base de datos `fraude_pagos`):
 | `anomaly_scores` | La nota de sospecha de cada pago, con cada modelo |
 | `alerta` | Las alertas de las reglas fijas |
 | `feedback_analistas` | Lo que dijeron los analistas de cada alerta |
-| `etiquetas_conocidas` | Lo que se sabe que es fraude (banco + analistas) |
+| `riesgo_transaccion` | La nota de cada pago y su puesto en la cola de su día |
+| `alertas_unificadas` | (vista) Modelo + reglas: el nivel de alerta de cada pago |
+| `aviso` | Los avisos de casos altos y críticos |
+| `revision_web` | Lo que se marca como fraude o legítima en la web |
+| `etiquetas_conocidas` | Lo que se sabe que es fraude (banco + analistas + web) |
 
 ### La web
 
-En vez de un panel de PowerBI, el proyecto tiene su propia página web (`web/`). Un pequeño servidor
-(FastAPI) lee ClickHouse y `resultados/` y una página HTML con gráficas (Chart.js) lo enseña. Solo
-lee: no cambia nada. Se arranca con `venv\Scripts\python.exe -m uvicorn web.app:app` (o con Docker,
-ver arriba) y se abre http://localhost:8000. Arriba se elige el periodo (todo, últimos 30 o 7 días).
+La web (`web/`) es la parte que usa el cliente: la entidad que da el servicio de pagos (vista
+**Todos los comercios**) o cada comercio (eligiendo el suyo arriba). No enseña modelos ni métricas
+técnicas, solo **qué pagos son probablemente fraude, por qué y qué hacer**. Un pequeño servidor
+(FastAPI) lee ClickHouse y una página HTML (Chart.js) lo enseña. Se arranca con
+`venv\Scripts\python.exe -m uvicorn web.app:app` (o con Docker, ver arriba) y se abre
+http://localhost:8000. La hora de la web es la de los datos: "hoy" es el último día puntuado.
+
+**La detección es automática; nadie tiene que revisarlo todo.** Cada día, todos los pagos se
+ordenan por la nota del modelo y se les suma lo que dicen las reglas (`generar_avisos.py`, vista
+`alertas_unificadas`). Cada alerta trae un nivel, una **acción recomendada** (distinta para la
+entidad y para el comercio) y la **probabilidad de fraude** de su nivel, calculada con lo que han
+resultado ser los casos ya cerrados de ese nivel (en la simulación, ~6 de cada 10 críticos):
+
+| Nivel | Cuándo | Acción (comercio) | Acción (entidad) |
+|---|---|---|---|
+| **Crítico** | Entre el 0,5 % de pagos más sospechosos del día | Retener el pedido | Bloquear la tarjeta |
+| **Alto** | Entre el 1 %, o una regla muy segura (nota ≥ 0,8) | Confirmar con el cliente | Revisar hoy |
+| *Medio* (desactivado) | Entre el 3 %, o cualquier regla | Solo vigilar | Solo vigilar |
+
+El nivel **medio está desactivado** (`alertas.medio: null`): eran ~15 alertas más al día que no
+piden ninguna acción y solo cubrían ~6 % del dinero defraudado. Crítico y alto, con unas 7 alertas
+al día, cubren ~94 % del importe defraudado. Si un cliente lo quiere, se activa con `medio: 0.03`
+y la web lo enseña como *en vigilancia*.
+
+**Las alertas se cierran solas.** Mientras está abierta, una alerta está *por resolver*. Se cierra como **fraude** si llega el contracargo del banco,
+como **legítima** si alguien la revisa, o **sin incidencia** si pasan 30 días sin nada de eso
+(`alertas.dias_cierre`; a los 30 días el banco ya ha confirmado ~85 % del fraude, y si llega
+después, la alerta pasa a fraude). Un caso lo deciden sus pagos más graves: un pago alto sin
+revisar no deja abierto un caso crítico ya resuelto.
+
+Las alertas de una misma tarjeta en el mismo día forman un **caso** (el card testing o el cash-out
+son varios pagos seguidos). Cada caso dice sus **motivos** en lenguaje claro ("importe 21 veces el
+habitual del cliente", "conexión desde otro país (Vietnam)", "5 pagos con la misma tarjeta en la
+hora anterior"...) y su **puesto en el día** ("top 0,2 % del día"). Los porcentajes se cambian en
+`config.yaml` (sección `alertas`).
 
 | Pestaña | Qué enseña |
 |---|---|
-| **Resumen** | Cifras clave (transacciones, fraude, alertas, revisiones, anómalas), actividad diaria, fraude por tipo, últimas alertas y últimos fraudes |
-| **Transacciones** | Las últimas, con su nota de sospecha, las reglas que saltaron, el veredicto del analista y la etiqueta real. Filtros: fraude, con alerta, anómalas, revisadas |
-| **Patrones** | Fraude por hora, día de la semana, canal, dispositivo, categoría de comercio y país de la IP; señales de riesgo; comercios y clientes con más fraude |
-| **Alertas y analistas** | Alertas de cada regla (cuántas eran fraude), si la cola de los analistas mejora semana a semana, acierto de cada analista y últimas revisiones |
-| **Anomalías** | Para cada uno de los 5 modelos: dónde cae el fraude según su nota y las transacciones más raras |
-| **Modelos y ajuste** | Comparativa de los 5 modelos, qué tipo de fraude detecta cada uno y el ajuste de umbrales de las reglas |
+| **Alertas** | La bandeja de casos por resolver (por defecto altos y críticos), ordenada por probabilidad de fraude, por fecha o por importe. Al abrir uno: qué hacer, la tarjeta, sus pagos de ese día con los motivos y su historial |
+| **Resumen** | Casos, importe en riesgo, fraude confirmado, cuánto fraude tuvo alerta (en número de pagos y en dinero) y cuántas alertas acertaron; alertas por día, en qué quedaron y (vista entidad) los comercios con más alertas |
+| **Transacciones** | Buscador por ID de pago o de cliente, últimos dígitos de la tarjeta o comercio. Se puede ordenar por fecha, por riesgo o por importe |
+| **Avisos** | Un aviso por cada caso alto o crítico nuevo. También en la campana de arriba, que avisa sola si llega uno (se comprueba cada minuto). Los de hace más de 7 días se archivan |
+
+**Revisar es opcional.** La entidad puede dar un veredicto (**Es fraude** / **Es legítimo**). El
+comercio no tiene que decidir nada: solo puede aportar lo que sabe (**El cliente reconoce la
+compra** / **Confirmo que es fraude**). En su vista solo ve sus propios pagos, sin el nombre del
+titular ni sus compras en otros comercios.
+
+**La web también enseña al sistema.** Lo que se marca se guarda en `revision_web` y `integrar_feedback.py` lo trata como la revisión de un analista (manda sobre la del
+equipo simulado; el banco sigue mandando sobre todo). En el siguiente aprendizaje semanal, el
+modelo ya lo tiene en cuenta.
+
+**Avisos fuera de la web.** Si se pone una dirección en `alertas.webhook_url` (`config.yaml`), cada
+aviso nuevo se envía también allí (Slack, Teams o el sistema del comercio). `avisar_desde` decide
+desde qué nivel se avisa. Para reescribir los avisos tras cambiar la configuración:
+`venv\Scripts\python.exe pipeline\generar_avisos.py --rehacer`.
+
+Abajo a la derecha está el **modo demostración**: enseña qué era fraude de verdad según el
+simulador, para comprobar en una presentación que las alertas aciertan. Los análisis técnicos
+(modelos, curvas, ajuste de umbrales) y los patrones de fraude están en `resultados/` y `notebooks/`.
 
 La documentación de los datos que da el servidor está en http://localhost:8000/api/docs.
 
@@ -640,7 +693,7 @@ La documentación de los datos que da el servidor está en http://localhost:8000
 | `notebooks/` | Exploración de los datos y gráficos (Hitos 1 y 2) |
 | `dags/` | Los flujos de Airflow |
 | `k8s/` | La configuración de Kubernetes |
-| `web/` | La web con los resultados (servidor en `app.py`, página en `static/`) |
+| `web/` | La web para el cliente (servidor en `app.py`, página en `static/`) |
 | `tests/` | Comprobaciones automáticas |
 | `datos_ml/` | Los datos ya preparados para los modelos (se genera) |
 | `modelos/` | Los modelos entrenados (se genera) |
@@ -665,15 +718,16 @@ La documentación de los datos que da el servidor está en http://localhost:8000
 | 11 | `entrenar_autoencoder.py` | Entrena la red neuronal |
 | 12-13 | `puntuar_nosupervisados.py`, `puntuar_autoencoder.py` | Ponen nota a los pagos que aún no la tienen |
 | 14 | `simular_analistas.py` | Los analistas revisan las alertas de cada día |
-| 15 | `integrar_feedback.py` | Junta lo que dicen los analistas con lo que confirma el banco |
-| 16 | `recalibrar_modelo.py` | Cada semana, el sistema aprende de lo confirmado |
-| 17 | `medir_feedback.py` | Mide si las alertas mejoran semana a semana |
-| 18 | `ajustar_umbrales.py` | Propone umbrales de reglas, umbral de la cola y variables con lo validado |
-| 19-21 | `evaluar_modelos_nosupervisados.py`, `evaluar_autoencoders.py`, `comparacion_modelos.py` | Comparan los modelos y escriben las conclusiones |
-| 22 | `validacion_reproducibilidad_consistencia.py` | Comprueba que todo cuadra |
+| 15 | `generar_avisos.py` | Une modelo y reglas en una cola con niveles (crítico y alto; medio opcional) y crea los avisos |
+| 16 | `integrar_feedback.py` | Junta lo que dicen los analistas (y la web) con lo que confirma el banco |
+| 17 | `recalibrar_modelo.py` | Cada semana, el sistema aprende de lo confirmado |
+| 18 | `medir_feedback.py` | Mide si las alertas mejoran semana a semana |
+| 19 | `ajustar_umbrales.py` | Propone umbrales de reglas, umbral de la cola y variables con lo validado |
+| 20-22 | `evaluar_modelos_nosupervisados.py`, `evaluar_autoencoders.py`, `comparacion_modelos.py` | Comparan los modelos y escriben las conclusiones |
+| 23 | `validacion_reproducibilidad_consistencia.py` | Comprueba que todo cuadra |
 
 El scoring diario (`main.py --scoring`) hace: generar un día nuevo (`generar_lote.py`, que trae
-también las confirmaciones del banco de ese día) → pasos 3 y 5 a 8 → pasos 12 a 17 → paso 22.
+también las confirmaciones del banco de ese día) → pasos 3 y 5 a 8 → pasos 12 a 18 → paso 23.
 Nunca vuelve a entrenar los modelos principales ni a ajustar umbrales (eso es una decisión periódica).
 
 ## Correspondencia con los hitos
@@ -685,4 +739,4 @@ Nunca vuelve a entrenar los modelos principales ni a ajustar umbrales (eso es un
 | 3. ML para anomalías | Isolation Forest, One-Class SVM, KMeans, DBSCAN; variables; ajuste; puntuación | `features.py`, `modelos_nosupervisados.py`, `puntuar_nosupervisados.py`, `evaluar_modelos_nosupervisados.py` | Hecho |
 | 4. Autoencoders | Red neuronal, error de reconstrucción, comparación con los clásicos | `entrenar_autoencoder.py`, `puntuar_autoencoder.py`, `evaluar_autoencoders.py`, `comparacion_modelos.py` | Hecho |
 | 5. Orquestación y despliegue | Airflow, Docker, Kubernetes, ejecuciones periódicas, reproducibilidad | `dags/`, `Dockerfile`, `docker-compose*.yml`, `k8s/`, `generar_lote.py`, `validacion_reproducibilidad_consistencia.py` | Hecho |
-| 6. Analistas y dashboards | Feedback de analistas, ajuste de umbrales, dashboards, patrones por cliente/comercio/dispositivo/hora | Feedback: `simular_analistas.py`, `integrar_feedback.py`, `recalibrar_modelo.py`, `medir_feedback.py`. Umbrales y variables: `ajustar_umbrales.py`, `config.yaml` (`reglas`, `feedback`). Dashboard y patrones: la web (`web/`) | Hecho |
+| 6. Analistas y dashboards | Feedback de analistas, ajuste de umbrales, dashboards, patrones por cliente/comercio/dispositivo/hora | Feedback: `simular_analistas.py`, `integrar_feedback.py`, `recalibrar_modelo.py`, `medir_feedback.py`. Umbrales y variables: `ajustar_umbrales.py`, `config.yaml` (`reglas`, `feedback`). Dashboard: la web (`web/`) con alertas por niveles, avisos y revisión. Patrones: `notebooks/` y `resultados/` | Hecho |
