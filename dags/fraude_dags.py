@@ -91,8 +91,9 @@ with DAG(
     default_args=ARGS,
     tags=['fraude'],
 ) as dag_setup:
-    # Borra la BD entera (igual que main.py): sin esto, anomaly_scores conservaría
-    # scores del dataset anterior con los mismos ids
+    # Borra la BD entera (igual que main.py --desde-cero --solo-original: los días que había
+    # añadido el scoring diario se pierden). Sin esto, anomaly_scores conservaría scores del
+    # dataset anterior con los mismos ids
     borrar_bd = BashOperator(
         task_id='borrar_bd',
         bash_command=(f'cd "{RUTA_PROYECTO}" && {PYTHON} -c '

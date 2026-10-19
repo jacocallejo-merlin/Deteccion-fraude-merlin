@@ -34,7 +34,7 @@ PASOS = [
     ('pipeline/validacion_reproducibilidad_consistencia.py', 'Valida reproducibilidad y consistencia'),
 ]
 
-# Pasos que crean y cargan los datos de origen: se saltan con --reutilizar-datos
+# Pasos que crean y cargan los datos de origen: se saltan si la base de datos ya tiene datos
 PASOS_DATOS = {'pipeline/BD_VACIAS.py', 'pipeline/dataset.py'}
 
 # --scoring: lo que se ejecuta cada día con los modelos ya entrenados (igual que el DAG fraude_scoring)
@@ -59,9 +59,7 @@ def nombre_paso(script):
     return Path(script).stem
 
 
-def preparar_base_de_datos(borrar):
-    """Comprueba la conexión y, si borrar=True (lo normal), borra la base de datos.
-    Devuelve True si quedan transacciones cargadas."""
+def conectar():
     import logging
 
     import clickhouse_connect
@@ -75,6 +73,30 @@ def preparar_base_de_datos(borrar):
         print('  Levanta el contenedor con:  docker compose up -d')
         print(f'  Detalle: {e}')
         sys.exit(1)
+    return cliente
+
+
+def dias_del_scoring(cliente):
+    """Días que el scoring diario (generar_lote.py) ha añadido después del dataset original: los
+    que hay hasta la última sesión de un lote completo (lo de un lote a medias no cuenta)."""
+    if not cliente.command(f'EXISTS TABLE {DATABASE}.transaccion_bruta') or \
+            not cliente.command(f'SELECT count() FROM {DATABASE}.transaccion_bruta'):
+        return 0
+    sys.path.insert(0, str(CARPETA / 'pipeline'))
+    from dataset import FECHA_FIN          # el dataset original acaba justo antes de esta fecha
+    ultima = cliente.command(
+        f'SELECT max(timestamp) FROM {DATABASE}.sesion '
+        f'WHERE sesion_id <= (SELECT max(sesion_id) FROM {DATABASE}.transaccion_bruta)')
+    if isinstance(ultima, str):
+        from datetime import datetime
+        ultima = datetime.fromisoformat(ultima)
+    return max(0, (ultima.date() - FECHA_FIN.date()).days + 1)
+
+
+def preparar_base_de_datos(borrar):
+    """Comprueba la conexión y, si borrar=True (--desde-cero), borra la base de datos.
+    Devuelve True si quedan transacciones cargadas."""
+    cliente = conectar()
 
     if borrar:
         cliente.command(f'DROP DATABASE IF EXISTS {DATABASE}')
@@ -84,22 +106,31 @@ def preparar_base_de_datos(borrar):
     hay_datos = bool(cliente.command(f'EXISTS TABLE {DATABASE}.transaccion')) and \
         cliente.command(f'SELECT count() FROM {DATABASE}.transaccion') > 0
     print(f'ClickHouse responde en {HOST}:{PORT}. Base de datos "{DATABASE}" '
-          + ('con datos: se reutilizan.' if hay_datos else 'sin datos: se generan.'))
+          + ('con datos: se reutilizan, no se borra nada (para empezar de cero: --desde-cero).'
+             if hay_datos else 'sin datos: se generan.'))
     return hay_datos
 
 
-def elegir_pasos(args, hay_datos):
+def elegir_pasos(args, hay_datos, dias_reconstruir=0):
+    """Lista de (script, descripción, argumentos)."""
     if args.scoring:
         if not hay_datos:
             sys.exit('--scoring: la base de datos está vacía. Ejecuta antes "python main.py" completo.')
-        return PASOS_SCORING
-    pasos = PASOS
-    if hay_datos and args.reutilizar_datos:
+        return [(s, d, []) for s, d in PASOS_SCORING]
+    pasos = [(s, d, []) for s, d in PASOS]
+    if hay_datos:
         pasos = [p for p in pasos if p[0] not in PASOS_DATOS]
+    elif dias_reconstruir:
+        # Tras el dataset original, los mismos días que había añadido el scoring diario: cada día
+        # con su semilla, así que salen idénticos
+        i = [p[0] for p in pasos].index('pipeline/dataset.py') + 1
+        pasos.insert(i, ('pipeline/generar_lote.py',
+                         f'Reconstruye los {dias_reconstruir} días que había añadido el scoring diario',
+                         ['--dias', str(dias_reconstruir)]))
     if args.desde:
         if not hay_datos:
             sys.exit('--desde: la base de datos está vacía. Ejecuta antes "python main.py" completo.')
-        nombres = [nombre_paso(s) for s, _ in pasos]
+        nombres = [nombre_paso(p[0]) for p in pasos]
         if args.desde not in nombres:
             sys.exit(f'--desde: paso desconocido "{args.desde}". Opciones: {", ".join(nombres)}')
         pasos = pasos[nombres.index(args.desde):]
@@ -108,10 +139,16 @@ def elegir_pasos(args, hay_datos):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Ejecuta el pipeline antifraude. Sin opciones BORRA la base de datos y lo regenera todo '
-                    '(con la misma semilla sale siempre el mismo resultado).')
+        description='Ejecuta el pipeline antifraude. Sin opciones NO borra nada: si la base de datos ya '
+                    'tiene datos (incluidos los días que añade el scoring diario) los reutiliza y rehace el '
+                    'resto; si está vacía, genera el dataset. Para regenerarlo todo: --desde-cero.')
+    parser.add_argument('--desde-cero', action='store_true',
+                        help='BORRA la base de datos y la regenera: el dataset original y, después, los mismos '
+                             'días que había añadido el scoring diario (salen idénticos)')
+    parser.add_argument('--solo-original', action='store_true',
+                        help='con --desde-cero: solo el dataset original, sin los días del scoring diario')
     parser.add_argument('--reutilizar-datos', action='store_true',
-                        help='no borra la base de datos ni regenera el dataset; ejecuta el resto de pasos')
+                        help='ya es lo que se hace sin opciones; se mantiene por compatibilidad')
     parser.add_argument('--desde', metavar='PASO',
                         help='empieza en este paso sin borrar nada, p. ej. --desde entrenar_autoencoder')
     parser.add_argument('--scoring', action='store_true',
@@ -123,26 +160,35 @@ def main():
     if faltan:
         sys.exit(f'No encuentro estos scripts en {CARPETA}: {", ".join(faltan)}')
 
-    borrar = not (args.reutilizar_datos or args.desde or args.scoring)
-    hay_datos = preparar_base_de_datos(borrar)
-    pasos = elegir_pasos(args, hay_datos)
+    if args.desde_cero and (args.desde or args.scoring or args.reutilizar_datos):
+        sys.exit('--desde-cero no se puede combinar con --desde, --scoring ni --reutilizar-datos')
+    if args.solo_original and not args.desde_cero:
+        sys.exit('--solo-original solo tiene sentido con --desde-cero')
+
+    dias_reconstruir = 0
+    if args.desde_cero and not args.solo_original:
+        dias_reconstruir = dias_del_scoring(conectar())     # antes de borrar
+        if dias_reconstruir:
+            print(f'El scoring diario había añadido {dias_reconstruir} día/s: se reconstruyen tras el dataset.')
+    hay_datos = preparar_base_de_datos(args.desde_cero)
+    pasos = elegir_pasos(args, hay_datos, dias_reconstruir)
 
     print('=' * 78)
-    total = len(PASOS_SCORING if args.scoring else PASOS)
+    total = len(PASOS_SCORING) if args.scoring else len(PASOS) + bool(dias_reconstruir)
     print(f'PIPELINE ANTIFRAUDE{" (SCORING)" if args.scoring else ""}  ({len(pasos)} de {total} pasos)')
     print('=' * 78)
 
     tiempos = []
     inicio_total = time.perf_counter()
 
-    for i, (script, descripcion) in enumerate(pasos, 1):
+    for i, (script, descripcion, argumentos) in enumerate(pasos, 1):
         print('\n' + '-' * 78)
-        print(f'[{i}/{len(pasos)}] {script}')
+        print(f'[{i}/{len(pasos)}] {script} {" ".join(argumentos)}'.rstrip())
         print(f'        {descripcion}')
         print('-' * 78)
 
         inicio = time.perf_counter()
-        resultado = subprocess.run([sys.executable, script], cwd=CARPETA)
+        resultado = subprocess.run([sys.executable, script, *argumentos], cwd=CARPETA)
         tiempos.append((script, time.perf_counter() - inicio))
 
         if resultado.returncode != 0:

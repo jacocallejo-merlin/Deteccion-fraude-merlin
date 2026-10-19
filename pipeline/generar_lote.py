@@ -7,8 +7,14 @@ También llegan las confirmaciones del banco (contracargos) de ese día: de los 
 confirmar, los de días anteriores y los del propio lote, se confirman los que tocan con el mismo
 retraso que en el dataset inicial (dataset.etiquetas en config.yaml). Sin esto, en la operación
 diaria el banco no confirmaría nunca nada y el recalibrado solo aprendería de los analistas.
+
+Cada día usa su propia semilla (la del proyecto y su fecha). Con --dias N se generan N días
+seguidos, uno tras otro igual que si se lanzara N veces con un día: un lote de N días y N lotes de
+un día dan exactamente lo mismo. Así main.py --desde-cero puede reconstruir los días que había
+añadido el scoring diario.
 """
 import argparse
+import copy
 import math
 import sys
 from datetime import datetime, timedelta, timezone
@@ -19,6 +25,7 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import dataset as ds
+from carga_transacciones import FECHA
 from config import CONFIG, DATABASE, HOST, PASSWORD, PORT, USER
 
 TABLAS_LOTE = ["sesion", "evento", "devolucion", "transaccion"]   # transaccion SIEMPRE la última
@@ -72,10 +79,15 @@ def confirmar_lote(fab, inicio, fin, semilla):
 def confirmar_pendientes(client, inicio, fin, semilla):
     """Confirmaciones que llegan en este lote de fraudes de días anteriores. Se escriben en
     transaccion_bruta (carga_transacciones.py las pasa a transaccion). Las fechas van como segundos
-    Unix para no depender de la zona horaria del ordenador."""
+    Unix para no depender de la zona horaria del ordenador.
+    Los pendientes se leen de transaccion_bruta con la misma conversión de fechas que
+    carga_transacciones.py (las ilegibles, que irían a cuarentena, no cuentan): es lo que tendría
+    transaccion tras la carga, sin depender de que se haya lanzado entre un día y el siguiente."""
     pendientes = client.query(
-        "SELECT transaccion_id, toUnixTimestamp(timestamp) FROM transaccion "
-        "WHERE es_fraude = 1 AND fecha_confirmacion IS NULL AND timestamp < {i:DateTime('UTC')}",
+        f"SELECT transaccion_id, toUnixTimestamp(fecha) "
+        f"FROM (SELECT transaccion_id, es_fraude, fecha_confirmacion, {FECHA} AS fecha FROM transaccion_bruta) "
+        "WHERE es_fraude = 1 AND fecha_confirmacion IS NULL AND fecha IS NOT NULL "
+        "AND fecha < {i:DateTime('UTC')}",
         parameters={"i": inicio.replace(tzinfo=timezone.utc)}).result_rows
     confirmadas = {}
     for tid, segundos in pendientes:
@@ -191,24 +203,25 @@ def cargar(client, fab):
         print(f"  {destino}: {len(filas):,} filas nuevas")
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__,
-                                     formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--dias", type=int, default=1, help="días de transacciones del lote (1 por defecto)")
-    args = parser.parse_args()
+def generar_mundo():
+    """El mundo del dataset inicial (clientes, tarjetas, dispositivos, comercios), con su semilla
+    y la misma fecha de inicio: mismas fechas de alta."""
+    return ds.generar_mundo(ds.Fabrica(), ds.sembrar(CONFIG["semilla"]),
+                            ds.FECHA_FIN - timedelta(days=ds.CONFIG_DATASET["dias"]))
 
-    client = conectar()
+
+def lote_de_un_dia(client, mundo):
+    """Genera y carga el día siguiente al último que hay. Todo sale de lo que hay en ClickHouse y
+    de la semilla de ese día: mismo estado y mismo día -> mismo lote."""
     ult = estado_actual(client)
     borrar_restos(client, ult)
     ultima_sesion = uno(client, f"SELECT max(timestamp) FROM sesion WHERE sesion_id <= {ult['sesion']}")
     inicio = datetime.combine(ultima_sesion.date() + timedelta(days=1), datetime.min.time())
-    fin = inicio + timedelta(days=args.dias)
-    print(f"Lote: {inicio:%Y-%m-%d} a {fin - timedelta(seconds=1):%Y-%m-%d %H:%M:%S} ({args.dias} día/s)")
+    fin = inicio + timedelta(days=1)
+    print(f"\nLote: {inicio:%Y-%m-%d}")
 
-    # El mundo del dataset inicial, con su semilla (mismo fecha_inicio: mismas fechas de alta)
     semilla = CONFIG["semilla"]
-    m = ds.generar_mundo(ds.Fabrica(), ds.sembrar(semilla),
-                         ds.FECHA_FIN - timedelta(days=ds.CONFIG_DATASET["dias"]))
+    m = copy.deepcopy(mundo)    # cada día parte del mundo recién generado, como un lote suelto
     usados = {d for (d,) in client.query("SELECT DISTINCT dispositivo_id FROM sesion").result_rows}
     libres = [d for d in m.dispositivos_sin_dueno if d not in usados]
 
@@ -237,7 +250,20 @@ def main():
     n_conf, n_pend = confirmar_pendientes(client, inicio, fin, semilla)
     print(f"  confirmaciones del banco: {n_conf} de {n_pend} fraudes anteriores que seguían sin confirmar")
     cargar(client, fab)
-    print("Listo. Siguiente paso: carga_transacciones.py")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--dias", type=int, default=1,
+                        help="días seguidos que se generan, cada uno con su semilla (1 por defecto)")
+    args = parser.parse_args()
+
+    client = conectar()
+    mundo = generar_mundo()      # una sola vez: es lo más lento y no cambia de un día a otro
+    for _ in range(args.dias):
+        lote_de_un_dia(client, mundo)
+    print(f"\nListo: {args.dias} día/s. Siguiente paso: carga_transacciones.py")
 
 
 if __name__ == "__main__":

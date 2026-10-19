@@ -34,5 +34,6 @@ RUN useradd --create-home --uid 1000 fraude \
  && chown -R fraude:fraude /app
 USER fraude
 
-# Por defecto, el pipeline completo (BORRA la base de datos). Ver main.py --help
+# Por defecto, el pipeline completo sin borrar nada (si la base de datos está vacía, genera el
+# dataset). Para regenerarlo todo: python main.py --desde-cero. Ver main.py --help
 CMD ["python", "main.py"]

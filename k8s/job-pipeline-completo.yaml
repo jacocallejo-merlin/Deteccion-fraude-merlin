@@ -1,5 +1,6 @@
-# Pipeline completo: BORRA la base de datos, genera el dataset, entrena los 5 modelos, puntúa,
-# evalúa y valida (python main.py). Es la primera ejecución tras "kubectl apply -k k8s/".
+# Pipeline completo: con la base de datos vacía genera el dataset; después entrena los 5 modelos,
+# puntúa, evalúa y valida (python main.py, que no borra nada). Es la primera ejecución tras
+# "kubectl apply -k k8s/".
 # Con generateName cada "kubectl create -f" crea un Job nuevo (no usar apply).
 apiVersion: batch/v1
 kind: Job
@@ -9,7 +10,7 @@ metadata:
   labels:
     app: fraude-pipeline
 spec:
-  backoffLimit: 1                # si falla se repite una vez desde cero (main.py lo regenera todo)
+  backoffLimit: 1                # si falla se repite una vez (main.py genera lo que falte y rehace el resto)
   ttlSecondsAfterFinished: 604800
   template:
     metadata:

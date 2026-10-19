@@ -528,14 +528,20 @@ copy .env.example .env                               # y escribe la contraseña 
 | Quiero… | Comando | Tarda |
 |---|---|---|
 | Arrancar la base de datos (si el ordenador se ha reiniciado) | `docker compose up -d` | 1 min |
-| **Generarlo todo desde cero** (borra la base de datos) | `venv\Scripts\python.exe main.py` (o el ▶ de VS Code con `main.py` abierto) | ~15 min |
-| Rehacerlo todo **sin** regenerar los datos | `venv\Scripts\python.exe main.py --reutilizar-datos` | ~12 min |
+| **Rehacerlo todo sin borrar nada**: reutiliza los datos (también los días que ha añadido el scoring diario); si la base de datos está vacía, los genera | `venv\Scripts\python.exe main.py` (o el ▶ de VS Code con `main.py` abierto) | ~12 min |
+| **Generarlo todo desde cero** (borra la base de datos y vuelve a crear los mismos días que había, idénticos) | `venv\Scripts\python.exe main.py --desde-cero` | ~15 min |
+| Desde cero, solo con el dataset original (sin los días del scoring diario) | `venv\Scripts\python.exe main.py --desde-cero --solo-original` | ~15 min |
 | Empezar desde un paso concreto | `venv\Scripts\python.exe main.py --desde entrenar_autoencoder` | depende |
 | **Simular un día nuevo** (como hace Airflow cada día) | `venv\Scripts\python.exe main.py --scoring` | ~5 min |
 | **Ver los resultados en la web** (y abrir http://localhost:8000) | `venv\Scripts\python.exe -m uvicorn web.app:app` | al momento |
 | Pasar los tests | `venv\Scripts\python.exe -m pytest tests` | 1 min |
 
 Si un paso falla, el pipeline se para ahí y dice cuál ha sido.
+
+Los días que añade el scoring diario son reproducibles: cada uno usa la semilla del proyecto y su
+fecha. Por eso `main.py --desde-cero` puede borrar la base de datos y volver a generarlos idénticos
+(`generar_lote.py --dias N` da lo mismo que N lotes de un día). Lo único que borra de verdad lo
+acumulado es `--desde-cero --solo-original` o el DAG `fraude_setup`.
 
 ### Repetir solo la parte de los analistas
 
@@ -554,7 +560,7 @@ venv\Scripts\python.exe pipeline\medir_feedback.py
 
 ```powershell
 # Docker, sin instalar Python
-docker compose run --rm --build pipeline                       # = python main.py
+docker compose run --rm --build pipeline                       # = python main.py (no borra nada)
 docker compose run --rm pipeline python main.py --scoring      # un día más
 docker compose --profile web up -d --build                     # la web, en http://localhost:8000
 
