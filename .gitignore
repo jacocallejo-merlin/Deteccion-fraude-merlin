@@ -1,5 +1,10 @@
 .venv/
+venv/
 .env
+.pytest_cache/
+# README exportado a HTML (Quarto/VS Code): se genera desde README.md
+README.html
+README_files/
 datos_ml/
 datos_ml_nuevo/
 modelos/
