@@ -1,7 +1,8 @@
 # Despliegue del pipeline antifraude en Kubernetes (Hito 5).
 #
-#   kubectl apply -k k8s/                       # namespace, ClickHouse, volumen y CronJobs
+#   kubectl apply -k k8s/                       # namespace, ClickHouse, volumen, CronJobs y web
 #   kubectl create -f k8s/job-pipeline-completo.yaml   # primera ejecución: dataset + entrenamiento
+#   kubectl -n fraude port-forward service/fraude-web 8000:8000   # la web en http://localhost:8000
 #
 # La imagen fraude-pipeline:latest se construye con el Dockerfile de la raíz. En un clúster local
 # (Docker Desktop, kind, minikube) basta con tenerla en el nodo; en uno remoto, subirla a un
@@ -17,6 +18,7 @@ resources:
   - pvc-artefactos.yaml
   - cronjob-scoring.yaml
   - cronjob-entrenamiento.yaml
+  - web.yaml
 images:
   - name: fraude-pipeline
     newName: fraude-pipeline

@@ -1,0 +1,71 @@
+# La web con los resultados (web/app.py): la misma imagen que el pipeline, arrancada con uvicorn.
+# Solo lee: ClickHouse y la carpeta resultados/ del volumen "artefactos" (montada en solo lectura).
+#
+# Para abrirla desde el ordenador (después, http://localhost:8000):
+#   kubectl -n fraude port-forward service/fraude-web 8000:8000
+#
+# Si el pipeline aún no se ha ejecutado, la web arranca igual y cada pestaña avisa de que faltan datos.
+apiVersion: v1
+kind: Service
+metadata:
+  name: fraude-web
+  namespace: fraude
+spec:
+  selector:
+    app: fraude-web
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraude-web
+  namespace: fraude
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fraude-web
+  template:
+    metadata:
+      labels:
+        app: fraude-web
+    spec:
+      securityContext:
+        runAsUser: 1000          # el usuario "fraude" de la imagen
+        runAsGroup: 1000
+      containers:
+        - name: web
+          image: fraude-pipeline
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8000"]
+          envFrom:
+            - configMapRef:
+                name: pipeline-config
+            - secretRef:
+                name: clickhouse
+          ports:
+            - containerPort: 8000
+          # Viva: el proceso responde (la página no depende de ClickHouse)
+          livenessProbe:
+            httpGet: {path: /, port: 8000}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          # Lista para recibir tráfico: además llega a ClickHouse
+          readinessProbe:
+            httpGet: {path: /api/salud, port: 8000}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            # resultados/ del volumen que escriben los Job y CronJob. El volumen es ReadWriteOnce:
+            # la web tiene que estar en el mismo nodo que ellos (en un clúster local lo está siempre)
+            - {name: artefactos, mountPath: /app/resultados, subPath: resultados, readOnly: true}
+      volumes:
+        - name: artefactos
+          persistentVolumeClaim:
+            claimName: artefactos

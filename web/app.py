@@ -92,6 +92,17 @@ def pagina():
     return FileResponse(ESTATICOS / 'index.html')
 
 
+@app.get('/api/salud', include_in_schema=False)
+def salud():
+    """Para las sondas de Kubernetes (k8s/web.yaml): 200 si ClickHouse responde, 503 si no.
+    No exige que el pipeline se haya ejecutado: sin datos la página ya avisa en cada pestaña."""
+    try:
+        cliente().command('SELECT 1')
+    except Exception as e:
+        raise HTTPException(503, f'ClickHouse no responde: {str(e).splitlines()[0][:200]}')
+    return {'estado': 'ok'}
+
+
 # ---------------------------------------------------------------------------------- resumen
 @app.get('/api/resumen')
 def resumen(dias: int = Dias):
