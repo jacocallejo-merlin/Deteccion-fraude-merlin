@@ -1,0 +1,258 @@
+/* Centinela · Modelos. Pantalla de informe (taste-skill, references/app-screens.md):
+   - estilo "achromatic ledger": la interfaz sin color, los números en tinta y un único color, el verde de
+     Centinela, sobre el dato principal (el modelo que usamos y la línea de lo que aprende);
+   - su "cara": un fondo gris azulado de libro de cuentas en vez del gris neutro del kit;
+   - de Mercury (awesome-design-md, ver ../DESIGN_referencia_mercury.md): pesos ligeros (nada por encima
+     de 600), superficies separadas por tono y no por sombras, ritmo tranquilo. Su índigo no: la skill
+     prohíbe violetas e índigos, y la marca es el verde de Centinela.
+   Va después de app.css (la base neutra de la skill) y solo cambia sus tokens y añade lo propio. */
+:root {
+  --ground: #f2f4f7;          /* gris azulado: un libro de cuentas */
+  --surface: #ffffff;
+  --raised: #eceff3;
+  --active: #e6e9ee;
+  --border: #e1e5ea;
+  --rule: #edf0f3;
+  --control: #ccd2d9;
+  --text: #0b0d10;
+  --muted: #59616b;           /* 5,6:1 sobre el fondo */
+  --faint: #636b74;           /* 5:1 sobre el fondo */
+  --accent: #0b7a64;          /* el verde de Centinela: solo en el dato principal */
+  --primary: #141618;         /* el botón principal, casi negro */
+  --primary-ink: #ffffff;
+  --chart-1: var(--accent);
+  --chart-2: #9aa3ad;         /* la serie de comparación, en gris */
+  --chart-muted: #c9cfd6;
+  --grid: #eceff2;
+  --marca-vacia: #dde2e8;     /* un fraude que el modelo no encuentra */
+  --marca-otro: #3b424b;      /* lo que encuentran los demás modelos, en tinta */
+
+  --font: "Geist", "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --fs-title: 24px; --fs-section: 16px; --fs-kpi: 24px; --fs-body: 14px; --fs-small: 12px;
+  --fs-lider: 32px;           /* la cifra que responde a la pregunta: la mayor de la pantalla */
+
+  --gap: 12px;
+  --card-pad: 24px;
+  --radius-card: 8px;
+  --radius-control: 6px;
+  --control-height: 36px;
+}
+
+body { font-weight: 400; }
+[hidden] { display: none !important; }
+h1, h2 { text-wrap: balance; }
+/* Pulsar sin el retraso del doble toque y sin el destello azul de los navegadores móviles */
+button { touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+@media (hover: hover) and (pointer: fine) {
+  .segmented button[aria-pressed="false"]:hover { color: var(--text); }
+}
+.saltar { position: absolute; left: -999px; top: 8px; z-index: 10; padding: 8px 12px; background: var(--surface); }
+.saltar:focus { left: 8px; }
+
+/* Una columna centrada de 1128px; la barra y el pie comparten sus bordes */
+.columna { width: min(1128px, 100% - 48px); margin-inline: auto; }
+
+.barra { height: 48px; border-bottom: 1px solid var(--border); }
+.barra-dentro { height: 100%; display: flex; align-items: center; gap: 12px; }
+.marca { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; font-size: 15px; }
+.ambito { color: var(--muted); font-size: 15px; padding-left: 12px; border-left: 1px solid var(--control); }
+
+main.columna { padding: 32px 0 48px; }
+.title-row h1 { font-weight: 600; }
+.title-row .sub { font-size: 15px; color: var(--text); max-width: 72ch; }
+.title-row .sub b { font-weight: 600; }
+.acciones { display: flex; align-items: center; gap: 16px; flex: none; }
+.btn { transition: transform var(--t-press) var(--ease-out), background-color var(--t-hover) ease; }
+.btn:active { transform: scale(0.97); }
+.btn.primary:hover { background: #2a2e33; }
+
+.kpis { margin-bottom: var(--gap); }
+.kpi-value { font-weight: 500; }
+.kpi-value small { font-size: 13px; }
+.bloque-24 { display: block; width: 90px; height: 24px; }
+
+/* Rejilla: 12 × 83 + 11 × 12 = 1128 */
+.grid { gap: var(--gap); }
+.principal { grid-column: span 8; }
+.lateral { grid-column: span 4; }
+/* Dos bloques apilados a la derecha cuentan como uno: acaban al nivel del principal (la gráfica se ajusta) */
+.pila { display: flex; flex-direction: column; gap: var(--gap); }
+.pila .leyenda { margin-top: 8px; }
+.panel > header { min-height: 36px; }
+
+/* La respuesta: la cifra más grande de la pantalla */
+.lider { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 4px 0 2px; }
+.lider b { font-size: var(--fs-lider); line-height: 1.1; font-weight: 500; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.lider b small { font-size: 16px; color: var(--muted); font-weight: 400; letter-spacing: 0; margin-left: 4px; }
+.lider span { color: var(--muted); }
+.lider.pequeno b { font-size: var(--fs-kpi); color: var(--accent); }
+.leyenda-marcas { margin: 8px 0 14px; color: var(--muted); font-size: var(--fs-small); display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.muestra { display: inline-block; width: 6px; height: 12px; border-radius: 1px; margin-right: 6px; vertical-align: -1px; }
+
+/* Lo que solo tiene este producto: cada marca es uno de los 201 fraudes del examen (o uno de cada 100
+   avisos), y cada modelo colorea los que encuentra. El que usamos, en el verde; los demás, en tinta. */
+.ranking { display: grid; }
+.fila-modelo { display: grid; grid-template-columns: 224px minmax(0, 1fr) 104px; align-items: center; gap: 20px;
+  padding: 14px 0; border-top: 1px solid var(--rule); }
+.fila-modelo:first-child { border-top: 0; padding-top: 4px; }
+.fila-modelo .nombre { font-weight: 500; font-size: 15px; line-height: 20px; }
+.fila-modelo .nombre .usado { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; margin-left: 6px;
+  border-radius: 4px; background: #dcf2ec; color: #075443; font-size: 12px; font-weight: 500; vertical-align: 1px; }
+.fila-modelo .idea { margin-top: 2px; color: var(--muted); font-size: 12.5px; line-height: 17px; }
+.fila-modelo .marcas svg { display: block; max-width: 100%; }   /* cada marca a su tamaño: nunca se estiran */
+.fila-modelo .valor { text-align: right; font-variant-numeric: tabular-nums; }
+.fila-modelo .valor b { font-size: 20px; font-weight: 500; }
+.fila-modelo .valor small { display: block; color: var(--muted); font-size: var(--fs-small); }
+
+/* Por qué este modelo: pares etiqueta y cifra */
+.razones { display: grid; }
+.razones div { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; padding: 12px 0; border-top: 1px solid var(--rule); }
+.razones div:first-child { border-top: 0; padding-top: 4px; }
+.razones dt { font-weight: 500; }
+.razones dt small { display: block; margin-top: 2px; color: var(--muted); font-weight: 400; font-size: var(--fs-small); line-height: 16px; }
+.razones dd { margin: 0; text-align: right; font-size: 18px; font-weight: 500; font-variant-numeric: tabular-nums; }
+
+/* Qué fraude ve cada uno: una tabla, con una barra fina bajo cada cifra */
+.matriz th { padding: 0 8px; }
+.matriz th:first-child, .matriz td:first-child { padding-left: 0; }
+.matriz th.elegido { color: var(--text); font-weight: 500; }
+.matriz td { padding: 6px 8px; }
+.matriz td.tipo { white-space: nowrap; }
+.matriz td.tipo small { display: block; color: var(--muted); font-size: var(--fs-small); }
+.matriz td.tipo small.nuevo { color: var(--warning); }
+.matriz td.n { min-width: 64px; }
+.matriz .pista { display: block; height: 3px; margin-top: 5px; border-radius: 2px; background: var(--rule); }
+.matriz .pista i { display: block; height: 100%; border-radius: 2px; background: var(--chart-2); }
+.matriz td.elegido .pista i { background: var(--accent); }
+.matriz td.elegido { color: var(--text); font-weight: 500; }
+
+.leyenda { display: flex; gap: 14px; color: var(--muted); font-size: var(--fs-small); }
+
+/* Cómo lo hicimos: cinco pasos en orden (una lista ordenada de verdad, sin números de adorno) */
+.proceso { display: grid; height: calc(100% - 48px); grid-auto-rows: 1fr; }
+.proceso li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 12px;
+  padding: 10px 0; border-top: 1px solid var(--rule); }
+.proceso li:first-child { border-top: 0; }
+.proceso li span { color: var(--muted); font-size: var(--fs-small); line-height: 16px; }
+.proceso li span b { display: block; color: var(--text); font-size: var(--fs-body); font-weight: 500; line-height: 20px; }
+.proceso li strong { font-size: 18px; font-weight: 500; text-align: right; font-variant-numeric: tabular-nums; }
+.proceso li:last-child strong { color: var(--accent); }
+.chart { margin-top: 8px; }
+
+.error-bloque { padding: 12px 0; color: var(--text); }
+.error-bloque button { margin-left: 8px; }
+
+.pie { padding: 0 0 32px; color: var(--muted); font-size: var(--fs-small); }
+
+/* Tableta: la fila de arriba se apila cuando el lateral quedaría por debajo de ~340px */
+@media (max-width: 1100px) {
+  .principal, .lateral { grid-column: 1 / -1; }
+  .pila { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: start; }
+  .proceso { height: auto; }
+}
+/* Teléfono: una columna; cada modelo en dos líneas (nombre y cifra, debajo sus marcas) */
+@media (max-width: 860px) {
+  .columna { width: calc(100% - 32px); }
+  main.columna { padding-top: 20px; }
+  .acciones { width: 100%; justify-content: space-between; }
+  .pila { grid-template-columns: minmax(0, 1fr); }
+  .fila-modelo { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "n v" "m m"; row-gap: 10px; }
+  .fila-modelo .texto { grid-area: n; }
+  .fila-modelo .valor { grid-area: v; }
+  .fila-modelo .marcas { grid-area: m; }
+  .panel > header { flex-wrap: wrap; }
+}
+@media (max-width: 560px) {
+  .title-row .sub { font-size: 14px; }
+}
+
+/* Para llevarlo a una reunión: Descargar en PDF imprime la página limpia */
+@media print {
+  body { background: #fff; }
+  .barra, #pdf, .segmented, .saltar { display: none !important; }
+  .panel { break-inside: avoid; }
+  .columna { width: 100%; }
+}
+
+/* ================================================================ resumen o un modelo
+   Pestañas subrayadas sobre una línea de 1px (taste); el subrayado se desliza a la elegida (Emil Kowalski:
+   transform, 250 ms, ease-in-out fuerte, porque se mueve por la pantalla). */
+.pestanas-modelos { position: relative; margin: 4px 0 20px; border-bottom: 1px solid var(--border); overflow: hidden; }
+.pestanas-lista { display: flex; gap: 26px; overflow-x: auto; scrollbar-width: none; }
+.pestanas-lista::-webkit-scrollbar { display: none; }
+.pestanas-lista button { flex: none; height: 40px; padding: 0; border: 0; background: none; cursor: pointer;
+  color: var(--muted); font-size: 15px; white-space: nowrap; transition: color 150ms ease; }
+.pestanas-lista button[aria-selected="true"] { color: var(--text); font-weight: 500; }
+.pestanas-lista button .usado-punto { display: inline-block; width: 6px; height: 6px; margin-left: 6px; border-radius: 50%;
+  background: var(--accent); vertical-align: 2px; }
+@media (hover: hover) and (pointer: fine) { .pestanas-lista button:hover { color: var(--text); } }
+.subrayado { position: absolute; left: 0; bottom: -1px; width: 1px; height: 2px; background: var(--text);
+  transform-origin: left center; transition: transform 250ms var(--ease-in-out); }
+.subrayado.sin-transicion { transition: none; }
+
+/* En el resumen, cada modelo abre su ficha */
+.fila-modelo[data-modelo] { cursor: pointer; border-radius: 4px; transition: background-color 150ms ease, box-shadow 150ms ease; }
+@media (hover: hover) and (pointer: fine) {
+  .fila-modelo[data-modelo]:hover { background: var(--raised); box-shadow: 0 0 0 8px var(--raised); }
+}
+.fila-modelo .ver { display: inline-block; margin-top: 4px; color: var(--accent); font-size: var(--fs-small); font-weight: 500; }
+
+/* ================================================================ la ficha de un modelo */
+.ficha > header { align-items: flex-start; }
+.ficha > header h2 { font-size: 22px; font-weight: 600; }
+.ficha > header .meta { margin-top: 2px; font-size: 13px; }
+.ficha h3 { margin: 0 0 6px; font-size: var(--fs-section); font-weight: 500; }
+.ficha-explica { display: grid; grid-template-columns: minmax(0, 1fr) 220px; gap: 24px; align-items: center; }
+.ficha-explica p { max-width: 62ch; font-size: 15px; line-height: 22px; }
+.ficha-explica p + p { margin-top: 10px; color: var(--muted); }
+.ficha-explica svg { width: 100%; height: auto; }
+.ficha-cifras { margin: 20px 0 18px; }
+.ficha-cifras .kpi-value { font-size: 24px; }
+.ficha-cifras .kpi-value small { font-size: 13px; }
+.ficha-marcas { display: grid; gap: 6px; }
+.ficha-marcas h3 { margin-top: 10px; }
+.ficha-marcas .leyenda-marcas { margin: 0 0 6px; }
+
+/* Los aciertos se encienden en orden al abrir la ficha (Emil: opacidad, 300 ms, ease-out, ~2 ms entre marcas) */
+.encender rect.lleno { animation: encender 300ms var(--ease-out) both; animation-delay: calc(var(--i) * 2ms); }
+@keyframes encender { from { opacity: 0.15; } }
+
+/* Qué fraude ve: una barra por tipo, ordenadas de más a menos */
+.barras-tipo { display: grid; }
+.barras-tipo li { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 12px; padding: 7px 0;
+  border-top: 1px solid var(--rule); }
+.barras-tipo li:first-child { border-top: 0; padding-top: 2px; }
+.barras-tipo .pista { grid-column: 1 / -1; display: block; height: 4px; margin-top: 5px; border-radius: 2px; background: var(--rule); }
+.barras-tipo .pista i { display: block; height: 100%; border-radius: 2px; background: var(--marca-otro); }
+.barras-tipo.elegido .pista i { background: var(--accent); }
+.barras-tipo b { font-weight: 500; font-variant-numeric: tabular-nums; }
+.barras-tipo small { color: var(--warning); font-size: var(--fs-small); }
+.ficha-nota { margin-top: 10px; color: var(--muted); font-size: 13px; line-height: 18px; }
+
+@media (max-width: 1100px) {
+  .ficha-explica { grid-template-columns: minmax(0, 1fr) 180px; }
+}
+@media (max-width: 860px) {
+  .ficha-explica { grid-template-columns: minmax(0, 1fr); }
+  .ficha-explica svg { max-width: 260px; }
+}
+@media print { .pestanas-modelos { display: none; } }
+
+/* Frente a los demás: los cinco modelos, el de la ficha resaltado; cada fila abre su ficha */
+.ficha-frente { margin-top: 18px; }
+.frente { display: grid; gap: 2px; }
+.frente button { display: grid; grid-template-columns: 140px minmax(0, 1fr) 40px; align-items: center; gap: 12px; width: 100%;
+  height: 30px; padding: 0 8px; border: 0; border-radius: 4px; background: transparent; cursor: pointer; text-align: left;
+  color: var(--muted); transition: background-color 150ms ease, transform 160ms var(--ease-out); }
+.frente button:active { transform: scale(0.99); }
+.frente button[aria-current="true"] { background: var(--raised); color: var(--text); font-weight: 500; cursor: default; }
+@media (hover: hover) and (pointer: fine) { .frente button:not([aria-current]):hover { background: var(--raised); color: var(--text); } }
+.frente .pista { display: block; height: 6px; border-radius: 3px; background: var(--rule); }
+.frente .pista i { display: block; height: 100%; border-radius: 3px; background: var(--chart-muted); }
+.frente button[aria-current="true"] .pista i { background: var(--marca-otro); }
+.ficha.elegido .frente button[aria-current="true"] .pista i { background: var(--accent); }
+.frente b { text-align: right; font-weight: 500; font-variant-numeric: tabular-nums; }
+/* En la ficha, si sobra altura en la columna derecha se reparte entre las filas de tipos, no queda un hueco */
+#vista-modelo .pila > .panel:first-child { flex: 1; display: flex; flex-direction: column; }
+#vista-modelo .barras-tipo { flex: 1; grid-auto-rows: 1fr; align-content: stretch; }
+#vista-modelo .barras-tipo li { align-content: center; }

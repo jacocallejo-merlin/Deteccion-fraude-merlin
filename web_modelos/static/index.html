@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f2f4f7">
+  <title>Modelos de detección de fraude · Centinela</title>
+  <meta name="description" content="Informe para dirección: los cinco modelos de detección de fraude que hemos entrenado, cuál usamos y por qué.">
+  <link rel="icon" type="image/svg+xml" href="/static/marca.svg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&display=swap">
+  <link rel="stylesheet" href="/static/app.css?v=11">
+  <link rel="stylesheet" href="/static/estilos.css?v=11">
+</head>
+<body>
+  <a class="saltar" href="#informe">Ir al informe</a>
+
+  <!-- Barra de visor sobre el fondo: la marca y el ámbito, alineados con la columna -->
+  <header class="barra">
+    <div class="columna barra-dentro">
+      <span class="marca" translate="no"><img src="/static/marca.svg" alt="" width="22" height="22"> Centinela</span>
+      <span class="ambito">Modelos</span>
+    </div>
+  </header>
+
+  <main class="columna" id="informe">
+    <div class="title-row">
+      <div>
+        <h1>Modelos de detección de fraude</h1>
+        <p class="sub" id="hallazgo"><span class="skeleton" style="display:inline-block;width:420px;height:16px"></span></p>
+      </div>
+      <div class="acciones">
+        <span class="stamp" id="sello"></span>
+        <button class="btn primary" id="pdf" type="button">Descargar en PDF</button>
+      </div>
+    </div>
+
+    <!-- Resumen de todos o un modelo: pestañas con un subrayado que se desliza a la elegida -->
+    <nav class="pestanas-modelos" aria-label="Modelo">
+      <div class="pestanas-lista" id="pestanas" role="tablist">
+        <button type="button" role="tab" data-modelo="" aria-selected="true">Resumen</button>
+      </div>
+      <span class="subrayado" id="subrayado" aria-hidden="true"></span>
+    </nav>
+
+    <!-- 12 columnas de 83px con 12px de hueco: 12 × 83 + 11 × 12 = 1128 = la columna.
+         Fila 1: 8 + 4 columnas (748 + 12 + 368); a la derecha, dos bloques apilados que acaban al nivel del principal.
+         Fila 2: 8 + 4 columnas, con la misma altura. -->
+    <div class="grid vista" id="vista-resumen" role="tabpanel">
+      <section class="panel principal" aria-labelledby="t-examen">
+        <header>
+          <h2 id="t-examen">Fraude encontrado en el examen</h2>
+          <div class="segmented" role="group" aria-label="Qué mide cada fila">
+            <button type="button" data-vista="fraude" aria-pressed="true">De los fraudes</button>
+            <button type="button" data-vista="avisos" aria-pressed="false">De los avisos</button>
+          </div>
+        </header>
+        <div class="lider" id="lider"><span class="skeleton" style="display:block;width:160px;height:36px"></span></div>
+        <p class="leyenda-marcas" id="leyenda-marcas"></p>
+        <div class="ranking" id="ranking" aria-live="polite"></div>
+      </section>
+
+      <div class="pila lateral">
+        <section class="panel" aria-labelledby="t-porque">
+          <header><h2 id="t-porque">Por qué usamos este</h2></header>
+          <dl class="razones" id="razones"></dl>
+        </section>
+        <section class="panel" id="panel-semanas" aria-labelledby="t-aprende">
+          <header><h2 id="t-aprende">Aprende cada semana</h2></header>
+          <div class="lider pequeno" id="lider-semanas"></div>
+          <div class="chart" id="g-semanas"></div>
+          <div class="leyenda" id="leyenda-semanas"></div>
+        </section>
+      </div>
+
+      <section class="panel principal" aria-labelledby="t-tipos">
+        <header>
+          <h2 id="t-tipos">Qué fraude ve cada uno</h2>
+          <span class="meta">Parte de cada tipo que encuentra</span>
+        </header>
+        <div class="table-wrap"><table class="matriz" id="matriz"></table></div>
+      </section>
+
+      <section class="panel lateral" aria-labelledby="t-proceso">
+        <header><h2 id="t-proceso">Cómo lo hicimos</h2></header>
+        <ol class="proceso" id="proceso"></ol>
+      </section>
+    </div>
+
+    <!-- La ficha de un modelo: cómo funciona, qué consiguió en el examen, qué fraude ve y cómo se entrenó -->
+    <div class="grid vista" id="vista-modelo" role="tabpanel" hidden></div>
+  </main>
+
+  <footer class="columna pie"><span translate="no">Centinela</span>. Informe del examen final, con los datos sintéticos del proyecto.</footer>
+
+  <script src="/static/charts.js?v=11"></script>
+  <script src="/static/app.js?v=11"></script>
+</body>
+</html>
