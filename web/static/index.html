@@ -3,67 +3,78 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Centinela · Prevención de fraude en pagos</title>
-  <meta name="description" content="Centinela detecta los pagos con más riesgo de fraude y avisa al comercio de qué hacer.">
-  <link rel="icon" type="image/svg+xml" href="/static/logo.svg">
-  <link rel="stylesheet" href="/static/estilos.css?v=4">
+  <title>Centinela: prevención de fraude en pagos</title>
+  <meta name="description" content="Centinela revisa cada noche los pagos, señala los que tienen más riesgo de fraude y dice qué hacer con cada uno.">
+  <link rel="icon" type="image/svg+xml" href="/static/logo.svg?v=13">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400..800&display=swap">
+  <link rel="stylesheet" href="/static/estilos.css?v=13">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
-  <header class="cabecera">
-    <div class="marca">
-      <img class="logo" src="/static/logo.svg" alt="" width="42" height="42">
-      <div>
-        <h1>Centinela</h1>
-        <p class="lema">Prevención de fraude en pagos</p>
-      </div>
-    </div>
-    <div class="controles">
-      <label class="selector-comercio">
-        <span>Vista</span>
-        <select id="comercio"><option value="0">Todos los comercios</option></select>
-      </label>
-      <div class="campana-zona">
-        <button id="campana" class="campana" aria-label="Avisos" title="Avisos">
-          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true"><path fill="currentColor"
-            d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/></svg>
-          <span id="campana-num" class="burbuja" hidden></span>
-        </button>
-        <div id="panel-avisos" class="panel-avisos" hidden>
-          <div class="panel-cabecera">
-            <b>Avisos</b>
-            <button class="enlace" id="panel-leer-todos">Marcar todos como leídos</button>
+  <a class="saltar" href="#contenido">Ir al contenido</a>
+
+  <!-- ===================================================== CABECERA Y PARTE DE LA NOCHE -->
+  <header class="noche">
+    <div class="barra">
+      <a class="marca" href="/">
+        <img src="/static/logo.svg?v=13" alt="" width="30" height="30">
+        <span>Centinela</span>
+      </a>
+      <nav class="pestanas" id="pestanas" aria-label="Secciones">
+        <button data-pestana="alertas" class="activa" aria-current="page">Alertas <span class="contador" id="nav-pendientes"></span></button>
+        <button data-pestana="resumen">Resumen</button>
+        <button data-pestana="transacciones">Pagos</button>
+        <button data-pestana="avisos">Avisos <span class="contador" id="nav-avisos"></span></button>
+      </nav>
+      <div class="controles">
+        <select id="comercio" aria-label="Ver los pagos de"><option value="0">Todos los comercios</option></select>
+        <div class="campana-zona">
+          <button id="campana" class="campana" aria-label="Avisos" aria-expanded="false" aria-controls="panel-avisos">
+            <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path fill="currentColor"
+              d="M12 22a2.5 2.5 0 0 0 2.45-2h-4.9A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5.5-6.84V3.5a1.5 1.5 0 0 0-3 0v.66A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/></svg>
+            <span id="campana-num" class="burbuja" hidden></span>
+          </button>
+          <div id="panel-avisos" class="panel-avisos" hidden>
+            <div class="panel-cabecera">
+              <b>Avisos</b>
+              <button class="enlace" id="panel-leer-todos">Marcar todos como leídos</button>
+            </div>
+            <div id="panel-lista"></div>
+            <button class="enlace panel-pie" data-ir="avisos">Ver todos los avisos</button>
           </div>
-          <div id="panel-lista"></div>
-          <button class="enlace panel-pie" data-ir="avisos">Ver todos los avisos</button>
         </div>
       </div>
     </div>
+
+    <!-- El parte: lo que Centinela ha revisado esta noche y lo que espera una decisión -->
+    <section id="parte" class="parte" aria-labelledby="parte-titulo">
+      <p class="parte-fecha" id="parte-fecha">Cargando el parte…</p>
+      <h1 class="parte-titulo" id="parte-titulo"><span id="parte-revisados">&nbsp;</span><span id="parte-pendientes" class="segunda">&nbsp;</span></h1>
+      <div class="dia" id="dia"></div>
+      <div class="dia-ejes" id="dia-ejes" hidden>
+        <span>Menos riesgo</span>
+        <span class="leyenda"><span class="cuadro critico"></span>Crítico <span class="cuadro alto"></span>Alto <span class="mas">Más riesgo</span></span>
+      </div>
+    </section>
   </header>
 
-  <nav class="pestanas" id="pestanas">
-    <button data-pestana="alertas" class="activa">Alertas <span class="contador" id="nav-pendientes"></span></button>
-    <button data-pestana="resumen">Resumen</button>
-    <button data-pestana="transacciones">Transacciones</button>
-    <button data-pestana="avisos">Avisos <span class="contador" id="nav-avisos"></span></button>
-    <span id="reloj" class="reloj">Cargando…</span>
-  </nav>
-
-  <main>
-    <!-- ========================================================== ALERTAS -->
-    <section id="alertas" class="seccion activa">
-      <div class="kpis" id="kpis-alertas"></div>
-      <div class="barra-filtros">
-        <div class="chips" id="filtro-estado">
-          <button data-valor="pendientes" class="activa">Por resolver</button>
-          <button data-valor="revisadas">Cerradas</button>
-          <button data-valor="todas">Todas</button>
+  <main id="contenido">
+    <!-- ============================================================= ALERTAS -->
+    <section id="alertas" class="seccion activa" aria-label="Alertas">
+      <div class="herramientas">
+        <div class="segmentos" id="filtro-estado" role="group" aria-label="Estado de los casos">
+          <button data-valor="pendientes" class="activa" aria-pressed="true">Por resolver</button>
+          <button data-valor="revisadas" aria-pressed="false">Cerrados</button>
+          <button data-valor="todas" aria-pressed="false">Todos</button>
         </div>
+        <p class="en-riesgo" id="en-riesgo"></p>
         <div class="selects">
           <select id="filtro-nivel" aria-label="Nivel">
             <option value="2" selected>Altos y críticos</option>
             <option value="3">Solo críticos</option>
-            <option value="1" id="opcion-medios">Todos (también los medios, en vigilancia)</option>
+            <option value="1" id="opcion-medios">Todos, también los medios</option>
           </select>
           <select id="orden-alertas" aria-label="Orden">
             <option value="riesgo" selected>Más probables de fraude primero</option>
@@ -73,47 +84,48 @@
           <select id="filtro-dias-alertas" aria-label="Periodo">
             <option value="7">Últimos 7 días</option>
             <option value="30" selected>Últimos 30 días</option>
-            <option value="0">Todo</option>
+            <option value="0">Desde el inicio</option>
           </select>
         </div>
       </div>
-      <div id="lista-casos" class="lista-casos"></div>
+      <div id="lista-casos" class="registro" aria-live="polite"></div>
     </section>
 
-    <!-- ========================================================== RESUMEN -->
-    <section id="resumen" class="seccion">
-      <div class="barra-filtros">
+    <!-- ============================================================= RESUMEN -->
+    <section id="resumen" class="seccion" aria-labelledby="titulo-resumen">
+      <div class="herramientas">
         <h2 class="titulo-seccion" id="titulo-resumen">Resumen</h2>
-        <select id="filtro-dias-resumen" aria-label="Periodo">
-          <option value="7">Últimos 7 días</option>
-          <option value="30" selected>Últimos 30 días</option>
-          <option value="0">Desde que está en marcha</option>
-        </select>
+        <div class="selects">
+          <select id="filtro-dias-resumen" aria-label="Periodo">
+            <option value="7">Últimos 7 días</option>
+            <option value="30" selected>Últimos 30 días</option>
+            <option value="0">Desde el inicio</option>
+          </select>
+        </div>
       </div>
-      <div class="kpis" id="kpis-resumen"></div>
-      <div class="rejilla">
-        <div class="tarjeta ancha">
-          <h3>Alertas y fraude confirmado por día</h3>
-          <p class="nota">Casos de alerta de cada nivel (barras) y pagos confirmados como fraude por el banco o por
-            una revisión (línea).</p>
+      <div class="cifras" id="kpis-resumen"></div>
+      <div class="paneles">
+        <section class="panel ancho">
+          <h3>Casos y fraude confirmado, día a día</h3>
+          <p class="sub">Barras: casos de alerta de cada nivel. Línea: pagos que el banco o una revisión han confirmado como fraude.</p>
           <div class="grafica"><canvas id="g-dias"></canvas></div>
-        </div>
-        <div class="tarjeta">
-          <h3>¿En qué han quedado los casos?</h3>
+        </section>
+        <section class="panel">
+          <h3>En qué han quedado los casos</h3>
           <div class="grafica"><canvas id="g-estados"></canvas></div>
-        </div>
-        <div class="tarjeta" id="tarjeta-comercios">
+        </section>
+        <section class="panel" id="tarjeta-comercios">
           <h3>Comercios con más alertas</h3>
           <div class="grafica"><canvas id="g-comercios"></canvas></div>
-        </div>
+        </section>
       </div>
     </section>
 
-    <!-- ===================================================== TRANSACCIONES -->
-    <section id="transacciones" class="seccion">
-      <div class="barra-filtros">
-        <input id="buscar" class="buscador" type="search" autocomplete="off"
-               placeholder="Buscar por ID de transacción o de cliente, últimos dígitos de la tarjeta o comercio">
+    <!-- ============================================================== PAGOS -->
+    <section id="transacciones" class="seccion" aria-label="Pagos">
+      <div class="herramientas">
+        <input id="buscar" class="buscador" type="search" autocomplete="off" aria-label="Buscar pagos"
+               placeholder="Busca por número de pago o de cliente, últimos dígitos de la tarjeta o comercio">
         <div class="selects">
           <select id="orden-transacciones" aria-label="Orden">
             <option value="reciente" selected>Más recientes primero</option>
@@ -123,33 +135,31 @@
           <label class="casilla"><input type="checkbox" id="solo-alertas"> Solo con alerta</label>
         </div>
       </div>
-      <div class="tarjeta">
-        <div class="tabla-contenedor" id="t-transacciones"></div>
-      </div>
+      <div class="tabla-contenedor" id="t-transacciones"></div>
     </section>
 
-    <!-- =========================================================== AVISOS -->
-    <section id="avisos" class="seccion">
-      <div class="barra-filtros">
-        <div class="chips" id="filtro-avisos">
-          <button data-valor="no_leidos" class="activa">No leídos</button>
-          <button data-valor="todos">Todos</button>
+    <!-- ============================================================= AVISOS -->
+    <section id="avisos" class="seccion" aria-label="Avisos">
+      <div class="herramientas">
+        <div class="segmentos" id="filtro-avisos" role="group" aria-label="Avisos">
+          <button data-valor="no_leidos" class="activa" aria-pressed="true">Sin leer</button>
+          <button data-valor="todos" aria-pressed="false">Todos</button>
         </div>
         <button class="boton secundario" id="leer-todos">Marcar todos como leídos</button>
       </div>
-      <p class="nota">Tras cada revisión diaria, el sistema avisa de los casos de nivel alto o crítico. Si se
-        configura un webhook (<code>config.yaml</code>, <code>alertas.webhook_url</code>), los mismos avisos llegan
-        también a Slack, Teams o al sistema del comercio.</p>
+      <p class="sub explicacion">Cada noche, Centinela avisa de los casos altos y críticos nuevos. Si se configura una
+        dirección en <code>alertas.webhook_url</code> (<code>config.yaml</code>), los mismos avisos llegan también a
+        Slack, Teams o al sistema del comercio.</p>
       <div id="lista-avisos" class="lista-avisos"></div>
     </section>
   </main>
 
-  <!-- ============================================================ FICHA DEL CASO -->
+  <!-- ============================================================== FICHA DEL CASO -->
   <div id="velo" class="velo" hidden></div>
-  <aside id="ficha" class="ficha" hidden aria-label="Ficha del caso">
+  <aside id="ficha" class="ficha" hidden aria-labelledby="ficha-titulo" role="dialog" aria-modal="true">
     <div class="ficha-cabecera">
       <div id="ficha-titulo"></div>
-      <button class="cerrar" id="cerrar-ficha" aria-label="Cerrar">×</button>
+      <button class="cerrar" id="cerrar-ficha" aria-label="Cerrar la ficha">×</button>
     </div>
     <div id="ficha-cuerpo" class="ficha-cuerpo"></div>
   </aside>
@@ -157,10 +167,10 @@
   <div id="avisos-flotantes" class="avisos-flotantes" aria-live="polite"></div>
 
   <footer>
-    <span><b>Centinela</b> · entorno de demostración con datos sintéticos</span>
+    <span id="reloj"></span>
     <span>Revisa: <button class="enlace" id="cambiar-usuario"></button></span>
-    <label class="casilla"><input type="checkbox" id="modo-demo"> Modo demostración (ver la verdad del simulador)</label>
+    <label class="casilla"><input type="checkbox" id="modo-demo"> Modo demostración: enseñar qué era fraude según el simulador</label>
   </footer>
-  <script src="/static/app.js?v=7"></script>
+  <script src="/static/app.js?v=13"></script>
 </body>
 </html>

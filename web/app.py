@@ -269,7 +269,9 @@ def probabilidades(hoy, ahora):
 # ----------------------------------------------------------------------------------- página
 @app.get('/', include_in_schema=False)
 def pagina():
-    return FileResponse(ESTATICOS / 'index.html')
+    # no-cache: el navegador pregunta siempre si la página ha cambiado. Si no, tras actualizar la web
+    # seguiría enseñando la versión vieja (los .js y .css ya llevan ?v=N en index.html)
+    return FileResponse(ESTATICOS / 'index.html', headers={'Cache-Control': 'no-cache'})
 
 
 @app.get('/api/salud', include_in_schema=False)
@@ -289,6 +291,31 @@ def contexto():
     hoy, ahora, inicio = reloj()
     comercios = filas('SELECT comercio_id AS id, nombre, categoria_negocio AS categoria FROM comercio ORDER BY nombre')
     return {'hoy': hoy, 'ahora': ahora, 'inicio': inicio, 'comercios': comercios, 'niveles': NIVELES}
+
+
+# ---------------------------------------------------------------------------------- el día
+@app.get('/api/dia')
+def dia_en_una_linea(comercio: int = Comercio):
+    """Los pagos del último día puntuado, de menos a más riesgo: el "código de barras" del parte.
+
+    Cada barra es [altura, prioridad, metodo_id, importe]. La altura es la raíz de la nota del modelo
+    respecto a la más alta del día: las notas son probabilidades muy sesgadas (la mediana ronda el 1 %)
+    y con la raíz se distinguen también las intermedias."""
+    hoy, _, _ = reloj()
+    pagos = filas('''
+        SELECT r.score AS nota, a.prioridad AS prioridad, te.metodo_id AS metodo_id,
+               te.comercio_id AS comercio_id, toFloat64(te.cantidad) AS importe
+        FROM riesgo_transaccion AS r FINAL
+        INNER JOIN transacciones_enriquecidas AS te ON te.transaccion_id = r.transaccion_id
+        LEFT JOIN alertas_unificadas AS a ON a.transaccion_id = r.transaccion_id
+        WHERE r.dia = {dia:Date} AND ({comercio:UInt32} = 0 OR te.comercio_id = {comercio:UInt32})
+        ORDER BY r.posicion DESC''', dia=hoy, comercio=comercio)
+    maximo = max((max(p['nota'], 0) for p in pagos), default=0) or 1
+    return {
+        'dia': hoy, 'pagos': len(pagos), 'comercios': len({p['comercio_id'] for p in pagos}),
+        'barras': [[round((max(p['nota'], 0) / maximo) ** 0.5, 3), p['prioridad'] or 0, p['metodo_id'],
+                    round(p['importe'], 2)] for p in pagos],
+    }
 
 
 # ---------------------------------------------------------------------------------- alertas
