@@ -13,7 +13,8 @@ from pathlib import Path
 import joblib
 import pandas as pd
 
-RAIZ = Path(__file__).resolve().parent
+RAIZ = Path(__file__).resolve().parents[1]   # raíz del proyecto (este script está en experimentos/)
+os.chdir(RAIZ)                                 # las rutas (datos_ml/, modelos/...) son relativas a la raíz
 sys.path.insert(0, str(RAIZ))                
 sys.path.insert(0, str(RAIZ / 'pipeline'))  
 

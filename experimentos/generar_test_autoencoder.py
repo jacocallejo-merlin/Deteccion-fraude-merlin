@@ -6,8 +6,8 @@ Genera un dataset sintético NUEVO (otra semilla) en una base de datos de prueba
 le aplica la misma carga, limpieza y features que al original, y lo deja escalado con el
 escalador del entrenamiento en datos_ml_nuevo/ (con preparar_test_autoencoder.py).
 
-Después:  python evaluar_test_autoencoder.py
-Uso:      python generar_test_autoencoder.py [--semilla 777] [--dias 75]
+Después:  python experimentos/evaluar_test_autoencoder.py
+Uso:      python experimentos/generar_test_autoencoder.py [--semilla 777] [--dias 75]
 """
 import argparse
 import os
@@ -16,7 +16,8 @@ import sys
 import time
 from pathlib import Path
 
-CARPETA = Path(__file__).resolve().parent
+CARPETA = Path(__file__).resolve().parents[1]   # raíz del proyecto (este script está en experimentos/)
+os.chdir(CARPETA)                              # las rutas (datos_ml/, modelos/...) son relativas a la raíz
 sys.path.insert(0, str(CARPETA))
 
 from config import CONFIG, DATABASE, HOST, PASSWORD, PORT, USER
@@ -71,14 +72,14 @@ def main():
                  f'para empezar de cero. Usa otro nombre (por defecto {DATABASE}_nuevo).')
 
     pasos = [
-        (['pipeline/BD_VACIAS.py'],                            'Crea las tablas vacías'),
+        (['pipeline/crear_tablas.py'],                            'Crea las tablas vacías'),
         (['pipeline/dataset.py', '--seed', str(args.semilla),
           '--dias', str(args.dias)],                           'Genera las transacciones nuevas'),
         (['pipeline/carga_transacciones.py'],                  'Convierte las transacciones brutas'),
         (['pipeline/limpieza.py'],                             'Corrige duplicados, formatos y divisas'),
         (['pipeline/crear_tabla_enriquecida.py'],              'Une las tablas'),
         (['pipeline/features.py'],                             'Calcula las features'),
-        (['preparar_test_autoencoder.py',
+        (['experimentos/preparar_test_autoencoder.py',
           '--salida', args.salida],                            'Escala con el escalador original'),
     ]
 

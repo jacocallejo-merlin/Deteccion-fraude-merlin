@@ -698,14 +698,15 @@ La documentación de los datos que da el servidor está en http://localhost:8000
 | `datos_ml/` | Los datos ya preparados para los modelos (se genera) |
 | `modelos/` | Los modelos entrenados (se genera) |
 | `resultados/` | Informes, tablas y gráficos (se genera) |
-| `historico/` | Una copia de cada ejecución, para poder volver atrás (se genera) |
+| `historico/` | Una copia de las últimas ejecuciones, para poder volver atrás (se genera; se guardan las 5 últimas de cada tipo, `historico` en `config.yaml`) |
+| `experimentos/` | Pruebas aparte que no lanza `main.py`, como probar el autoencoder con un dataset nuevo: `python experimentos/generar_test_autoencoder.py` y después `python experimentos/evaluar_test_autoencoder.py` |
 | `legacy/` | Código antiguo que ya no se usa |
 
 ### Los pasos, en orden
 
 | # | Script | Qué hace |
 |---|---|---|
-| 1 | `BD_VACIAS.py` | Crea la base de datos y las tablas vacías |
+| 1 | `crear_tablas.py` | Crea la base de datos y las tablas vacías |
 | 2 | `dataset.py` | Inventa los datos (clientes, pagos, fraudes) con errores a propósito |
 | 3 | `carga_transacciones.py` | Carga los pagos y arregla las fechas |
 | 4 | `informe_limpieza.py` | Cuenta los problemas de calidad |
@@ -734,7 +735,7 @@ Nunca vuelve a entrenar los modelos principales ni a ajustar umbrales (eso es un
 
 | Hito | Qué se pedía | Dónde está | Estado |
 |---|---|---|---|
-| 1. Introducción y exploración | Base de datos, carga de datos, informe de limpieza, primeros gráficos | `BD_VACIAS.py`, `dataset.py`, `carga_transacciones.py`, `informe_limpieza.py`, `notebooks/exploracion_visualizacion.ipynb` | Hecho |
+| 1. Introducción y exploración | Base de datos, carga de datos, informe de limpieza, primeros gráficos | `crear_tablas.py`, `dataset.py`, `carga_transacciones.py`, `informe_limpieza.py`, `notebooks/exploracion_visualizacion.ipynb` | Hecho |
 | 2. Estadística y preprocesamiento | Limpieza, valores atípicos (Z-score, IQR), patrones de fraude, dataset limpio | `limpieza.py`, `notebooks/outliers_patrones_tecnicas.ipynb`, `preparacion_datos_ml.py` | Hecho |
 | 3. ML para anomalías | Isolation Forest, One-Class SVM, KMeans, DBSCAN; variables; ajuste; puntuación | `features.py`, `modelos_nosupervisados.py`, `puntuar_nosupervisados.py`, `evaluar_modelos_nosupervisados.py` | Hecho |
 | 4. Autoencoders | Red neuronal, error de reconstrucción, comparación con los clásicos | `entrenar_autoencoder.py`, `puntuar_autoencoder.py`, `evaluar_autoencoders.py`, `comparacion_modelos.py` | Hecho |

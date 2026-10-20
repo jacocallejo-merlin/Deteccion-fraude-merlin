@@ -1,17 +1,46 @@
+import re
 import shutil
 from pathlib import Path
+
+from config import CONFIG
 
 CARPETA = Path(__file__).resolve().parent
 CARPETA_ARTEFACTOS = CARPETA / 'historico'
 FICHERO_ULTIMO_RUN = CARPETA_ARTEFACTOS / 'ultimo_run.txt'
+# Copias que se guardan de cada tipo de entrenamiento (clasicos_..., autoencoder_...). Cada una de
+# clasicos ocupa ~10 MB y antes se acumulaban sin límite (450 MB con 44 copias)
+COPIAS_POR_TIPO = CONFIG.get('historico', {}).get('copias_por_tipo', 5)
+# <tipo>_AAAAMMDD_HHMMSS: las copias de cada ejecución. Las recalibrado_AAAAMMDD (una por semana
+# simulada) no siguen este patrón y no se borran: son la historia de la simulación
+PATRON_RUN = re.compile(r'^(?P<tipo>.+)_\d{8}_\d{6}$')
 
 
 def crear_carpeta_run(run_id):
-    """Crea artifacts/<run_id>/ y guarda dentro una copia del config.yaml."""
+    """Crea historico/<run_id>/ y guarda dentro una copia del config.yaml. Después borra las copias
+    más antiguas del mismo tipo para que queden COPIAS_POR_TIPO."""
     carpeta = CARPETA_ARTEFACTOS / run_id
     carpeta.mkdir(parents=True, exist_ok=True)
     shutil.copy2(CARPETA / 'config.yaml', carpeta / 'config.yaml')
+    limpiar_antiguos(run_id)
     return carpeta
+
+
+def limpiar_antiguos(run_id):
+    """Borra las copias del mismo tipo que run_id salvo las COPIAS_POR_TIPO más recientes
+    (el nombre lleva la fecha, así que el orden alfabético es el cronológico). Nunca borra
+    run_id ni la última ejecución apuntada en ultimo_run.txt."""
+    encaje = PATRON_RUN.match(run_id)
+    if not encaje or COPIAS_POR_TIPO <= 0:
+        return
+    tipo = encaje['tipo']
+    copias = sorted(c for c in CARPETA_ARTEFACTOS.iterdir()
+                    if c.is_dir() and (m := PATRON_RUN.match(c.name)) and m['tipo'] == tipo)
+    protegidas = {run_id, ultimo_run()}
+    for carpeta in copias[:-COPIAS_POR_TIPO]:
+        if carpeta.name not in protegidas:
+            shutil.rmtree(carpeta)
+            print(f'  historico: borrada la copia antigua {carpeta.name} '
+                  f'(se guardan las {COPIAS_POR_TIPO} últimas de {tipo})')
 
 
 def guardar(origen, run_id, subcarpeta=None):

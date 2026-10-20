@@ -164,3 +164,7 @@ alertas:
   dias_cierre: 30              # sin revisión ni contracargo en 30 días, la alerta se cierra sola "sin incidencia"
                                # (a los 30 días el banco ya ha confirmado ~85 % del fraude; si llega después, se reabre como fraude)
   webhook_url: null            # si se pone una URL (Slack, Teams, sistema del cliente), se le envían los avisos nuevos
+
+# artefactos.py: copias de cada entrenamiento en historico/ (modelos, config y resultados de esa ejecución)
+historico:
+  copias_por_tipo: 5           # se guardan las 5 últimas de clasicos_... y de autoencoder_... (las recalibrado_ se guardan todas)

@@ -1,4 +1,0 @@
-detector,PR-AUC_val,dif_inf,dif_sup,veredicto
-kmeans,0.1334,0.0,0.0,elegido
-dbscan,0.127,-0.0207,0.0296,empate
-ocsvm,0.0968,-0.056,0.1092,empate

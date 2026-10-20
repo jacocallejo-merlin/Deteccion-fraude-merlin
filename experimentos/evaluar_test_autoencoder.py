@@ -6,7 +6,7 @@ generar_test_autoencoder.py) y mide: clasificación fraude / no fraude con el um
 en la validación del entrenamiento (sin mirar los datos nuevos), PR-AUC y ROC-AUC, y otros
 presupuestos de revisión. Sirve para ver si el modelo generaliza fuera del dataset original.
 
-Uso:  python evaluar_test_autoencoder.py [--presupuesto 1.0]
+Uso:  python experimentos/evaluar_test_autoencoder.py [--presupuesto 1.0]
 """
 import argparse
 import os
@@ -18,7 +18,8 @@ import pandas as pd
 import torch
 from sklearn.metrics import average_precision_score, confusion_matrix, roc_auc_score
 
-RAIZ = Path(__file__).resolve().parent
+RAIZ = Path(__file__).resolve().parents[1]   # raíz del proyecto (este script está en experimentos/)
+os.chdir(RAIZ)                                 # las rutas (datos_ml/, modelos/...) son relativas a la raíz
 sys.path.insert(0, str(RAIZ))                 
 sys.path.insert(0, str(RAIZ / 'pipeline'))   
 
@@ -50,7 +51,7 @@ def cargar_nuevo(carpeta):
     rx = os.path.join(carpeta, 'X_nuevo.parquet')
     if not os.path.exists(rx):
         raise SystemExit(f'No está {rx}. Genera el conjunto antes con '
-                         f'python generar_test_autoencoder.py')
+                         f'python experimentos/generar_test_autoencoder.py')
     X = pd.read_parquet(rx)
     info = pd.read_parquet(os.path.join(carpeta, 'info_nuevo.parquet'))
     tipo = (info['tipo_fraude'].astype(object).fillna('-').to_numpy()

@@ -10,7 +10,7 @@ sys.path.insert(0, str(CARPETA))
 from config import DATABASE, HOST, PASSWORD, PORT, USER  
 
 PASOS = [
-    ('pipeline/BD_VACIAS.py',                      'Crea la base de datos y las tablas vacías'),
+    ('pipeline/crear_tablas.py',                      'Crea la base de datos y las tablas vacías'),
     ('pipeline/dataset.py',                        'Genera el dataset sintético (con errores típicos) y lo carga'),
     ('pipeline/carga_transacciones.py',            'Convierte las transacciones brutas (fechas en texto)'),
     ('pipeline/informe_limpieza.py',               'Informe de calidad de los datos de origen'),
@@ -36,7 +36,7 @@ PASOS = [
 ]
 
 # Pasos que crean y cargan los datos de origen: se saltan si la base de datos ya tiene datos
-PASOS_DATOS = {'pipeline/BD_VACIAS.py', 'pipeline/dataset.py'}
+PASOS_DATOS = {'pipeline/crear_tablas.py', 'pipeline/dataset.py'}
 
 # --scoring: lo que se ejecuta cada día con los modelos ya entrenados (igual que el DAG fraude_scoring)
 PASOS_SCORING = [

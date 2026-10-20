@@ -101,7 +101,7 @@ with DAG(
         bash_command=(f'cd "{RUTA_PROYECTO}" && {PYTHON} -c '
                       '"from main import preparar_base_de_datos; preparar_base_de_datos(borrar=True)"'),
     )
-    crear_tablas = paso('crear_tablas', 'BD_VACIAS.py')
+    crear_tablas = paso('crear_tablas', 'crear_tablas.py')
     dataset = paso('dataset_inicial', 'dataset.py')
 
     borrar_bd >> crear_tablas >> dataset
