@@ -72,5 +72,26 @@ services:
       - ./resultados:/app/resultados:ro
     restart: unless-stopped
 
+  # La web de los modelos (http://localhost:8001): misma imagen; no usa ClickHouse, lee los modelos, los
+  # datos de test y los resultados que deja el pipeline. Con el mismo perfil que la web de casos:
+  #   docker compose --profile web up -d --build
+  web-modelos:
+    build: .
+    image: fraude-pipeline:latest
+    profiles: [web]
+    command: ["uvicorn", "web_modelos.app:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:                 # no conecta a ClickHouse, pero config.py exige sus datos al cargarse
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: password
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./modelos:/app/modelos:ro
+      - ./datos_ml:/app/datos_ml:ro
+      - ./resultados:/app/resultados:ro
+    restart: unless-stopped
+
 volumes:
   clickhouse_data:

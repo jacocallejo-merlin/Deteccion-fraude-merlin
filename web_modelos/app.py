@@ -1,7 +1,7 @@
 """
 Web de los modelos: un informe visual, para dirección, de los modelos que hemos entrenado, cuál usamos y por qué.
 
-    uvicorn web_modelos.app:app --port 8003 --reload   # desde la raíz del proyecto -> http://localhost:8003
+    uvicorn web_modelos.app:app --port 8001 --reload   # desde la raíz del proyecto -> http://localhost:8001
 
 No usa ClickHouse: lee lo que deja el pipeline en disco. Las notas de cada modelo en el examen final
 (modelos/*_scores_test.parquet), la respuesta real de cada pago (datos_ml/info_test.parquet), cómo se
