@@ -25,6 +25,7 @@ import clickhouse_connect
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import CONFIG, DATABASE, HOST, PASSWORD, PORT, USER
+from notificar import notificar_avisos
 
 _cfg = CONFIG['alertas']
 NIVELES = {'medio': 1, 'alto': 2, 'critico': 3}
@@ -226,6 +227,7 @@ def main():
 
     if nuevos and _cfg.get('webhook_url'):
         enviar_webhook(_cfg['webhook_url'], nuevos)
+    notificar_avisos(nuevos)          # resumen por Teams/Slack/correo, si están configurados (notificar.py)
 
 
 if __name__ == '__main__':

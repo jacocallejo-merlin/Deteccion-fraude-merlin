@@ -165,6 +165,29 @@ alertas:
                                # (a los 30 días el banco ya ha confirmado ~85 % del fraude; si llega después, se reabre como fraude)
   webhook_url: null            # si se pone una URL (Slack, Teams, sistema del cliente), se le envían los avisos nuevos
 
+# Notificaciones por Teams, Slack y correo (pipeline/notificar.py). Las URL y contraseñas NO van aquí
+# (se subirían a Git): se leen de variables de entorno, en .env en local (ver .env.example) y en el
+# Secret "notificaciones" en Kubernetes. Sin ninguna configurada no se envía nada.
+notificaciones:
+  avisos_fraude: true          # resumen de los avisos de fraude nuevos de cada ejecución (generar_avisos.py)
+  fallos_pipeline: true        # un paso del pipeline falla (main.py y las tareas de Airflow)
+  drift: true                  # los pagos recientes ya no se parecen a los del entrenamiento (vigilar_drift.py)
+  max_lineas: 10               # avisos que se detallan en cada mensaje; del resto, solo cuántos son
+  correo:
+    servidor: null             # p. ej. smtp.office365.com o smtp.gmail.com (o SMTP_SERVIDOR en .env)
+    puerto: 587                # con STARTTLS
+    destinatarios: []          # o CORREO_DESTINATARIOS=a@x.com,b@x.com en .env
+
+# vigilar_drift.py: ¿los pagos recientes se parecen a los del entrenamiento? Compara la distribución
+# de cada variable del modelo y de su nota con el PSI (índice de estabilidad de la población):
+# < 0,10 estable; 0,10-0,25 vigilar; > 0,25 desviada (reentrenar o revisar los datos de origen)
+vigilancia:
+  dias_recientes: 7            # ventana que se compara con el periodo de entrenamiento
+  psi_vigilar: 0.10
+  psi_alerta: 0.25
+  caida_volumen: 0.5           # avisar si el último día trae menos de la mitad de pagos que la mediana de los 28 anteriores
+
 # artefactos.py: copias de cada entrenamiento en historico/ (modelos, config y resultados de esa ejecución)
 historico:
   copias_por_tipo: 5           # se guardan las 5 últimas de clasicos_... y de autoencoder_... (las recalibrado_ se guardan todas)
+  informes_validacion: 10      # resultados/validacion_*.txt que se guardan (antes se acumulaba uno por ejecución)

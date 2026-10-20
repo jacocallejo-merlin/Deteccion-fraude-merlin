@@ -26,6 +26,10 @@ services:
       dockerfile: airflow/Dockerfile
     image: fraude-airflow:3.1.3
     command: standalone          # api-server, scheduler, dag-processor y triggerer en un contenedor
+    # Teams/Slack/correo para los avisos de fallos (TEAMS_WEBHOOK_URL, SMTP_..., ver .env.example)
+    env_file:
+      - path: .env
+        required: false
     depends_on:
       airflow-db:
         condition: service_healthy

@@ -53,6 +53,10 @@ spec:
                     name: pipeline-config
                 - secretRef:
                     name: clickhouse
+                # Teams/Slack/correo (k8s/secret-notificaciones.ejemplo.yaml). Opcional: sin él no se avisa
+                - secretRef:
+                    name: notificaciones
+                    optional: true
               resources:
                 requests: {cpu: "1", memory: 2Gi}
                 limits: {memory: 6Gi}

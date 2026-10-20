@@ -1,0 +1,62 @@
+# Tests automáticos en cada push y pull request (pestaña Actions de GitHub).
+# Arranca ClickHouse, genera un dataset pequeño (90 días: con menos, dataset.py no tiene historial
+# para algunos tipos de fraude), le pasa el ETL hasta features_transaccion y lanza pytest.
+# Tarda unos 5 minutos, casi todo en instalar las dependencias. No entrena modelos (eso es ~15 min).
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:          # también se puede lanzar a mano desde la pestaña Actions
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:26.9     # la misma que docker-compose.yml y k8s/
+        env:
+          CLICKHOUSE_USER: default
+          CLICKHOUSE_PASSWORD: password
+          CLICKHOUSE_DB: fraude_pagos
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "wget --spider -q http://localhost:8123/ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+
+    env:
+      # lo que lee config.py (la contraseña es la del servicio de arriba, solo existe en el CI)
+      CLICKHOUSE_HOST: localhost
+      CLICKHOUSE_PASSWORD: password
+      PYTHONIOENCODING: utf-8
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-pipeline.txt
+
+      - name: Dependencias
+        # torch solo CPU, como en el Dockerfile: la de PyPI trae CUDA y ocupa varios GB
+        run: |
+          pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-pipeline.txt pytest==9.1.1 httpx==0.28.1
+
+      - name: Dataset pequeño y ETL
+        run: |
+          python pipeline/crear_tablas.py
+          python pipeline/dataset.py --dias 90
+          python pipeline/carga_transacciones.py
+          python pipeline/limpieza.py
+          python pipeline/crear_tabla_enriquecida.py
+          python pipeline/features.py
+
+      - name: Tests
+        run: python -m pytest tests -v

@@ -32,6 +32,7 @@ PASOS = [
     ('pipeline/evaluar_modelos_nosupervisados.py', 'Compara los 5 modelos y saca conclusiones'),
     ('pipeline/evaluar_autoencoders.py',           'Análisis detallado del autoencoder'),
     ('pipeline/comparacion_modelos.py',            'Comparativa final (clásicos vs autoencoder)'),
+    ('pipeline/vigilar_drift.py',                  '¿Los pagos recientes se parecen a los del entrenamiento? (drift)'),
     ('pipeline/validacion_reproducibilidad_consistencia.py', 'Valida reproducibilidad y consistencia'),
 ]
 
@@ -53,8 +54,23 @@ PASOS_SCORING = [
     ('pipeline/integrar_feedback.py',              'Junta el feedback con los fraudes confirmados por el banco'),
     ('pipeline/recalibrar_modelo.py',              'Recalibra el orden de las alertas si toca (cada semana)'),
     ('pipeline/medir_feedback.py',                 'Mide si las alertas mejoran semana a semana'),
+    ('pipeline/vigilar_drift.py',                  '¿Los pagos recientes se parecen a los del entrenamiento? (drift)'),
     ('pipeline/validacion_reproducibilidad_consistencia.py', 'Valida reproducibilidad y consistencia'),
 ]
+
+
+def avisar_fallo(script, args):
+    """Aviso por Teams/Slack/correo (pipeline/notificar.py) de que el pipeline se ha parado. Si el
+    propio aviso falla, no tapa el error original."""
+    try:
+        sys.path.insert(0, str(CARPETA / 'pipeline'))
+        from notificar import notificar
+        modo = 'scoring diario' if args.scoring else 'pipeline completo'
+        notificar(f'Falla el pipeline antifraude en {Path(script).stem}',
+                  f'El {modo} (python main.py) se ha parado en {script}. Mira el log de la ejecución; '
+                  'los pasos anteriores sí se completaron.', 'error', tipo='fallos_pipeline')
+    except Exception as e:
+        print(f'(no se ha podido enviar el aviso del fallo: {e})')
 
 
 def nombre_paso(script):
@@ -197,6 +213,7 @@ def main():
             print('\n' + '=' * 78)
             print(f'FALLO en {script}. El pipeline se detiene aquí.')
             print('=' * 78)
+            avisar_fallo(script, args)
             sys.exit(1)
 
     print('\n' + '=' * 78)

@@ -17,6 +17,7 @@ Por eso tienen horas distintas (las mismas que los CronJob de k8s/): scoring a l
 entrenamiento los domingos a las 05:00. Con '@daily' y '@weekly' coincidirían cada domingo a las 00:00.
 """
 import os
+import subprocess
 from datetime import datetime, timedelta
 
 # Airflow 3
@@ -37,10 +38,28 @@ PYTHON = os.environ.get('PYTHON_PROYECTO', 'python')
 GENERAR_LOTE = True
 DIAS_POR_LOTE = 1   # el DAG corre a diario: cada ejecución añade un día de transacciones
 
+def avisar_fallo(context):
+    """Cuando una tarea falla (después de su reintento), aviso por Teams/Slack/correo con
+    pipeline/notificar.py. Se lanza con el Python del proyecto, como las tareas, y si el aviso
+    falla no se hace nada más: la tarea ya está en rojo en Airflow."""
+    ti = context['ti']
+    error = str(context.get('exception') or '').splitlines()
+    try:
+        subprocess.run(
+            [PYTHON, 'pipeline/notificar.py', '--tipo', 'fallos_pipeline', '--nivel', 'error',
+             '--titulo', f'Falla la tarea {ti.task_id} de {ti.dag_id}',
+             '--texto', f'Ejecución {ti.run_id}. {error[0][:300] if error else ""} '
+                        'El detalle está en el log de la tarea en Airflow (http://localhost:8080).'],
+            cwd=RUTA_PROYECTO, timeout=60, check=False)
+    except Exception as e:
+        print(f'No se ha podido enviar el aviso del fallo: {e}')
+
+
 ARGS = {
     'owner': 'equipo-fraude',
     'retries': 1,                         # seguro: los scripts no duplican al repetirse
     'retry_delay': timedelta(minutes=2),
+    'on_failure_callback': avisar_fallo,  # aviso por Teams/Slack/correo (solo tras el último intento)
 }
 INICIO = datetime(2026, 10, 1)
 
@@ -149,6 +168,7 @@ with DAG(
     [clasicos, autoencoder, reglas] >> eval_clasicos
     [clasicos, autoencoder, reglas] >> comparacion
     [puntuar_clasicos, puntuar_ae, eval_clasicos, eval_ae, comparacion] >> validacion
+    puntuar_clasicos >> paso('vigilar_drift', 'vigilar_drift.py')     # ¿se parecen los pagos al nuevo train?
 
     # Con el detector reentrenado el recalibrador anterior ya no vale: se rehace con el feedback
     analistas = feedback(ajustar=True)
@@ -177,6 +197,7 @@ with DAG(
 
     features >> [puntuar_clasicos, puntuar_ae]
     [reglas, puntuar_clasicos, puntuar_ae] >> validacion
+    puntuar_clasicos >> paso('vigilar_drift', 'vigilar_drift.py')     # ¿se parecen los pagos al train?
 
     # scoring -> feedback -> recalibración
     analistas = feedback()

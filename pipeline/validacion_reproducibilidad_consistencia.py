@@ -10,13 +10,15 @@ import numpy as np
 import pandas as pd
 import torch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from config import (CARPETA_DATOS, CARPETA_MODELOS, CARPETA_RESULTADOS,
+from config import (CARPETA_DATOS, CARPETA_MODELOS, CARPETA_RESULTADOS, CONFIG,
                     HOST, PORT, USER, PASSWORD, DATABASE)
+from artefactos import limpiar_ficheros
 from preparacion_datos_ml import preparar_features
 from modelos_nosupervisados import MODELOS, entrenar, puntuar
 from modelos_nosupervisados import cargar as cargar_particiones
 from entrenar_autoencoder import Autoencoder, error_reconstruccion
 TOLERANCIA = 1e-6
+INFORMES_A_GUARDAR = CONFIG.get('historico', {}).get('informes_validacion', 10)   # validacion_*.txt
 
 
 class Informe:
@@ -203,6 +205,9 @@ def main():
     ruta = CARPETA_RESULTADOS / f'validacion_{datetime.now():%Y%m%d_%H%M}.txt'
     ruta.write_text('\n'.join(inf.lineas) + '\n', encoding='utf-8')
     print(f'Informe guardado en {ruta}')
+    borrados = limpiar_ficheros(CARPETA_RESULTADOS, 'validacion_*.txt', INFORMES_A_GUARDAR)
+    if borrados:
+        print(f'Borrados {borrados} informes de validación antiguos (se guardan los {INFORMES_A_GUARDAR} últimos)')
 
     sys.exit(1 if inf.fallos else 0)
 

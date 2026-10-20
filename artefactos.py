@@ -58,6 +58,15 @@ def guardar(origen, run_id, subcarpeta=None):
         print(f'  (aviso) no existe {origen}, no se copia a los artefactos')
 
 
+def limpiar_ficheros(carpeta, patron, mantener):
+    """Borra los ficheros de carpeta que encajan con patron (glob, p. ej. 'validacion_*.txt') salvo
+    los `mantener` más recientes (el nombre lleva la fecha: el orden alfabético es el cronológico)."""
+    ficheros = sorted(Path(carpeta).glob(patron))
+    for fichero in ficheros[:-mantener] if mantener > 0 else []:
+        fichero.unlink()
+    return max(0, len(ficheros) - mantener) if mantener > 0 else 0
+
+
 def marcar_ultimo_run(run_id):
     """Apunta cuál es la última ejecución, para que la evaluación sepa dónde guardar."""
     CARPETA_ARTEFACTOS.mkdir(exist_ok=True)

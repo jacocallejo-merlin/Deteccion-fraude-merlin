@@ -30,6 +30,10 @@ services:
     build: .
     image: fraude-pipeline:latest
     profiles: [pipeline]
+    # Teams/Slack/correo (TEAMS_WEBHOOK_URL, SMTP_..., ver .env.example). "environment" tiene prioridad
+    env_file:
+      - path: .env
+        required: false
     depends_on:
       clickhouse:
         condition: service_healthy
