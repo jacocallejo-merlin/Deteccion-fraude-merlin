@@ -140,6 +140,19 @@ feedback:
   # Peso de las transacciones revisadas al recalibrar. Son las que el detector pone arriba: enseñan
   # qué alertas fueron falsas alarmas. Probado 1, 10 y 50: 10 da la mejor precisión (37 % frente a 36 %)
   peso_revisadas: 10
+  # Parámetros del recalibrador (HistGradientBoosting). Elegidos con el mismo esquema que el ajuste:
+  # entrenando con lo anterior al test y validando en las semanas de feedback previas a la fecha de
+  # decisión con lo que se sabía entonces. Entre 72 combinaciones, árboles más pequeños y regularizados
+  # suben la PR-AUC de validación de 0,672 a 0,706 (mejora en el 95 % de 200 remuestreos). En las
+  # semanas siguientes, con la etiqueta real, la cola encuentra lo mismo (57 fraudes en 181 alertas):
+  # el recalibrador ya estaba cerca de su techo. El peso de las revisadas no se pudo afinar así (las
+  # revisiones solo existen desde el test) y se mantiene. Los originales: max_leaf_nodes 31, l2 0.
+  modelo:
+    learning_rate: 0.05
+    max_iter: 200
+    max_leaf_nodes: 15
+    min_samples_leaf: 20
+    l2_regularization: 1.0
   # Ajustes adoptados tras la validación (ajustar_umbrales.py propone los valores). Se aplican desde
   # la fecha de decisión (ajuste.semanas_validacion); antes el sistema funciona como al principio.
   # Lo que se adopta es exactamente lo que propone ajustar_umbrales.py (resultados/ajuste_umbrales.md):

@@ -35,6 +35,9 @@ _cfg = CONFIG['feedback']
 MODELO_BASE = _cfg['modelo_base']
 REENTRENAR_CADA = timedelta(days=_cfg['reentrenar_cada_dias'])
 PESO_REVISADAS = _cfg['peso_revisadas']
+# Parámetros del HistGradientBoosting (feedback.modelo en config.yaml); por defecto, los originales
+PARAMETROS = {'learning_rate': 0.05, 'max_iter': 200, 'max_leaf_nodes': 31, 'min_samples_leaf': 20,
+              'l2_regularization': 0.0, **(_cfg.get('modelo') or {})}
 # Variables de features_transaccion que usa el recalibrador además de las de los modelos
 # (ajustar_umbrales.py decide si alguna aporta). Van sin escalar: los árboles no lo necesitan.
 VARIABLES_EXTRA = _cfg.get('variables_extra') or []
@@ -158,7 +161,7 @@ def datos_entrenamiento(client, corte, etiquetas):
 
 
 def entrenar(X, y, peso):
-    return HistGradientBoostingClassifier(max_iter=200, learning_rate=0.05, class_weight='balanced',
+    return HistGradientBoostingClassifier(**PARAMETROS, class_weight='balanced',
                                           random_state=SEMILLA).fit(X, y, sample_weight=peso)
 
 
