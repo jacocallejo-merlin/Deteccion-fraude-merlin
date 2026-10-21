@@ -58,9 +58,11 @@ SEMILLA = CONFIG['semilla']
 
 # Valores que se prueban de cada umbral (los iniciales se añaden siempre)
 REJILLAS = {
-    'pico_gasto':         {'z_minimo': [2, 2.5, 3, 3.5, 4, 5], 'ratio_minimo': [2, 3, 4, 5, 6, 8]},
+    'pico_gasto':         {'z_minimo': [2, 2.5, 3, 3.5, 4, 5], 'ratio_minimo': [2, 3, 4, 5, 6, 8],
+                           'z_madrugada_minimo': [2, 2.5, 3], 'ratio_madrugada_minimo': [3, 4, 5]},
     'card_testing':       {'pagos_10min_minimo': [1, 2, 3, 4, 5], 'importe_maximo': [2, 5, 10, 20]},
-    'smurfing':           {'importe_minimo': [700, 800, 850, 900, 950], 'previos_24h_minimo': [1, 2, 3]},
+    'smurfing':           {'importe_minimo': [700, 800, 850, 900, 950], 'previos_24h_minimo': [1, 2, 3],
+                           'ratio_minimo': [5, 10, 15, 20]},
     'account_takeover':   {'intentos_login_minimo': [2, 3, 4, 5, 6]},
     'ip_sospechosa':      {},
     'dispositivo_nuevo':  {'ratio_minimo': [1, 1.5, 2, 3, 4, 5]},

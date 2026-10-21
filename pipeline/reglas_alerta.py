@@ -7,14 +7,26 @@ from config import CONFIG, HOST, PORT, USER, PASSWORD, DATABASE
 # No usamos ni es_fraude ni tipo_fraude. La etiqueta solo se usa al final para evaluar.
 # Cada regla: (patron_id, nota_riesgo, condición SQL con sus umbrales entre llaves). El nombre de la
 # regla es el tipo de fraude al que apunta.
+# Tres reglas se rediseñaron para los tipos de fraude que los detectores casi no ven (pico de gasto,
+# IP sospechosa y smurfing), con los fraudes conocidos del periodo de entrenamiento:
+#  - pico_gasto: la mitad de estos fraudes es de madrugada (frente al 8 % de los pagos legítimos), así
+#    que de madrugada basta con un pico algo menor (segunda condición).
+#  - ip_sospechosa: todos llegan desde otro país, pero solo ~78 % con VPN; los demás suelen ser de
+#    madrugada. Antes se exigía siempre la VPN.
+#  - smurfing: el primer pago de cada serie no tiene otro igual en las 24 h anteriores y no saltaba;
+#    se detecta también porque el importe es muy superior al gasto habitual del cliente.
+# Criterio para adoptarlos: que al menos 1 de cada 5 alertas nuevas fuera fraude en ese periodo.
 PLANTILLAS = {
-    'pico_gasto':         (1, 0.60, 'z_importe_cliente > {z_minimo} AND ratio_importe_habitual >= {ratio_minimo}'),
+    'pico_gasto':         (1, 0.60, '(z_importe_cliente > {z_minimo} AND ratio_importe_habitual >= {ratio_minimo}) '
+                                    'OR (es_madrugada = 1 AND z_importe_cliente > {z_madrugada_minimo} '
+                                    'AND ratio_importe_habitual >= {ratio_madrugada_minimo})'),
     'card_testing':       (2, 0.80, 'n_tarjeta_10min >= {pagos_10min_minimo} AND importe < {importe_maximo}'),
     'smurfing':           (3, 0.75, 'importe >= {importe_minimo} AND importe < 1000 '
-                                    'AND n_previos_umbral_24h >= {previos_24h_minimo}'),
+                                    'AND (n_previos_umbral_24h >= {previos_24h_minimo} '
+                                    'OR ratio_importe_habitual >= {ratio_minimo})'),
     'account_takeover':   (4, 0.85, 'cambio_dato_sesion = 1 AND (num_intentos_login >= {intentos_login_minimo} '
                                     'OR dispositivo_nuevo = 1 OR ip_extranjera = 1)'),
-    'ip_sospechosa':      (5, 0.60, 'ip_extranjera = 1 AND proxy_vpn = 1'),
+    'ip_sospechosa':      (5, 0.60, 'ip_extranjera = 1 AND (proxy_vpn = 1 OR es_madrugada = 1)'),
     'dispositivo_nuevo':  (6, 0.70, 'dispositivo_nuevo = 1 AND ratio_importe_habitual >= {ratio_minimo}'),
     'devolucion_abusiva': (7, 0.50, 'n_devoluciones_30d >= {devoluciones_30d_minimo}'),
     'bot':                (8, 0.70, 'min_seg_entre_eventos <= {seg_entre_eventos_maximo} '
@@ -26,9 +38,10 @@ PLANTILLAS = {
 # config.yaml (sección reglas); ajustar_umbrales.py (Hito 6) los ajusta con lo validado y compara
 # el resultado con estos.
 UMBRALES_INICIALES = {
-    'pico_gasto':         {'activa': True, 'z_minimo': 3, 'ratio_minimo': 4},
+    'pico_gasto':         {'activa': True, 'z_minimo': 3, 'ratio_minimo': 4,
+                           'z_madrugada_minimo': 2.5, 'ratio_madrugada_minimo': 4},
     'card_testing':       {'activa': True, 'pagos_10min_minimo': 2, 'importe_maximo': 5},
-    'smurfing':           {'activa': True, 'importe_minimo': 850, 'previos_24h_minimo': 1},
+    'smurfing':           {'activa': True, 'importe_minimo': 850, 'previos_24h_minimo': 1, 'ratio_minimo': 10},
     'account_takeover':   {'activa': True, 'intentos_login_minimo': 3},
     'ip_sospechosa':      {'activa': True},
     'dispositivo_nuevo':  {'activa': True, 'ratio_minimo': 2},

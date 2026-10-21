@@ -51,10 +51,14 @@ suciedad:
 # dispositivo_nuevo y bot; devolucion_abusiva se desactiva (1 % de precisión con cualquier umbral).
 # En los días posteriores a la decisión las reglas pasan de 27 a 7 alertas al día, con precisión
 # del 10 % al 28 % y recall del 60 % al 48 %.
+# Después se rediseñaron pico_gasto, ip_sospechosa y smurfing, los tipos que los detectores casi no ven
+# (ver el comentario de PLANTILLAS en reglas_alerta.py): pico_gasto añade una condición de madrugada
+# (z_madrugada_minimo, ratio_madrugada_minimo) y smurfing salta también con el primer pago de la serie
+# si el importe es muy superior al habitual (ratio_minimo).
 reglas:
-  pico_gasto:         {activa: true, z_minimo: 3.5, ratio_minimo: 6}
+  pico_gasto:         {activa: true, z_minimo: 3.5, ratio_minimo: 6, z_madrugada_minimo: 2.5, ratio_madrugada_minimo: 4}
   card_testing:       {activa: true, pagos_10min_minimo: 3, importe_maximo: 5}
-  smurfing:           {activa: true, importe_minimo: 850, previos_24h_minimo: 1}
+  smurfing:           {activa: true, importe_minimo: 850, previos_24h_minimo: 1, ratio_minimo: 10}
   account_takeover:   {activa: true, intentos_login_minimo: 6}
   ip_sospechosa:      {activa: true}
   dispositivo_nuevo:  {activa: true, ratio_minimo: 4}
