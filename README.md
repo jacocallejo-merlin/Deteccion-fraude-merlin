@@ -17,9 +17,11 @@ cómo ejecutarlo.
 - **Datos:** unos 117.000 pagos sintéticos en 180 días (116.547 tras limpiar), 2.000 clientes,
   30 comercios, 616 pagos fraudulentos (0,53 %) y 10 tipos de fraude, incluido uno que el sistema no
   ha visto nunca.
-- **Resultado principal (test: 29.174 pagos, 201 fraudes):** KMeans obtiene una PR-AUC de 0,41
-  (unas 60 veces el azar) y encuentra el 42 % del fraude revisando el 1 % (el umbral de validación
-  marca un 1,1 % real en test); de cada 100 alertas, unas 26 son fraude.
+- **Resultado principal (test: 29.174 pagos, 201 fraudes):** el autoencoder mejorado y KMeans quedan
+  prácticamente empatados: PR-AUC 0,415 y 0,408 (los dos rondan 0,41; unas 60 veces el azar). Los dos
+  encuentran el 42 % del fraude revisando el 1 % (el umbral de validación marca un 1,1 % real en
+  test) y de cada 100 alertas unas 27 son fraude. KMeans sigue siendo el detector base del sistema
+  por explicabilidad y continuidad del Hito 6.
 - **Aprendizaje (Hito 6):** en los mismos días y con la misma carga de revisión, el modelo
   recalibrado con los fraudes que confirma el banco encuentra 98 fraudes frente a 70 de KMeans
   (+40 %).
@@ -91,7 +93,7 @@ eran una tostada quemada, y ajusta cuándo pitar.
 
 ```
   1. LLEGAN         2. SE LIMPIAN      3. SE DESCRIBEN      4. SE PUNTÚAN
-  los pagos    ──►  (errores,     ──►  (~35 datos por  ──►  (nota de sospecha
+  los pagos    ──►  (errores,     ──►  (36 datos por  ──►  (nota de sospecha
   del día           duplicados)        cada pago)           con KMeans)
                                                                  │
                                                                  ▼
@@ -106,11 +108,12 @@ eran una tostada quemada, y ajusta cuándo pitar.
    por internet o en tienda, desde qué móvil u ordenador, desde qué país…
 2. **Se limpian.** Los datos reales vienen sucios: pagos repetidos, fechas en formatos distintos,
    "España" escrito de tres formas, importes en dólares… Si no se arreglan, el sistema se equivoca.
-3. **Se describen.** De cada pago se calculan unas 35 características que ayudan a ver si es
+3. **Se describen.** De cada pago se calculan 36 características que ayudan a ver si es
    sospechoso. Por ejemplo: *¿cuántas veces se ha usado esta tarjeta en los últimos 10 minutos?*,
    *¿este importe es normal para este cliente?*, *¿es un móvil que el cliente no había usado nunca?*
-4. **Se puntúan.** Un modelo (KMeans) agrupa los pagos en perfiles y da a cada uno una nota según
-   lo lejos que está del perfil más parecido: cuanto más raro, más alta.
+4. **Se puntúan.** El detector base (KMeans) agrupa los pagos en perfiles y da a cada uno una nota
+   según lo lejos que está del perfil más parecido: cuanto más raro, más alta. El autoencoder hace
+   lo mismo con otra idea: mide lo mal que reconstruye cada pago.
 5. **Se eligen las alertas.** El 1 % de pagos con la nota más alta (unos 7 al día) pasa a una lista
    de alertas.
 6. **Los analistas revisan.** Una persona del equipo de fraude mira cada alerta y decide: ¿es
@@ -139,7 +142,7 @@ Todo esto se ejecuta **solo, cada día**, sin que nadie tenga que lanzarlo.
 | Palabra | Qué significa |
 |---|---|
 | **Modelo** | Un programa que aprende de datos a hacer algo; aquí, a dar una nota de sospecha. |
-| **Variable** (o *feature*) | Cada uno de los ~35 datos que describen un pago (importe, hora, pagos en la última hora…). |
+| **Variable** (o *feature*) | Cada uno de los 36 datos que describen un pago (importe, hora, pagos en la última hora…). |
 | **Etiqueta** | La respuesta correcta: si un pago era fraude o no. En la vida real se sabe tarde y no siempre. |
 | **Supervisado / no supervisado** | Un modelo *supervisado* aprende con ejemplos de la respuesta ("esto es fraude, esto no"). Uno *no supervisado* no usa esas respuestas: busca lo que se sale de lo normal. En el proyecto, los cuatro detectores clásicos son no supervisados, el autoencoder es semi-supervisado (se entrena solo con pagos legítimos) y el modelo que reordena las alertas es supervisado. |
 | **Anomalía** | Algo que se sale de lo normal. No siempre es fraude. |
@@ -152,7 +155,7 @@ Todo esto se ejecuta **solo, cada día**, sin que nadie tenga que lanzarlo.
 |---|---|---|
 | **Precisión** | De las alertas que revisas, ¿cuántas eran fraude? | 26 % = de cada 100 alertas, 26 eran fraude de verdad. |
 | **Recall** (o cobertura) | Del fraude que hubo, ¿cuánto encontraste? | 42 % = de cada 100 fraudes, 42 llegaron a las alertas. |
-| **PR-AUC** | Una nota de 0 a 1 que resume lo bien que el modelo pone el fraude arriba de la lista. 1 = perfecto. Al azar se saca lo que vale la proporción de fraude (0,007). | KMeans saca 0,41: unas 60 veces más que el azar. |
+| **PR-AUC** | Una nota de 0 a 1 que resume lo bien que el modelo pone el fraude arriba de la lista. 1 = perfecto. Al azar se saca lo que vale la proporción de fraude (0,007). | KMeans saca 0,408 y el autoencoder 0,415: los dos rondan 0,41, unas 60 veces el azar. |
 | **Entrenamiento / validación / test** | Los datos se parten por fechas, como un examen: con el **entrenamiento** se estudia, con la **validación** se elige el mejor modelo, y el **test** (los datos más recientes, que no se usan para entrenar ni elegir) es el examen final. | |
 | **Intervalo de confianza** | El margen de error. Con pocos fraudes, una cifra puede variar por suerte. | PR-AUC entre 0,30 y 0,52. |
 
@@ -236,7 +239,7 @@ el modelo agrupa todos los pagos en perfiles comunes.
 | Medir la calidad | `informe_limpieza.py` | Antes de limpiar, cuenta los problemas: nulos, duplicados, formatos, divisas… Lo guarda en `resultados/informe_limpieza.txt`. Que ponga `REVISAR` no es un error: es que ha encontrado los problemas que se metieron a propósito. |
 | Limpiar | `limpieza.py` | Quita duplicados, unifica los textos, pasa todo a euros y comprueba que no queda nada pendiente. |
 
-### Las ~35 variables: cómo se describe un pago
+### Las 36 variables: cómo se describe un pago
 
 Para cada pago se calculan datos que ayudan a ver si es sospechoso (`features.py`). **Solo se usa
 información del pasado**: al describir un pago de las 10:00 no se mira nada de después de las
@@ -266,15 +269,31 @@ para ver cuál funciona mejor.
 | Modelo | Cómo piensa (explicado fácil) |
 |---|---|
 | **Isolation Forest** | Va partiendo los pagos con cortes al azar ("¿importe mayor que 50?", "¿de madrugada?"). Un pago raro se queda solo con muy pocos cortes; uno normal necesita muchos. |
-| **KMeans** ⭐ | Agrupa los pagos en unos pocos "perfiles típicos" (aquí, 3). La nota es la distancia del pago a su perfil más parecido: si no se parece a ninguno, es raro. |
+| **KMeans** (modelo base) | Agrupa los pagos en unos pocos "perfiles típicos" (aquí, 3). La nota es la distancia del pago a su perfil más parecido: si no se parece a ninguno, es raro. |
 | **DBSCAN** | Busca las zonas donde hay muchos pagos juntos. Lo que queda lejos de todas esas zonas es raro. |
 | **One-Class SVM** | Dibuja una frontera alrededor de la mayoría de los pagos. Lo que cae fuera es raro. |
 | **Autoencoder** (red neuronal) | Aprende a "copiar" pagos normales: los comprime y los vuelve a reconstruir. Si un pago no lo sabe reconstruir bien, es que no se parece a lo normal. La nota es lo mal que lo copia. |
 
-**¿Cuál se eligió?** **KMeans**, porque es el que mejor pone el fraude arriba de la lista. Los
-cuatro clásicos se probaron con 37 combinaciones de hiperparámetros y se quedó la mejor de cada uno;
-el autoencoder se ajustó en una búsqueda aparte (`buscar_autoencoder.py`) y luego se entrenó la
-configuración ganadora.
+**¿Cuál se usa?** **KMeans** como detector base: es el que alimenta las alertas y el Hito 6, y es
+más fácil de explicar. En la comparación pura de PR-AUC, el **autoencoder mejorado** queda
+ligeramente por delante (0,415 frente a 0,408 en test; 0,148 frente a 0,133 en validación), pero la
+diferencia es pequeña: en test los intervalos se solapan y en validación el bootstrap los da por
+empatados. No se cambió la base para no romper la comparación histórica.
+Los cuatro clásicos se probaron con 37 combinaciones de hiperparámetros y se quedó la mejor de cada
+uno; el autoencoder se ajustó en una búsqueda aparte (`buscar_autoencoder.py`, 36 combinaciones) y
+luego se entrenó la configuración ganadora.
+
+El cambio principal del autoencoder no es solo la arquitectura: la búsqueda eligió una variante algo
+más comprimida (cuello 6 en vez de 8) y LeakyReLU en vez de tanh. Pero lo que más importa es **cómo
+se elige la época**: ahora se para cuando deja de mejorar la PR-AUC de validación, no cuando deja de
+mejorar la reconstrucción. Entrenar más hace que la red reconstruya también los fraudes y el ranking
+empeora; por eso la mejor época es muy temprana (5 de 25).
+
+La búsqueda oficial (36 combinaciones) eligió LeakyReLU con cuello 6: 0,148 de PR-AUC en validación
+y 0,148 ± 0,001 con dos semillas. Una variante ReLU con cuello 8 dio 0,144 en validación y 0,423 en
+test; se descartó porque la regla es elegir solo con validación, no con test. La ganadora da 0,415
+en test, dentro del mismo margen de error. La etiqueta se usa solo para esa elección y para separar
+los pagos legítimos de entrenamiento, nunca como variable de entrada.
 
 Además de los modelos hay **reglas fijas** (`reglas_alerta.py`), una por tipo de fraude conocido.
 Por ejemplo, card testing: *"3 o más pagos de la tarjeta en 10 minutos y el importe es menor de
@@ -310,10 +329,10 @@ Hay **dos fuentes** para saber qué era fraude, y se juntan (`integrar_feedback.
 Si las dos fuentes no coinciden, manda el banco.
 
 **Cada semana** (`recalibrar_modelo.py`) se entrena un segundo modelo, ahora sí **supervisado**
-(aprende de ejemplos con respuesta). Recibe la nota de KMeans y las ~35 variables, y aprende
-*"las alertas con estas características solían ser fraude; estas otras, falsas alarmas"*. A
-partir de ese momento las alertas se ordenan con él. KMeans no desaparece: su nota es una de las
-cosas que mira el nuevo modelo.
+(aprende de ejemplos con respuesta). Recibe la nota de KMeans y las 36 variables (más alguna extra
+del Hito 6), y aprende *"las alertas con estas características solían ser fraude; estas otras,
+falsas alarmas"*. A partir de ese momento las alertas se ordenan con él. KMeans no desaparece: su
+nota es una de las cosas que mira el nuevo modelo.
 
 Por último, `medir_feedback.py` comprueba semana a semana si las alertas mejoran.
 
@@ -394,8 +413,9 @@ mide **como se haría en un banco real**:
 
 ## Qué ha salido
 
-> Las cifras salen de la ejecución de referencia del 16/10/2026 (la última completa). Pueden
-> variar un poco si se vuelve a ejecutar con otros datos o con otra configuración.
+> Las cifras salen de la ejecución de referencia del 20/10/2026 (autoencoder) y del 16/10/2026
+> (clásicos), con el mismo corte de datos. Pueden variar un poco si se vuelve a ejecutar con otros
+> datos o con otra configuración.
 
 ### Los modelos
 
@@ -403,26 +423,34 @@ Medido en el test (los últimos 45 días, unos 29.000 pagos y 201 fraudes):
 
 | Modelo | PR-AUC test | Margen (95 %) | Fraude encontrado revisando el 1 % |
 |---|---|---|---|
-| **KMeans** ⭐ | **0,41** | 0,30 – 0,52 | **42 %** |
+| **Autoencoder** | **0,41** | 0,32 – 0,53 | **42 %** |
+| **KMeans** (modelo base) | 0,41 | 0,30 – 0,52 | 42 % |
 | One-Class SVM | 0,37 | 0,26 – 0,48 | 42 % |
 | DBSCAN | 0,33 | 0,23 – 0,43 | 32 % |
-| Autoencoder | 0,21 | 0,13 – 0,32 | 25 % |
 | Isolation Forest | 0,15 | 0,08 – 0,27 | 25 % |
+
+> El autoencoder saca 0,415 exacto y KMeans 0,408: los dos se leen como 0,41, pero el autoencoder
+> queda ligeramente arriba. La diferencia no es significativa con estos datos.
 
 **Cómo leerlo:**
 
-- **Revisando solo el 1 % de los pagos (unos 7 al día), KMeans encuentra el 42 % del fraude.** Si
-  se revisara al azar, se encontraría el 1 %.
-- **De cada 100 alertas, 26 son fraude de verdad.** Las otras 74 son falsas alarmas. El umbral se
-  elige en validación y en test marca un 1,1 % (unas 321 alertas); si se forzara exactamente el
-  1 %, la precisión sería del 29 %.
-- **Si se revisara el 5 %** (unos 32 al día) se encontraría el 73 % del fraude, pero solo 10 de
-  cada 100 alertas serían fraude.
-- **Con estos datos no se puede afirmar que KMeans sea mejor que One-Class SVM o DBSCAN.** Sus
-  intervalos de confianza se solapan; lo correcto es decir que KMeans "no es peor que los demás",
-  no que "es el mejor".
+- **Revisando solo el 1 % de los pagos (unos 7 al día), el autoencoder y KMeans encuentran el 42 %
+  del fraude.** Si se revisara al azar, se encontraría el 1 %.
+- **De cada 100 alertas, unas 27 son fraude de verdad.** Las otras 73 son falsas alarmas. El umbral
+  se elige en validación y en test marca un 1,1 % (unas 309 alertas, 6,9 al día); si se forzara
+  exactamente el 1 %, la precisión sería del 29 %. El autoencoder da una precisión operativa del
+  27,8 % y KMeans del 26,5 %, prácticamente lo mismo.
+- **Si se revisara el 5 %** (unos 32 al día) se encontraría en torno al 71-73 % del fraude, pero
+  solo 10 de cada 100 alertas serían fraude.
+- **El autoencoder y KMeans empatan en la práctica.** En test sus intervalos se solapan (0,32–0,53 y
+  0,30–0,52) y ambos encuentran el 42 % al 1 %. En validación el bootstrap los da por empatados; con
+  solo 26 fraudes confirmados, esa ventaja hay que tomarla con cautela. En test, One-Class SVM y
+  DBSCAN también se solapan con ellos.
 
 ### Qué fraude detecta y cuál no
+
+Los porcentajes son los del detector base (KMeans); el autoencoder mejorado coincide prácticamente
+en todos los tipos (la excepción es IP sospechosa: 10 % frente a 5 %).
 
 | Tipo | Lo detecta | Por qué |
 |---|---|---|
@@ -440,13 +468,16 @@ Si un fraude solo es raro en una cosa (por ejemplo, el país) y en todo lo demá
 conjunto no parece raro. Para estos casos funcionan mejor las **reglas** que miran esa variable
 concreta.
 
-**¿Y el fraude desconocido?** Los detectores no supervisados no lo detectan, porque **no es raro**: se
+**¿Y el fraude desconocido?** Ni KMeans ni el autoencoder lo detectan, porque **no es raro**: se
 parece a una compra normal. Tampoco lo verán los analistas, porque solo revisan lo que el detector
 pone arriba. La única vía es que el banco lo confirme (cuando los clientes reclamen) y que el
 modelo recalibrado aprenda a reconocerlo. Con la variable nueva del Hito 6, el modelo recalibrado
 sube su presencia en la cola del 9 % al 16 %, pero sigue siendo el tipo que peor se detecta.
 
 ### Lo que mejora al aprender (Hito 6)
+
+> El Hito 6 se midió con KMeans como detector base. El autoencoder mejorado no se usó para rehacer
+> esa parte: cambiarlo obligaría a recalibrar y volver a medir todo el circuito.
 
 Comparando **los mismos días con el mismo trabajo** (el 1 % de los pagos: unas 6-7 alertas al día):
 
@@ -486,17 +517,20 @@ se dice así: con tan pocos fraudes validados no se podía decidir más sin arri
 
 ### Una cosa que parece rara: ¿por qué sale mejor en el examen que en la práctica?
 
-La PR-AUC de KMeans es **0,13 en validación** y **0,41 en test**. Parece que el modelo mejora con
-datos nuevos, y eso no tiene sentido. La explicación:
+La PR-AUC de KMeans es **0,13 en validación** y **0,41 en test**; la del autoencoder, **0,15 y
+0,41**. Parece que los modelos mejoran con datos nuevos, y eso no tiene sentido. La explicación:
 
 - En validación, al elegir el modelo, solo se conocían **26 de los 57 fraudes** (el resto aún no
   lo había confirmado el banco). Los no confirmados cuentan como pagos normales, así que el modelo
   que los pone arriba parece que se equivoca.
 - Si se mide la validación con **todas** las respuestas (solo para comprobarlo, no para elegir),
-  sale **0,32**, cerca del 0,41 del test.
+  KMeans sube a **0,32** y el autoencoder a **0,32**, cerca del 0,41 del test.
 - El resto de la diferencia es que la mezcla de tipos no es la misma: en validación pesan más los
   tipos que el detector ve peor (pico de gasto e IP sospechosa: 12 de 57 fraudes, frente a 35 de
   201 en test) y no hay ningún card testing.
+- En el autoencoder hay un matiz más: la época se eligió con esa PR-AUC de validación. Por eso su
+  0,15 de validación **no es una medida independiente**; el 0,41 de test sí es una prueba limpia,
+  porque el test no se usó para elegir nada.
 
 ## Lo que no hace bien (limitaciones)
 
@@ -504,10 +538,16 @@ Contarlas da credibilidad. Son estas:
 
 - **Los datos son inventados.** Están hechos para ser difíciles, pero las variables se diseñaron
   sabiendo qué tipos de fraude había. En esos tipos, los resultados son algo optimistas. El fraude
-  desconocido es la medida más honesta, y ahí el sistema falla casi por completo: 0 % en el detector
-  no supervisado y 16 % en la cola tras el ajuste.
+  desconocido es la medida más honesta, y ahí el sistema falla casi por completo: 0 % en KMeans y
+  en el autoencoder, y 16 % en la cola tras el ajuste.
 - **Hay pocos fraudes para elegir el modelo.** Solo 26 confirmados en validación. Por eso los
   modelos empatan.
+- **La mejora del autoencoder se apoya en esos 26 fraudes.** El test queda en 0,415, pero el
+  intervalo es amplio (0,32–0,53) y la diferencia con KMeans (0,408) no es significativa. Además,
+  la mejor época es muy temprana (5 de 25): si se entrena más, la red reconstruye también los
+  fraudes y el ranking empeora. Hay que vigilarlo al cambiar de datos.
+- **El Hito 6 no se rehízo con el autoencoder.** Las cifras de aprendizaje semanal usan KMeans como
+  detector base; cambiar la base obligaría a recalibrar y repetir las comparaciones.
 - **Casi 3 de cada 4 alertas son falsas alarmas.** Es normal en fraude, pero hay margen de mejora.
 - **Los fraudes "de una sola cosa"** (pico de gasto, IP sospechosa, devoluciones) se escapan al
   detector. Necesitan reglas.
@@ -527,9 +567,12 @@ nuevo no tiene ejemplos nunca. Por eso se empieza con un detector de rarezas y, 
 fraudes confirmados, se añade el modelo supervisado (Hito 6). Se usan los dos.
 
 **¿Por qué KMeans y no la red neuronal (autoencoder), que es más moderna?**
-Porque se eligió el que mejor funciona con los datos, no el más moderno. El autoencoder quedó
-cuarto. Además, KMeans es más fácil de explicar: *"este pago no se parece a ninguno de los perfiles
-normales"*.
+Porque KMeans es el detector base del sistema y el Hito 6 está construido sobre él; además es más
+fácil de explicar: *"este pago no se parece a ninguno de los perfiles normales"*. En la comparación
+pura, el autoencoder mejorado queda un poco por delante (0,415 frente a 0,408 en test; 0,148 frente a
+0,133 en validación), pero el bootstrap no los separa con solo 26 fraudes. No se cambió la base
+porque la diferencia no es concluyente y obligaría a rehacer la recalibración y las comparaciones
+históricas. Es una mejora real del Hito 4, no un cambio de modelo en producción.
 
 **¿Por qué solo el 1 %?**
 Es lo que da tiempo a revisar a un equipo pequeño (unos 7 pagos al día). Se puede cambiar en
@@ -652,7 +695,7 @@ Y dentro de **ClickHouse** (base de datos `fraude_pagos`):
 |---|---|
 | `transaccion` | Los pagos ya limpios |
 | `transacciones_enriquecidas` | Los pagos unidos a cliente, comercio, tarjeta, sesión y dispositivo |
-| `features_transaccion` | Las ~35 variables de cada pago |
+| `features_transaccion` | Las 36 variables de cada pago |
 | `anomaly_scores` | La nota de sospecha de cada pago, con cada modelo |
 | `alerta` | Las alertas de las reglas fijas |
 | `feedback_analistas` | Lo que dijeron los analistas de cada alerta |
@@ -763,7 +806,7 @@ La documentación de los datos que da el servidor está en http://localhost:8000
 | 4 | `informe_limpieza.py` | Cuenta los problemas de calidad |
 | 5 | `limpieza.py` | Arregla los problemas |
 | 6 | `crear_tabla_enriquecida.py` | Junta en una tabla todo lo de cada pago (cliente, comercio, sesión…) |
-| 7 | `features.py` | Calcula las ~35 variables |
+| 7 | `features.py` | Calcula las 36 variables |
 | 8 | `reglas_alerta.py` | Aplica las reglas fijas |
 | 9 | `preparacion_datos_ml.py` | Parte los datos por fechas (entrenamiento / validación / test) y los prepara |
 | 10 | `modelos_nosupervisados.py` | Entrena Isolation Forest, KMeans, DBSCAN y One-Class SVM |
