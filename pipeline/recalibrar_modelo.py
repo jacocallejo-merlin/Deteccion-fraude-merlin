@@ -78,7 +78,12 @@ def inicio_test():
 
 def fecha_decision():
     """Cuándo se ajustan umbrales y variables con lo validado (ajustar_umbrales.py): tras
-    ajuste.semanas_validacion semanas de feedback. Los ajustes se aplican desde ese momento."""
+    ajuste.semanas_validacion semanas de feedback. Los ajustes se aplican desde ese momento.
+    Si ajuste.fecha_decision está fijada, es esa: el reentrenamiento semanal recalcula la partición con
+    todos los días y movería el inicio del test, pero la decisión ya se tomó y no debe cambiar de fecha."""
+    fija = CONFIG['ajuste'].get('fecha_decision')
+    if fija:
+        return datetime.combine(pd.Timestamp(fija).date(), datetime.min.time())
     return datetime.combine(inicio_test() + timedelta(weeks=CONFIG['ajuste']['semanas_validacion']),
                             datetime.min.time())
 
