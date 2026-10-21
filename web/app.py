@@ -619,3 +619,56 @@ def marcar_leidos(l: Leidos):
     if ids:
         cliente().insert('aviso_leido', [[i, l.comercio] for i in ids], column_names=['aviso_id', 'comercio'])
     return {'marcados': len(ids)}
+
+
+# --------------------------------------------------------------------------------- patrones
+# Patrones de fraude por momento del día, dispositivo, comercio y cliente (la pestaña Resumen, debajo
+# de las cifras). Cuenta como fraude lo mismo que el resumen: lo que el banco o una revisión han
+# confirmado hasta "ahora", nunca la verdad del simulador.
+SQL_PATRONES = '''
+WITH base AS (
+    SELECT toHour(te.timestamp) AS hora, toDayOfWeek(te.timestamp) AS dia_semana,
+           ifNull(te.dispositivo_tipo, 'presencial') AS dispositivo, v.dispositivo_nuevo AS dispositivo_nuevo,
+           te.cliente_id AS cliente_id, te.comercio_nombre AS comercio, toFloat64(te.cantidad) AS importe,
+           toUInt8(multiIf(w.veredicto != '', w.veredicto = 'fraude',
+                           f.veredicto != '' AND f.fecha_revision <= {ahora:DateTime}, f.veredicto = 'fraude',
+                           ifNull(te.fecha_confirmacion <= {ahora:DateTime}, 0))) AS fraude
+    FROM transacciones_enriquecidas AS te
+    LEFT JOIN features_transaccion AS v ON v.transaccion_id = te.transaccion_id
+    LEFT JOIN (SELECT transaccion_id, argMax(veredicto, fecha_real) AS veredicto FROM revision_web
+               GROUP BY transaccion_id) AS w ON w.transaccion_id = te.transaccion_id
+    LEFT JOIN (SELECT transaccion_id, any(veredicto) AS veredicto, any(fecha_revision) AS fecha_revision
+               FROM feedback_analistas GROUP BY transaccion_id) AS f ON f.transaccion_id = te.transaccion_id
+    WHERE toDate(te.timestamp) BETWEEN {desde:Date} AND {hoy:Date}
+      AND ({comercio:UInt32} = 0 OR te.comercio_id = {comercio:UInt32}))
+SELECT {columnas} FROM base {resto}
+'''
+
+
+def por(columnas, resto='', **p):
+    return filas(SQL_PATRONES.replace('{columnas}', columnas).replace('{resto}', resto), **p)
+
+
+@app.get('/api/patrones')
+def patrones(comercio: int = Comercio, dias: int = Dias):
+    """Dónde se concentra el fraude confirmado: hora del día, día de la semana, dispositivo,
+    comercio (solo en la vista de la entidad) y clientes con más fraude. A diferencia del resumen,
+    mira todo el histórico de pagos, también el anterior a la primera alerta."""
+    hoy, ahora, _ = reloj()
+    p = {'desde': desde_de(hoy, dias), 'hoy': hoy, 'ahora': ahora, 'comercio': comercio}
+    cuenta = 'count() AS pagos, toUInt32(sum(fraude)) AS fraudes'
+    total = por(cuenta, **p)[0]
+    clientes_fraude = por('uniqExactIf(cliente_id, fraude = 1) AS con_fraude, uniqExact(cliente_id) AS clientes', **p)[0]
+    return {
+        'desde': p['desde'], 'hoy': hoy, **total,
+        'tasa': total['fraudes'] / total['pagos'] if total['pagos'] else None,
+        'por_hora': por(f'hora, {cuenta}', 'GROUP BY hora ORDER BY hora', **p),
+        'por_dia_semana': por(f'dia_semana, {cuenta}', 'GROUP BY dia_semana ORDER BY dia_semana', **p),
+        'por_dispositivo': por(f"dispositivo, if(dispositivo = 'presencial', 0, dispositivo_nuevo) AS nuevo, {cuenta}",
+                               'GROUP BY dispositivo, nuevo ORDER BY pagos DESC', **p),
+        'por_comercio': [] if comercio else por(f'comercio, {cuenta}', 'GROUP BY comercio ORDER BY fraudes / pagos DESC', **p),
+        # Solo el número de cliente: en la vista de un comercio no se enseñan datos personales
+        'clientes': por(f"cliente_id, {cuenta}, round(sumIf(importe, fraude = 1), 2) AS importe_fraude",
+                        'GROUP BY cliente_id HAVING fraudes > 0 ORDER BY fraudes DESC, importe_fraude DESC LIMIT 8', **p),
+        'clientes_con_fraude': clientes_fraude['con_fraude'], 'clientes_activos': clientes_fraude['clientes'],
+    }

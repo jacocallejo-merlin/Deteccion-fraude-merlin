@@ -369,3 +369,7 @@ footer { max-width: var(--ancho); margin: 0 auto; padding: 18px 24px 30px; borde
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ------------------------------------------------------------ patrones de fraude (patrones.js) */
+.patrones { margin-top: 48px; padding-top: 22px; border-top: 2px solid var(--tinta); }
+.patrones .explicacion { margin: 6px 0 22px; }

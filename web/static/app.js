@@ -432,6 +432,7 @@ async function cargarResumen() {
         scales: { x: { beginAtZero: true, border: { display: false } }, y: { grid: { display: false } } } },
     });
   }
+  await cargarPatrones();      // patrones.js: hora, dispositivo, comercios y clientes con más fraude
 }
 
 // ------------------------------------------------------------------------------ pagos

@@ -10,7 +10,8 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400..800&display=swap">
   <link rel="stylesheet" href="/static/estilos.css?v=15">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+  <!-- Chart.js 4.4.4 copiado en static/: las gráficas salen también sin internet (p. ej. en una presentación) -->
+  <script src="/static/chart.umd.min.js"></script>
 </head>
 <body>
   <a class="saltar" href="#contenido">Ir al contenido</a>
@@ -120,6 +121,38 @@
           <div class="grafica"><canvas id="g-comercios"></canvas></div>
         </section>
       </div>
+
+      <!-- Patrones de fraude: cuándo, desde dónde, en qué comercios y a qué clientes (patrones.js) -->
+      <div id="patrones" class="patrones">
+        <h2 class="titulo-seccion">Patrones de fraude</h2>
+        <p class="sub explicacion" id="patrones-media">Cargando…</p>
+        <div class="paneles">
+          <section class="panel ancho">
+            <h3>A qué hora del día</h3>
+            <p class="sub">Barras: pagos. Línea: qué parte de ellos es fraude confirmado.</p>
+            <div class="grafica"><canvas id="g-pat-hora"></canvas></div>
+          </section>
+          <section class="panel">
+            <h3>Qué día de la semana</h3>
+            <div class="grafica"><canvas id="g-pat-semana"></canvas></div>
+          </section>
+          <section class="panel">
+            <h3>Desde qué dispositivo</h3>
+            <p class="sub">Qué parte de los pagos es fraude, según el tipo de dispositivo y si el cliente ya lo había usado.</p>
+            <div class="grafica"><canvas id="g-pat-dispositivo"></canvas></div>
+          </section>
+          <section class="panel" id="tarjeta-pat-comercios">
+            <h3>Comercios con más fraude</h3>
+            <p class="sub">Qué parte de sus pagos es fraude (comercios con al menos 30 pagos en el periodo).</p>
+            <div class="grafica"><canvas id="g-pat-comercios"></canvas></div>
+          </section>
+          <section class="panel">
+            <h3>Clientes con más fraude</h3>
+            <p class="sub" id="patrones-clientes-sub"></p>
+            <div class="tabla-contenedor" id="t-pat-clientes"></div>
+          </section>
+        </div>
+      </div>
     </section>
 
     <!-- ============================================================== PAGOS -->
@@ -173,5 +206,6 @@
     <label class="casilla"><input type="checkbox" id="modo-demo"> Modo demostración: enseñar qué era fraude según el simulador</label>
   </footer>
   <script src="/static/app.js?v=15"></script>
+  <script src="/static/patrones.js?v=1"></script>
 </body>
 </html>
