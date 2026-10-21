@@ -48,7 +48,10 @@ def comprobar_existe(ruta):
 def cargar_autoencoder():
     """Reconstruye la red con la arquitectura guardada y le carga los pesos."""
     g = torch.load(comprobar_existe(CARPETA_MODELOS / f'{MODELO}.pt'), weights_only=False)
-    modelo = Autoencoder(g['n_entrada'], g['capas'], g['cuello'])
+    modelo = Autoencoder(g['n_entrada'], g['capas'], g['cuello'],
+                         activacion=g.get('activacion', 'tanh'),
+                         dropout=g.get('dropout', 0.0),
+                         batchnorm=g.get('batchnorm', False))
     modelo.load_state_dict(g['estado'])
     modelo.eval()
     return modelo, g['columnas']

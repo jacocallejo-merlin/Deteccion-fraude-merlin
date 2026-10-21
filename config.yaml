@@ -97,29 +97,40 @@ modelos:
 # La semilla del entrenamiento es la global (semilla: 42, arriba)
 autoencoder:
   capas: [24, 16]              # capas ocultas del codificador (el decodificador es simétrico)
-  cuello: 8                    # -> 36 -> 24 -> 16 -> 8 -> 16 -> 24 -> 36 (cada capa más estrecha)
+  cuello: 6                    # -> 36 -> 24 -> 16 -> 6 -> 16 -> 24 -> 36 (cada capa más estrecha)
+  activacion: leaky            # relu, tanh, leaky, gelu, elu o silu. LeakyReLU ganó la búsqueda
+  dropout: 0.0                 # 0 = sin dropout; 0,1 no mejoró y alarga el entrenamiento
+  batchnorm: false             # normalización por lotes; tampoco mejoró en la búsqueda
   ruido: 0.0                   # sigma del ruido gaussiano en la entrada (0 = autoencoder normal)
   lr: 0.001
-  epocas: 2000                 # máximo; la parada temprana corta mucho antes
-  batch: 1024                  # con 256 tardaba bastante más y daba un PR-AUC val parecido (0,079 frente a 0,090)
-  paciencia: 20                # épocas sin mejorar la pérdida de validación antes de parar
-  semillas_estabilidad: [] # [1, 2] # semillas EXTRA solo para comprobar estabilidad (~3 min cada una; [] = no)
+  epocas: 2000                 # máximo; la parada temprana corta antes (con PR-AUC, muy pronto)
+  batch: 1024                  # 256 tarda más y no mejora; 2048 da una validación casi idéntica
+  paciencia: 20                # épocas sin mejorar la PR-AUC de validación antes de parar
+  # 'prauc' elige la época que mejor ordena el fraude en validación, no la que mejor reconstruye:
+  # entrenar más hace que la red reconstruya también los fraudes y el ranking empeora. 'loss' deja
+  # el comportamiento antiguo. La etiqueta solo se usa para elegir época y configuración, nunca
+  # entra como variable de entrada.
+  seleccion: prauc
+  eval_cada: 1                 # cada cuántas épocas se mide la PR-AUC de validación
+  semillas_estabilidad: [1, 2] # semillas EXTRA para comprobar estabilidad (~15 s cada una; [] = no)
 
-# buscar_autoencoder.py (NO lo lanza main.py): combinaciones a probar en el futuro (~3 min cada una).
-# Usa epocas, batch y paciencia de la sección "autoencoder". Al terminar imprime la mejor
-# para copiarla arriba.
+# buscar_autoencoder.py (NO lo lanza main.py): combinaciones a probar en el futuro.
+# Usa epocas, batch, paciencia y seleccion de la sección "autoencoder". Con la parada por PR-AUC
+# cada combinación tarda ~15-30 s. Al terminar imprime la mejor para copiarla arriba.
 busqueda_autoencoder:
   semillas_estabilidad: [1, 2] # se reentrena la ganadora con estas semillas
   rejilla:
-    capas: [[24, 16], [16]]    # cada capa más estrecha que la anterior y que el cuello
-    cuello: [4, 8]
+    capas: [[24, 16], [32, 16]]  # cada capa más estrecha que la anterior y que el cuello
+    cuello: [6, 8, 12]
+    activacion: [relu, leaky, tanh]
     ruido: [0.0, 0.05]
     lr: [0.001]
 
 # Hito 6: feedback de analistas (simulado) y recalibración de las alertas
 # simular_analistas.py, integrar_feedback.py, recalibrar_modelo.py y medir_feedback.py
 feedback:
-  modelo_base: kmeans          # el detector elegido: ordena las alertas hasta la primera recalibración
+  modelo_base: kmeans          # detector base del circuito de alertas y del Hito 6 (el autoencoder
+                               # mejorado queda prácticamente empatado, pero no se cambia la base)
   presupuesto: 0.01            # parte de las transacciones de cada día que revisan los analistas (~7 al día)
   retraso_revision_horas: [2, 48]   # tras cerrar el día, el veredicto llega entre 2 h y 2 días después
   p_error:                     # probabilidad de que el analista se equivoque de veredicto

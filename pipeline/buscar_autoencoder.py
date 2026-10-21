@@ -1,6 +1,7 @@
 """
 Búsqueda de la mejor configuración del autoencoder. NO forma parte de main.py ni del DAG:
-se lanza a mano cuando se quieren probar arquitecturas nuevas (tarda ~4 min por combinación).
+se lanza a mano cuando se quieren probar arquitecturas nuevas (con la parada por PR-AUC,
+~15-30 s por combinación en este equipo).
 
 Prueba todas las combinaciones de "busqueda_autoencoder.rejilla" en config.yaml, las elige
 igual que los clásicos (mejor PR-AUC en validación, mismas filas) y apunta cada una en
@@ -17,11 +18,10 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.metrics import average_precision_score
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import CONFIG, CARPETA_RESULTADOS, fijar_semillas
-from entrenar_autoencoder import SEMILLA, cargar, describir, entrenar, error_reconstruccion
+from entrenar_autoencoder import SEMILLA, cargar, describir, entrenar
 
 _cfg = CONFIG['busqueda_autoencoder']
 REJILLA = _cfg['rejilla']
@@ -35,8 +35,9 @@ def combinaciones(rejilla):
 
 
 def pr_auc_val(p, semilla, X_fit, X_val, X_val_completo, y_val):
-    modelo, info = entrenar(X_fit, X_val, p, semilla, detalle=False)
-    return average_precision_score(y_val, error_reconstruccion(modelo, X_val_completo)), info
+    modelo, info = entrenar(X_fit, X_val, p, semilla, detalle=False,
+                            X_val_completo=X_val_completo, y_val=y_val)
+    return info['pr_auc_val'], info
 
 
 def main():
@@ -45,19 +46,21 @@ def main():
     n_entrada = X_fit.shape[1]
     candidatos = combinaciones(REJILLA)
     fecha = datetime.now().strftime('%Y-%m-%d %H:%M')
-    print(f'\nBuscando configuración ({len(candidatos)} combinaciones, ~4 min cada una):')
+    print(f'\nBuscando configuración ({len(candidatos)} combinaciones):')
 
     filas = []
     for p in candidatos:
         ap, info = pr_auc_val(p, SEMILLA, X_fit, X_val, X_val_completo, y_val)
-        print(f'  {describir(n_entrada, p):<40} ruido {p["ruido"]:<5} lr {p["lr"]:<7} '
+        print(f'  {describir(n_entrada, p):<40} {p.get("activacion", "tanh"):<6} '
+              f'ruido {p["ruido"]:<5} lr {p["lr"]:<7} '
               f'épocas {info["epocas"]:>4}  pérdida val {info["perdida_val"]:.4f}  PR-AUC val {ap:.4f}')
         filas.append({'fecha': fecha, 'arquitectura': describir(n_entrada, p), **p,
                       'capas': str(p['capas']), **info, 'pr_auc_val': round(ap, 4)})
 
     tabla = pd.DataFrame(filas).sort_values('pr_auc_val', ascending=False)
     mejor = candidatos[int(np.argmax([f['pr_auc_val'] for f in filas]))]
-    print(f'\n-> mejor: {describir(n_entrada, mejor)}  ruido {mejor["ruido"]}  lr {mejor["lr"]}  '
+    print(f'\n-> mejor: {describir(n_entrada, mejor)}  activación {mejor.get("activacion", "tanh")}  '
+          f'ruido {mejor["ruido"]}  lr {mejor["lr"]}  '
           f'(PR-AUC val {tabla["pr_auc_val"].iloc[0]:.4f})')
 
     if SEMILLAS_ESTABILIDAD:
@@ -72,6 +75,7 @@ def main():
 
     print('\nPara usarla, copia esto en la sección "autoencoder" de config.yaml:')
     print(f'  capas: {list(mejor["capas"])}\n  cuello: {mejor["cuello"]}\n'
+          f'  activacion: {mejor.get("activacion", "tanh")}\n'
           f'  ruido: {mejor["ruido"]}\n  lr: {mejor["lr"]}')
 
 

@@ -26,8 +26,12 @@ _cfg = CONFIG['autoencoder']
 # Máximo de épocas: casi nunca se llega, la parada temprana corta antes.
 EPOCAS = _cfg['epocas']
 BATCH = _cfg['batch']
-# Épocas seguidas sin mejorar la pérdida de validación antes de parar.
+# Épocas seguidas sin mejorar la métrica de validación antes de parar.
 PACIENCIA = _cfg['paciencia']
+# Criterio de parada: 'loss' (error de reconstrucción) o 'prauc' (calidad del ranking de fraude).
+SELECCION = _cfg.get('seleccion', 'loss')
+# Cada cuántas épocas se mide la PR-AUC de validación (1 = todas; con 10.000 filas es barato).
+EVAL_CADA = _cfg.get('eval_cada', 1)
 # Igual que los clásicos: la validación tiene que ser exactamente las mismas filas.
 VALIDACION = CONFIG['modelos']['proporcion_val']
 SEMILLA = CONFIG['semilla']
@@ -35,7 +39,14 @@ SEMILLA = CONFIG['semilla']
 SEMILLAS_ESTABILIDAD = _cfg['semillas_estabilidad']
 # Configuración que se entrena. Para probar otras: pipeline/buscar_autoencoder.py
 PARAMETROS = {'capas': list(_cfg['capas']), 'cuello': _cfg['cuello'],
+              'activacion': _cfg.get('activacion', 'tanh'),
+              'dropout': _cfg.get('dropout', 0.0),
+              'batchnorm': _cfg.get('batchnorm', False),
               'ruido': _cfg['ruido'], 'lr': _cfg['lr']}
+
+ACTIVACIONES = {'tanh': nn.Tanh, 'relu': nn.ReLU,
+                'leaky': lambda: nn.LeakyReLU(negative_slope=0.01),
+                'gelu': nn.GELU, 'elu': nn.ELU, 'silu': nn.SiLU}
 
 
 def cargar():
@@ -69,8 +80,11 @@ def cargar():
 
 
 class Autoencoder(nn.Module):
-    def __init__(self, n_entrada, capas, cuello):
+    def __init__(self, n_entrada, capas, cuello, activacion='tanh',
+                 dropout=0.0, batchnorm=False):
         super().__init__()
+        if activacion not in ACTIVACIONES:
+            raise ValueError(f'Activación desconocida: {activacion}')
         tamanos = [n_entrada] + list(capas) + [cuello]
         # Cada capa tiene que comprimir: una capa igual o más ancha que la anterior
         # (p. ej. capas [24, 16, 8] con cuello 8 -> 8 -> 8) no aporta nada y solo añade parámetros.
@@ -80,7 +94,12 @@ class Autoencoder(nn.Module):
 
         codificador = []
         for a, b in zip(tamanos[:-1], tamanos[1:]):
-            codificador += [nn.Linear(a, b), nn.Tanh()]
+            codificador.append(nn.Linear(a, b))
+            if batchnorm:
+                codificador.append(nn.BatchNorm1d(b))
+            codificador.append(ACTIVACIONES[activacion]())
+            if dropout:
+                codificador.append(nn.Dropout(dropout))
         self.codificador = nn.Sequential(*codificador)
 
         invertido = tamanos[::-1]
@@ -88,7 +107,11 @@ class Autoencoder(nn.Module):
         for i, (a, b) in enumerate(zip(invertido[:-1], invertido[1:])):
             decodificador.append(nn.Linear(a, b))
             if i < len(invertido) - 2:
-                decodificador.append(nn.Tanh())
+                if batchnorm:
+                    decodificador.append(nn.BatchNorm1d(b))
+                decodificador.append(ACTIVACIONES[activacion]())
+                if dropout:
+                    decodificador.append(nn.Dropout(dropout))
         self.decodificador = nn.Sequential(*decodificador)
 
     def forward(self, x):
@@ -100,31 +123,54 @@ def describir(n_entrada, p):
                        [n_entrada, *p['capas'], p['cuello'], *p['capas'][::-1], n_entrada])
 
 
-def entrenar(X_fit, X_val, p, semilla, detalle=True):
-    """Entrena con los parámetros p (capas, cuello, ruido, lr).
-    Devuelve el modelo con la mejor pérdida de validación y un resumen del entrenamiento."""
+def entrenar(X_fit, X_val, p, semilla, detalle=True,
+             X_val_completo=None, y_val=None):
+    """Entrena con los parámetros p (capas, cuello, activación, ruido, lr...).
+
+    La parada temprana puede usar la pérdida de validación ('loss') o la PR-AUC de
+    validación ('prauc'). La segunda es la que se usa en producción: mide directamente
+    lo que importa (que el fraude quede arriba), no solo que la red copie bien los pagos.
+    Devuelve el modelo con el mejor estado y un resumen del entrenamiento."""
     torch.manual_seed(semilla)
     np.random.seed(semilla)
-    # Red muy pequeña y lotes de 256: con varios hilos se pierde más tiempo repartiendo el trabajo
+    # Red muy pequeña y lotes de 1024: con varios hilos se pierde más tiempo repartiendo el trabajo
     # que calculando (medido: 3,3 s/época con 10 hilos frente a 0,6 s con 1).
     torch.set_num_threads(1)
 
-    datos =torch.tensor(X_fit.to_numpy(), dtype=torch.float32)
+    datos = torch.tensor(X_fit.to_numpy(), dtype=torch.float32)
     validacion = torch.tensor(X_val.to_numpy(), dtype=torch.float32)
-    ruido = p['ruido']
+    ruido = p.get('ruido', 0.0)
 
-    modelo = Autoencoder(datos.shape[1], p['capas'], p['cuello'])
+    usar_prauc = SELECCION == 'prauc'
+    validacion_completa = None
+    y_val_arr = None
+    if X_val_completo is not None:
+        validacion_completa = torch.tensor(X_val_completo.to_numpy(), dtype=torch.float32)
+    if y_val is not None:
+        y_val_arr = np.asarray(y_val, dtype=int)
+    if usar_prauc:
+        if validacion_completa is None or y_val_arr is None:
+            raise ValueError("La selección 'prauc' necesita X_val_completo e y_val")
+        if y_val_arr.sum() == 0 or y_val_arr.sum() == len(y_val_arr):
+            raise ValueError('La validación necesita las dos clases para calcular la PR-AUC')
+
+    modelo = Autoencoder(datos.shape[1], p['capas'], p['cuello'],
+                         activacion=p.get('activacion', 'tanh'),
+                         dropout=p.get('dropout', 0.0),
+                         batchnorm=p.get('batchnorm', False))
     if detalle:
         parametros = sum(t.numel() for t in modelo.parameters())
         print(f'\nArquitectura: {describir(datos.shape[1], p)}   ({parametros:,} parámetros)')
-        print(f'Ruido gaussiano en la entrada: sigma = {ruido}   lr = {p["lr"]}')
-        print(f'\n{"época":>6}{"pérdida ajuste":>17}{"pérdida validación":>21}')
+        print(f'Activación: {p.get("activacion", "tanh")}   ruido: sigma = {ruido}   '
+              f'lr = {p["lr"]}   parada por: {SELECCION}')
+        print(f'\n{"época":>6}{"pérdida ajuste":>17}{"pérdida validación":>21}{"PR-AUC val":>14}')
 
     optimizador = torch.optim.Adam(modelo.parameters(), lr=p['lr'])
     criterio = nn.MSELoss()
     generador = torch.Generator().manual_seed(semilla)
 
-    mejor, mejor_estado, mejor_epoca, sin_mejorar = float('inf'), None, 0, 0
+    mejor_loss, mejor_estado_loss, mejor_epoca_loss, sin_mejorar_loss = float('inf'), None, 0, 0
+    mejor_ap, mejor_estado_ap, mejor_epoca_ap = -1.0, None, 0
     for epoca in range(1, EPOCAS + 1):
         modelo.train()
         orden = torch.randperm(len(datos), generator=generador)
@@ -145,30 +191,79 @@ def entrenar(X_fit, X_val, p, semilla, detalle=True):
         with torch.no_grad():
             perdida_val = criterio(modelo(validacion), validacion).item()
 
-        if detalle and (epoca % 50 == 0 or epoca == 1):
-            print(f'{epoca:>6}{perdida_ajuste:>17.5f}{perdida_val:>21.5f}')
-
-        if perdida_val < mejor - 1e-5:
-            mejor, mejor_epoca, sin_mejorar = perdida_val, epoca, 0
-            mejor_estado = {k: v.clone() for k, v in modelo.state_dict().items()}
+        if perdida_val < mejor_loss - 1e-5:
+            mejor_loss, mejor_epoca_loss, sin_mejorar_loss = perdida_val, epoca, 0
+            mejor_estado_loss = {k: v.clone() for k, v in modelo.state_dict().items()}
         else:
-            sin_mejorar += 1
-            if sin_mejorar >= PACIENCIA:
-                break
+            sin_mejorar_loss += 1
 
-    if mejor_estado is None:
-        raise RuntimeError('La pérdida de validación nunca fue finita (¿NaN en los datos?)')
-    modelo.load_state_dict(mejor_estado)
+        ap = None
+        if usar_prauc and (epoca == 1 or epoca % EVAL_CADA == 0):
+            ap = average_precision_score(
+                y_val_arr, error_reconstruccion(modelo, validacion_completa))
+            if ap > mejor_ap + 1e-7:
+                mejor_ap, mejor_epoca_ap = ap, epoca
+                mejor_estado_ap = {k: v.clone() for k, v in modelo.state_dict().items()}
+
+        if detalle and (epoca % 50 == 0 or epoca == 1):
+            print(f'{epoca:>6}{perdida_ajuste:>17.5f}{perdida_val:>21.5f}'
+                  + (f'{ap:>14.4f}' if ap is not None else ''))
+
+        if SELECCION == 'loss':
+            if sin_mejorar_loss >= PACIENCIA:
+                break
+        elif SELECCION == 'prauc':
+            if epoca - mejor_epoca_ap >= PACIENCIA:
+                break
+        else:
+            raise ValueError(f"Selección desconocida: {SELECCION}")
+
+    if SELECCION == 'loss':
+        estado, mejor_epoca = mejor_estado_loss, mejor_epoca_loss
+        metrica = mejor_loss
+    else:
+        estado, mejor_epoca = mejor_estado_ap, mejor_epoca_ap
+        metrica = mejor_ap
+    if estado is None:
+        raise RuntimeError('La métrica de validación nunca fue finita (¿NaN en los datos?)')
+    modelo.load_state_dict(estado)
+
+    # Pérdida y PR-AUC del estado que se guarda (pueden no ser las mejores de cada criterio).
+    modelo.eval()
+    with torch.no_grad():
+        perdida_elegida = criterio(modelo(validacion), validacion).item()
+    ap_elegida = None
+    if validacion_completa is not None and y_val_arr is not None:
+        ap_elegida = float(average_precision_score(
+            y_val_arr, error_reconstruccion(modelo, validacion_completa)))
+
     if detalle:
-        print(f'{epoca:>6}   parada temprana. Mejor pérdida de validación: {mejor:.5f} '
+        print(f'{epoca:>6}   parada temprana. Mejor {SELECCION}: {metrica:.5f} '
               f'(época {mejor_epoca})')
-    return modelo, {'perdida_val': mejor, 'mejor_epoca': mejor_epoca, 'epocas': epoca}
+        print(f'  estado guardado: pérdida val {perdida_elegida:.5f}'
+              + (f'   PR-AUC val {ap_elegida:.4f}' if ap_elegida is not None else ''))
+
+    info = {
+        'perdida_val': float(perdida_elegida),
+        'mejor_epoca': mejor_epoca,
+        'epocas': epoca,
+        'seleccion': SELECCION,
+        'mejor_epoca_loss': mejor_epoca_loss,
+        'perdida_val_loss': float(mejor_loss),
+        'pr_auc_val': ap_elegida,
+        'epoca_pr_auc': mejor_epoca_ap if usar_prauc else None,
+        'pr_auc_val_ep': float(mejor_ap) if usar_prauc else None,
+    }
+    return modelo, info
 
 
 def error_reconstruccion(modelo, X):
     modelo.eval()
     with torch.no_grad():
-        datos = torch.tensor(X.to_numpy(), dtype=torch.float32)
+        # Acepta un DataFrame (lo normal) o un tensor ya preparado (la validación
+        # completa que se usa en cada época para calcular la PR-AUC).
+        datos = (torch.tensor(X.to_numpy(), dtype=torch.float32)
+                 if hasattr(X, 'to_numpy') else X.float())
         return ((modelo(datos) - datos) ** 2).mean(dim=1).numpy()
 
 
@@ -185,7 +280,8 @@ def estabilidad(p, X_fit, X_val, X_val_completo, y_val):
         return None, None
     aps = []
     for semilla in SEMILLAS_ESTABILIDAD:
-        modelo, _ = entrenar(X_fit, X_val, p, semilla, detalle=False)
+        modelo, _ = entrenar(X_fit, X_val, p, semilla, detalle=False,
+                             X_val_completo=X_val_completo, y_val=y_val)
         aps.append(average_precision_score(y_val, error_reconstruccion(modelo, X_val_completo)))
     media, std = float(np.mean(aps)), float(np.std(aps))
     print(f'Estabilidad con {len(aps)} semillas: PR-AUC val {media:.4f} ± {std:.4f}')
@@ -208,7 +304,12 @@ def guardar(modelo, p, conjuntos, errores, ref, ref_ordenada, n_entrada, columna
     score_norm = 0 típica / 1 percentil 99 del ajuste, score_pct = fracción del ajuste por debajo."""
     os.makedirs(CARPETA_MODELOS, exist_ok=True)
     torch.save({'estado': modelo.state_dict(), 'capas': p['capas'], 'cuello': p['cuello'],
-                'ruido': p['ruido'], 'lr': p['lr'], 'n_entrada': n_entrada, 'columnas': columnas},
+                'activacion': p.get('activacion', 'tanh'),
+                'dropout': p.get('dropout', 0.0),
+                'batchnorm': p.get('batchnorm', False),
+                'seleccion': SELECCION,
+                'ruido': p['ruido'], 'lr': p['lr'], 'n_entrada': n_entrada,
+                'columnas': columnas},
                os.path.join(CARPETA_MODELOS, f'{MODELO}.pt'))
     joblib.dump(ref_ordenada, os.path.join(CARPETA_MODELOS, f'{MODELO}_referencia.joblib'))
 
@@ -240,8 +341,9 @@ def main():
 
     X_train, X_test, X_fit, X_val, X_val_completo, y_val, ids = cargar()
     p = PARAMETROS
-    modelo, info = entrenar(X_fit, X_val, p, SEMILLA)
-    ap = average_precision_score(y_val, error_reconstruccion(modelo, X_val_completo))
+    modelo, info = entrenar(X_fit, X_val, p, SEMILLA,
+                            X_val_completo=X_val_completo, y_val=y_val)
+    ap = info['pr_auc_val']
     print(f'PR-AUC en validación: {ap:.4f}')
     media, std = estabilidad(p, X_fit, X_val, X_val_completo, y_val)
 
@@ -266,10 +368,13 @@ def main():
         json.dump({
             'mejores_parametros': p,
             'arquitectura': describir(X_train.shape[1], p),
+            'activacion': p.get('activacion'),
+            'seleccion': SELECCION,
             'pr_auc_val': float(ap),
             'pr_auc_val_media_semillas': media,
             'pr_auc_val_std_semillas': std,
-            'entrenamiento': {**info, 'epocas_max': EPOCAS, 'batch': BATCH, 'paciencia': PACIENCIA},
+            'entrenamiento': {**info, 'epocas_max': EPOCAS, 'batch': BATCH,
+                              'paciencia': PACIENCIA, 'eval_cada': EVAL_CADA},
             'referencia_normalizacion': ref,
             'proporcion_val': VALIDACION,
             'filas_ajuste': len(X_fit),

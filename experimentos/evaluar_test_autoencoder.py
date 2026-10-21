@@ -39,7 +39,10 @@ def cargar_modelo():
     if not os.path.exists(ruta):
         raise SystemExit(f'No está {ruta}. Entrena antes con pipeline/entrenar_autoencoder.py')
     g = torch.load(ruta, weights_only=False)
-    modelo = Autoencoder(g['n_entrada'], g['capas'], g['cuello'])
+    modelo = Autoencoder(g['n_entrada'], g['capas'], g['cuello'],
+                         activacion=g.get('activacion', 'tanh'),
+                         dropout=g.get('dropout', 0.0),
+                         batchnorm=g.get('batchnorm', False))
     modelo.load_state_dict(g['estado'])
     modelo.eval()
     arq = ' -> '.join(str(t) for t in [g['n_entrada'], *g['capas'], g['cuello'],

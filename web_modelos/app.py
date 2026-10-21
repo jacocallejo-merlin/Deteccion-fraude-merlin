@@ -123,7 +123,10 @@ def _calcular():
             ent = red.get('entrenamiento', {})
             m['entrenamiento'] = {
                 'versiones': len(pd.read_csv(historico)) if historico.exists() else 1,
-                'parametros': {'arquitectura': red.get('arquitectura'), 'cuello': red.get('mejores_parametros', {}).get('cuello'),
+                'parametros': {'arquitectura': red.get('arquitectura'),
+                               'activacion': red.get('activacion'),
+                               'seleccion': red.get('seleccion'),
+                               'cuello': red.get('mejores_parametros', {}).get('cuello'),
                                'rondas': ent.get('epocas'), 'mejor_ronda': ent.get('mejor_epoca')},
             }
         else:

@@ -137,7 +137,10 @@ def comprobar_autoencoder(inf, X_test):
 
    
     g = torch.load(ruta_pt, weights_only=False)
-    modelo = Autoencoder(g['n_entrada'], g['capas'], g['cuello'])
+    modelo = Autoencoder(g['n_entrada'], g['capas'], g['cuello'],
+                         activacion=g.get('activacion', 'tanh'),
+                         dropout=g.get('dropout', 0.0),
+                         batchnorm=g.get('batchnorm', False))
     modelo.load_state_dict(g['estado'])
 
     # Mismo orden de columnas que en el entrenamiento

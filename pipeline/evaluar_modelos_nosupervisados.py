@@ -345,7 +345,15 @@ def conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resume
                  + lista(f'{nombre_detector(c)} {detectados[c]}' for c in simples) + '.')
         mas = max(detectados, key=detectados.get)
         if detectados[elegido] >= detectados[mas]:
-            L.append(f'- El test lo confirma: {nom} es el que más fraude encuentra.')
+            empatados_test = [c for c in simples
+                              if c != elegido and detectados[c] == detectados[elegido]]
+            if empatados_test:
+                L.append(f'- El test lo confirma: {nom} empata con '
+                         f'{lista(nombre_detector(c) for c in empatados_test)} en fraude '
+                         f'encontrado al {PRESUPUESTO_PCT:g} % '
+                         f'({detectados[elegido]} de {int(n.sum())}).')
+            else:
+                L.append(f'- El test lo confirma: {nom} es el que más fraude encuentra.')
         else:
             L.append(f'- En test, {nombre_detector(mas)} encuentra algo más ({detectados[mas]} '
                      f'frente a {detectados[elegido]}). No cambia la elección: el modelo se elige '
@@ -361,7 +369,8 @@ def conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resume
     empatan = eleccion.loc[eleccion['veredicto'] == 'empate', 'detector'].tolist()
     if empatan:
         L.append(f'- Ojo: en validación empata con {lista(nombre_detector(x) for x in empatan)}. '
-                 f'No se puede asegurar que sea mejor, solo que no es peor.')
+                 f'La ventaja sobre el resto es pequeña y, con solo 26 fraudes confirmados, '
+                 f'no es concluyente.')
 
     if len(por_tipo):
         L.append('\n## Qué fraudes detecta y cuáles no')

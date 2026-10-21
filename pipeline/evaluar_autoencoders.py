@@ -90,15 +90,20 @@ def cargar_guardado():
 def arquitectura(guardado):
     if guardado is None:
         return 'desconocida'
-    return ' -> '.join(str(t) for t in [guardado['n_entrada'], *guardado['capas'], guardado['cuello'],
-                                        *guardado['capas'][::-1], guardado['n_entrada']])
+    red = ' -> '.join(str(t) for t in [guardado['n_entrada'], *guardado['capas'],
+                                       guardado['cuello'], *guardado['capas'][::-1],
+                                       guardado['n_entrada']])
+    return f'{red} ({guardado.get("activacion", "tanh")})'
 
 
 # ------------------------------------------------- análisis propio del autoencoder
 def error_por_variable(guardado, X_test):
     from entrenar_autoencoder import Autoencoder, error_por_variable as detalle
 
-    modelo = Autoencoder(guardado['n_entrada'], guardado['capas'], guardado['cuello'])
+    modelo = Autoencoder(guardado['n_entrada'], guardado['capas'], guardado['cuello'],
+                         activacion=guardado.get('activacion', 'tanh'),
+                         dropout=guardado.get('dropout', 0.0),
+                         batchnorm=guardado.get('batchnorm', False))
     modelo.load_state_dict(guardado['estado'])
     return detalle(modelo, X_test[guardado['columnas']])
 
@@ -205,7 +210,7 @@ def main():
     entreno = resumen.get('entrenamiento', {})
     titulo = arquitectura(guardado)
     print(f'Arquitectura: {titulo}   ruido {p.get("ruido", "?")}   lr {p.get("lr", "?")}   '
-          f'run_id {resumen.get("run_id", "?")}')
+          f'parada {resumen.get("seleccion", "?")}   run_id {resumen.get("run_id", "?")}')
     y = datos['y_test']
 
     # Mismas métricas y umbrales que los clásicos
@@ -256,6 +261,8 @@ def main():
         'fecha': datetime.now().strftime('%Y-%m-%d %H:%M'),
         'run_id': resumen.get('run_id'),
         'arquitectura': titulo,
+        'activacion': guardado.get('activacion') if guardado else None,
+        'seleccion': resumen.get('seleccion'),
         'cuello': guardado['cuello'] if guardado else None,
         'ruido': p.get('ruido'),
         'lr': p.get('lr'),
