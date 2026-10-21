@@ -1,0 +1,76 @@
+# La web de los modelos (web_modelos/app.py): el informe visual de los modelos entrenados, cuál se usa
+# y por qué. Misma imagen que el pipeline, arrancada con uvicorn en el puerto 8001.
+# No usa ClickHouse: lee del volumen "artefactos" (en solo lectura) lo que deja el pipeline en
+# modelos/, datos_ml/ y resultados/. Igualmente carga el ConfigMap y el Secret de ClickHouse porque
+# config.py los exige al importarse.
+#
+# Para abrirla desde el ordenador (después, http://localhost:8001):
+#   kubectl -n fraude port-forward service/fraude-web-modelos 8001:8001
+#
+# Si el pipeline aún no se ha ejecutado, la página carga igual y avisa de que faltan los resultados.
+apiVersion: v1
+kind: Service
+metadata:
+  name: fraude-web-modelos
+  namespace: fraude
+spec:
+  selector:
+    app: fraude-web-modelos
+  ports:
+    - name: http
+      port: 8001
+      targetPort: 8001
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fraude-web-modelos
+  namespace: fraude
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: fraude-web-modelos
+  template:
+    metadata:
+      labels:
+        app: fraude-web-modelos
+    spec:
+      securityContext:
+        runAsUser: 1000          # el usuario "fraude" de la imagen
+        runAsGroup: 1000
+      containers:
+        - name: web-modelos
+          image: fraude-pipeline
+          imagePullPolicy: IfNotPresent
+          command: ["uvicorn", "web_modelos.app:app", "--host", "0.0.0.0", "--port", "8001"]
+          envFrom:
+            - configMapRef:
+                name: pipeline-config
+            - secretRef:
+                name: clickhouse
+          ports:
+            - containerPort: 8001
+          # Viva y lista: la página responde. No se comprueba /api/modelos porque devuelve 503 hasta que
+          # el pipeline ha dejado sus resultados, y entonces nadie podría abrir la página para verlo
+          livenessProbe:
+            httpGet: {path: /, port: 8001}
+            initialDelaySeconds: 10
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: {path: /, port: 8001}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          volumeMounts:
+            # Lo que escriben los Job y CronJob del pipeline. El volumen es ReadWriteOnce: esta web
+            # tiene que estar en el mismo nodo que ellos (en un clúster local lo está siempre)
+            - {name: artefactos, mountPath: /app/modelos, subPath: modelos, readOnly: true}
+            - {name: artefactos, mountPath: /app/datos_ml, subPath: datos_ml, readOnly: true}
+            - {name: artefactos, mountPath: /app/resultados, subPath: resultados, readOnly: true}
+      volumes:
+        - name: artefactos
+          persistentVolumeClaim:
+            claimName: artefactos
