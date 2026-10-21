@@ -5,11 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Centinela: prevención de fraude en pagos</title>
   <meta name="description" content="Centinela revisa cada noche los pagos, señala los que tienen más riesgo de fraude y dice qué hacer con cada uno.">
-  <link rel="icon" type="image/svg+xml" href="/static/logo.svg?v=13">
+  <link rel="icon" type="image/svg+xml" href="/static/logo.svg?v=15">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400..800&display=swap">
-  <link rel="stylesheet" href="/static/estilos.css?v=13">
+  <link rel="stylesheet" href="/static/estilos.css?v=15">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
 </head>
 <body>
@@ -19,7 +19,7 @@
   <header class="noche">
     <div class="barra">
       <a class="marca" href="/">
-        <img src="/static/logo.svg?v=13" alt="" width="30" height="30">
+        <img src="/static/logo.svg?v=15" alt="" width="30" height="30">
         <span>Centinela</span>
       </a>
       <nav class="pestanas" id="pestanas" aria-label="Secciones">
@@ -45,6 +45,7 @@
             <button class="enlace panel-pie" data-ir="avisos">Ver todos los avisos</button>
           </div>
         </div>
+        <a class="ir-otra" id="ir-modelos" href="http://localhost:8001/">Modelos <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg></a>
       </div>
     </div>
 
@@ -171,6 +172,6 @@
     <span>Revisa: <button class="enlace" id="cambiar-usuario"></button></span>
     <label class="casilla"><input type="checkbox" id="modo-demo"> Modo demostración: enseñar qué era fraude según el simulador</label>
   </footer>
-  <script src="/static/app.js?v=13"></script>
+  <script src="/static/app.js?v=15"></script>
 </body>
 </html>

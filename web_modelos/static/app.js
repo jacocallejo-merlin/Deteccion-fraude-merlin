@@ -3,6 +3,9 @@
 // encuentra?". La responde el bloque más grande (los 201 fraudes del examen, marcados por cada modelo) y su cifra,
 // la mayor de la pantalla. Todo se dibuja desde /api/modelos; los totales salen de las filas.
 
+// La web de casos corre en la misma máquina, en el puerto 8000 (local, Docker y port-forward de k8s)
+document.getElementById('ir-casos').href = `${location.protocol}//${location.hostname}:8000/`;
+
 const nf = new Intl.NumberFormat('es-ES');
 const num = (n) => nf.format(n);
 const pct = (v) => `${nf.format(Math.round(v))} %`;
