@@ -384,9 +384,71 @@ footer { max-width: var(--ancho); margin: 0 auto; padding: 18px 24px 30px; borde
 .ajustes .campo { display: flex; flex-direction: column; gap: 6px; font-weight: 600; border: 0; padding: 0; }
 .ajustes .campo legend { padding: 0; margin-bottom: 6px; }
 .ajustes .campo .sub, .ajustes .casilla { font-weight: 400; }
-.ajustes input[type=url], .ajustes input[type=text] { font: inherit; padding: 8px 10px; border: 1px solid var(--linea);
+.ajustes input[type=url], .ajustes input[type=text], .ajustes input[type=tel] { font: inherit; padding: 8px 10px; border: 1px solid var(--linea);
   border-radius: var(--radio); background: var(--blanco); }
 .ajustes .boton:not(.secundario) { background: var(--tinta); color: var(--blanco); }
 .ayuda-teams { font-size: 13.5px; color: var(--suave); margin-top: -6px; }
 .ayuda-teams summary { cursor: pointer; color: var(--vigia); font-weight: 600; }
 .error-texto { color: var(--alarma); }
+
+/* ============================================================ inicio de sesión (login.html) */
+.pagina-login { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; background: var(--noche); }
+.login { width: min(400px, 100%); display: flex; flex-direction: column; gap: 14px; }
+.login h1 { margin: 10px 0 0; font-size: 26px; color: var(--blanco); letter-spacing: -.01em; }
+.login .sub { color: var(--sobre-noche-suave); margin: 0; }
+.login form { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; }
+.login .campo { display: flex; flex-direction: column; gap: 6px; font-weight: 600; }
+.login input[type=email], .login input[type=password] { padding: 10px 12px; border: 1px solid var(--linea-noche);
+  border-radius: var(--radio); background: #16303A; color: var(--blanco); }
+.login .casilla { color: var(--sobre-noche-suave); }
+.login .boton { background: var(--vigia); color: var(--blanco); padding: 10px 14px; }
+.login .boton:hover { background: #086553; }
+.login .boton:disabled { opacity: .6; cursor: wait; }
+.login .error-texto { margin: 0; min-height: 1.5em; color: #FF8A7E; }
+.sesion-pie { display: inline-flex; gap: 8px; align-items: center; }
+.enlace-noche { color: var(--sobre-noche); font-weight: 600; }
+.login .hecho { background: #16303A; border-radius: var(--radio); padding: 12px 14px; }
+.login .hecho p { margin: 0 0 6px; }
+.login input[type=text], .login input[type=tel], .login input[type=number] { padding: 10px 12px;
+  border: 1px solid var(--linea-noche); border-radius: var(--radio); background: #16303A; color: var(--blanco); }
+.quitar-teams { align-self: flex-start; margin-top: -8px; font-size: 13.5px; }
+
+/* ============================================================ pestaña Cuentas (cuentas.js) */
+.paneles-cuentas { display: grid; grid-template-columns: 1fr; gap: 24px; padding: 8px 0 24px; }
+.form-invitar { display: flex; gap: 8px; flex-wrap: wrap; }
+.form-invitar input { flex: 1 1 200px; padding: 8px 10px; border: 1px solid var(--linea); border-radius: var(--radio);
+  background: var(--blanco); }
+.form-invitar .boton { background: var(--tinta); color: var(--blanco); }
+.enlace-invitacion { display: block; width: 100%; margin-top: 6px; padding: 6px 8px; font-size: 12.5px;
+  border: 1px solid var(--linea); border-radius: var(--radio); background: var(--blanco); }
+
+/* ============================================================ tu cuenta (perfil.js) */
+.perfil-boton { width: 36px; border-radius: 50%; background: var(--vigia); border-color: var(--vigia);
+  color: var(--blanco); font-weight: 700; font-size: 13px; letter-spacing: .02em; }
+.perfil-boton:hover { border-color: var(--blanco); }
+.menu-perfil { position: absolute; right: 0; top: 44px; width: 260px; z-index: 30; padding: 6px 0;
+  background: var(--blanco); color: var(--tinta); border-radius: var(--radio); box-shadow: 0 12px 32px rgba(15, 34, 41, .28); }
+.menu-quien { display: flex; flex-direction: column; padding: 8px 14px 10px; border-bottom: 1px solid var(--linea);
+  margin-bottom: 4px; overflow-wrap: anywhere; }
+.menu-perfil button { display: block; width: 100%; text-align: left; background: none; border: 0; padding: 9px 14px;
+  cursor: pointer; }
+.menu-perfil button:hover { background: var(--resalte); }
+#cerrar-sesion { border-top: 1px solid var(--linea); margin-top: 4px; color: var(--alarma); }
+.bloque-perfil { display: flex; flex-direction: column; gap: 12px; padding: 0 24px 20px; }
+.bloque-perfil + .bloque-perfil { border-top: 1px solid var(--linea); padding-top: 18px; }
+.bloque-perfil h3 { margin: 0; font-size: 16px; }
+.bloque-perfil .sub { margin: 0; }
+.bloque-perfil .campo { display: flex; flex-direction: column; gap: 6px; font-weight: 600; }
+.bloque-perfil .campo .sub { font-weight: 400; }
+.bloque-perfil input { padding: 8px 10px; border: 1px solid var(--linea); border-radius: var(--radio); background: var(--blanco); }
+.bloque-perfil .boton:not(.secundario) { background: var(--tinta); color: var(--blanco); }
+button.enlace-noche { background: none; border: 0; padding: 0; cursor: pointer; font: inherit; }
+button.enlace-noche:hover { text-decoration: underline; }
+tr.apagada td { color: var(--suave); }
+.acciones-cuenta button + button { margin-left: 14px; }
+@media (min-width: 900px) { .paneles-cuentas { grid-template-columns: 1fr 1fr; } }
+.login .codigo { font-size: 22px; letter-spacing: .35em; text-align: center; font-variant-numeric: tabular-nums; }
+.login input[type=text], .login input[type=email], .login input[type=password] { min-width: 0; }
+.demo-codigo { margin: 0; padding: 10px 12px; border-radius: var(--radio); background: #3A3214; color: #F3D98B; font-size: 14px; }
+.dos-campos { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+@media (max-width: 520px) { .dos-campos { grid-template-columns: 1fr; } }

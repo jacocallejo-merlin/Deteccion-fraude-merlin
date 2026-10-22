@@ -5,6 +5,9 @@ un comercio (eligiendo el comercio arriba).
     uvicorn web.app:app --reload        # desde la raíz del proyecto -> http://localhost:8000
                                         # documentación de la API: http://localhost:8000/api/docs
 
+Pide inicio de sesión (web/sesiones.py): el administrador y los analistas de la entidad lo ven todo;
+un comercio, solo sus pagos. Las cuentas las da el administrador en la pestaña Cuentas (web/cuentas.py).
+
 Lee de ClickHouse lo que deja el pipeline (alertas_unificadas, aviso, transacciones...) y solo
 escribe dos cosas: los veredictos que da una persona (revision_web, que el recalibrado semanal usa
 como feedback) y los avisos marcados como leídos (aviso_leido).
@@ -287,10 +290,11 @@ def salud():
 
 
 @app.get('/api/contexto')
-def contexto():
-    """La hora de los datos y la lista de comercios para el selector."""
+def contexto(comercio: int = Comercio):
+    """La hora de los datos y la lista de comercios para el selector (con sesión de comercio, solo el suyo)."""
     hoy, ahora, inicio = reloj()
-    comercios = filas('SELECT comercio_id AS id, nombre, categoria_negocio AS categoria FROM comercio ORDER BY nombre')
+    comercios = filas('SELECT comercio_id AS id, nombre, categoria_negocio AS categoria FROM comercio '
+                      'WHERE {c:UInt32} = 0 OR comercio_id = {c:UInt32} ORDER BY nombre', c=comercio)
     return {'hoy': hoy, 'ahora': ahora, 'inicio': inicio, 'comercios': comercios, 'niveles': NIVELES,
             'web_modelos': os.getenv('WEB_MODELOS_URL')}   # sin ella, el enlace va al puerto 8001
 
@@ -677,6 +681,23 @@ def patrones(comercio: int = Comercio, dias: int = Dias):
 
 
 # ---------------------------------------------------------------------------------- ajustes
-# Canal de Teams / Slack y correos de los avisos, configurables desde la web (web/ajustes.py)
+# Mis avisos: dónde recibe cada usuario los avisos (su correo, su Teams), desde la web (web/ajustes.py)
 from web.ajustes import crear_router  # noqa: E402
 app.include_router(crear_router(cliente))
+
+# ---------------------------------------------------------------------------- inicio de sesión
+# Sin sesión no se ve nada; un comercio solo ve lo suyo (web/sesiones.py, cuentas con web/usuarios.py)
+# El administrador de la entidad da las cuentas: a su equipo y a sus comercios (web/cuentas.py)
+from web import cuentas, sesiones  # noqa: E402
+_almacen = sesiones.Almacen(cliente)
+
+
+def nombre_comercio(comercio_id):
+    return next((f['nombre'] for f in filas('SELECT nombre FROM comercio WHERE comercio_id = {c:UInt32}',
+                                            c=comercio_id)), None)
+
+
+app.add_middleware(sesiones.ProtegerWeb, almacen=lambda: _almacen, rutas_admin=cuentas.DE_ADMINISTRADORES,
+                   publicas={'/login', '/api/login', '/api/logout', '/api/salud'} | cuentas.PUBLICAS)
+app.include_router(sesiones.crear_router(lambda: _almacen, nombre_comercio))
+app.include_router(cuentas.crear_router(lambda: _almacen, nombre_comercio, cliente))

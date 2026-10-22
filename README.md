@@ -766,6 +766,48 @@ técnicas, solo **qué pagos son probablemente fraude, por qué y qué hacer**. 
 `venv\Scripts\python.exe -m uvicorn web.app:app` (o con Docker, ver arriba) y se abre
 http://localhost:8000. La hora de la web es la de los datos: "hoy" es el último día puntuado.
 
+**Pide iniciar sesión**, porque los datos son confidenciales. Hay una sola pantalla de entrada (correo y
+contraseña): el tipo de cuenta lo dice la propia cuenta y la web lleva a cada uno a lo suyo.
+
+| Quién | Qué hace | Cómo consigue su cuenta |
+|---|---|---|
+| **Administrador** de la entidad | Da las cuentas de su equipo (pestaña **Cuentas**), ve todo y la web de modelos | Lo creamos nosotros al instalar, con una contraseña provisional |
+| **Analista** | Revisa casos, ve todos los comercios | Se la da el administrador, con una contraseña provisional |
+| **Comercio** | Solo ve sus pagos y sus avisos (sin la web de modelos ni el modo demostración) | **Se registra él** ("Regístrate") o, si ya trabajaba con la entidad, se la da el administrador |
+
+- **Contraseña provisional.** La primera vez que se entra con ella, la web pide poner una propia y no
+  enseña nada más hasta entonces (lo comprueba el servidor).
+- **¿Has olvidado tu contraseña?** Se escribe el correo, llega un **código de 6 cifras** (vale 15
+  minutos, 5 intentos) y con él se pone una nueva. Se cierra la sesión en los demás equipos.
+- **Registro de un comercio.** Nombre de la empresa, su nombre, su correo y una contraseña; llega un
+  código para confirmar que el correo es suyo y entra. Se crea como **comercio nuevo** (número desde
+  100000) y empieza de cero: la primera vez ve **Configura tu empresa** (CIF, sector, ciudad, teléfono...)
+  y su panel vacío hasta que la entidad envíe sus pagos. Registrándose nunca se puede quedar con un
+  comercio que ya existe, porque vería sus pagos: a esos les da la cuenta el administrador. Los
+  registrados se guardan también en la tabla `empresa`, que el pipeline no toca: si se rehacen los datos
+  (`main.py --desde-cero`), la web los vuelve a poner.
+- **Mi perfil** (el círculo con las iniciales, arriba a la derecha): nombre, teléfono, cambiar la
+  contraseña, cerrar la sesión en los demás equipos y **Mis avisos**; los comercios, también **Mi empresa**.
+
+Sin servidor de correo (`SMTP_*`) los códigos no pueden llegar: abriendo la web en el propio equipo
+(`localhost`) se enseñan en pantalla para poder probarla; publicada, solo salen en el registro del
+servidor. Las contraseñas solo se guardan cifradas (PBKDF2) y los códigos, como huella (SHA-256).
+
+```powershell
+venv\Scripts\python.exe -m web.usuarios crear jefa@banco.com "Ana López" administrador   # al instalar
+venv\Scripts\python.exe -m web.usuarios demo        # para probar: un administrador, un analista y un comercio
+venv\Scripts\python.exe -m web.usuarios listar      # también: contrasena <email> (provisional nueva), desactivar <email>
+```
+
+Con **Mantener la sesión iniciada** la sesión dura 30 días en ese equipo; si no, hasta cerrar el
+navegador. Lo que puede ver cada uno lo impone el servidor (`web/sesiones.py`), no la página: a un
+comercio se le dan siempre sus datos aunque pida otros. En **Mis avisos** cada persona recibe los avisos
+de casos graves en el correo de su cuenta y, si quiere, en su Teams; un comercio, solo los de sus pagos.
+
+*Para un producto real quedaría:* varias entidades a la vez con los datos separados, entrar con la cuenta
+de Microsoft o Google de la entidad, verificación en dos pasos, un registro de quién hizo qué, y que la
+entidad confirme los comercios que se registran (por ejemplo, con su CIF) antes de enviarles pagos.
+
 **La detección es automática; nadie tiene que revisarlo todo.** Cada día, todos los pagos se
 ordenan por la nota del modelo y se les suma lo que dicen las reglas (`generar_avisos.py`, vista
 `alertas_unificadas`). Cada alerta trae un nivel, una **acción recomendada** (distinta para la
@@ -802,7 +844,7 @@ hora anterior"...) y su **puesto en el día** ("top 0,2 % del día"). Los porcen
 | **Transacciones** | Buscador por ID de pago o de cliente, últimos dígitos de la tarjeta o comercio. Se puede ordenar por fecha, por riesgo o por importe |
 | **Avisos** | Un aviso por cada caso alto o crítico nuevo. También en la campana de arriba, que avisa sola si llega uno (se comprueba cada minuto). Los de hace más de 7 días se archivan |
 
-**Revisar es opcional.** La entidad puede dar un veredicto (**Es fraude** / **Es legítimo**). El
+**Revisar es opcional.** La entidad puede dar un veredicto (queda a nombre de quien ha iniciado sesión) (**Es fraude** / **Es legítimo**). El
 comercio no tiene que decidir nada: solo puede aportar lo que sabe (**El cliente reconoce la
 compra** / **Confirmo que es fraude**). En su vista solo ve sus propios pagos, sin el nombre del
 titular ni sus compras en otros comercios.

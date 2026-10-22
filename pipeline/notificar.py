@@ -6,9 +6,14 @@ Lo usan:
   main.py y dags/            un paso del pipeline ha fallado
   vigilar_drift.py           los pagos recientes ya no se parecen a los del entrenamiento
 
-Las URL y contraseñas NO van en config.yaml (se subiría a Git): se leen de variables de entorno
-(.env en local, el Secret "notificaciones" en Kubernetes). Lo que no está configurado no se envía,
-y si un envío falla se avisa por pantalla pero no se para nada: los avisos siguen en la web.
+A quién:
+  - Los canales del servidor (.env en local, el Secret "notificaciones" en Kubernetes), que reciben todo.
+    Las URL y contraseñas NO van en config.yaml (se subiría a Git).
+  - Cada usuario de la web (tabla usuarios, ver web/sesiones.py), según lo que elija en "Mis avisos"
+    (tabla ajustes_usuario): por defecto, a su correo; si pone uno, también a su Teams. Un comercio solo
+    recibe los avisos de sus pagos; los del sistema (drift, fallos del pipeline) solo los de la entidad (administradores y analistas).
+Lo que no está configurado no se envía, y si un envío falla se avisa por pantalla pero no se para nada:
+los avisos siguen en la web. El servidor de correo (SMTP_*) es del proveedor y sirve para todos.
 
     TEAMS_WEBHOOK_URL       Teams > canal > Flujos de trabajo > "Publicar en un canal cuando se
                             recibe una solicitud de webhook" (también vale un webhook entrante antiguo)
@@ -48,9 +53,10 @@ _cfg = _config.get('notificaciones') or {}
 COLOR_TEAMS = {'critico': 'Attention', 'error': 'Attention', 'alto': 'Warning', 'aviso': 'Warning',
                'info': 'Good'}
 NIVELES_AVISO = {'critico': 3, 'alto': 2, 'medio': 1}
-# Lo que el cliente puede configurar desde la web (tabla ajustes). El servidor de correo y su
-# contraseña no: son del proveedor del servicio y siguen en .env / el Secret de Kubernetes
-CLAVES_WEB = ('teams_webhook_url', 'slack_webhook_url', 'correo_destinatarios', 'avisos_fraude', 'drift')
+# Lo que cada usuario de la web elige en "Mis avisos" (tabla ajustes_usuario) y su valor si no ha tocado
+# nada: los avisos le llegan a su correo (el de su cuenta) y, si pone uno, a su Teams. "sistema" (el modelo
+# se desvía o falla el pipeline) solo es para la gente de la entidad
+AJUSTES_USUARIO = {'correo': '1', 'teams_webhook_url': '', 'avisos_fraude': '1', 'sistema': '1'}
 
 
 def _entorno(nombre, por_defecto=None):
@@ -58,56 +64,82 @@ def _entorno(nombre, por_defecto=None):
     return valor or por_defecto
 
 
-def ajustes_web():
-    """Ajustes guardados desde la web (pantalla de ajustes, tabla ajustes de ClickHouse): {clave: texto}.
-    Mandan sobre .env. Sin base de datos o sin tabla, {}: nunca impide avisar con lo de .env."""
+def _clickhouse():
+    import logging
+    import clickhouse_connect
+    logging.getLogger('clickhouse_connect').setLevel(logging.CRITICAL)   # sin base de datos no es un error
+    ch = _config.get('clickhouse') or {}
+    return clickhouse_connect.get_client(
+        host=_entorno('CLICKHOUSE_HOST', ch.get('host', 'localhost')),
+        port=int(_entorno('CLICKHOUSE_PORT', ch.get('port', 8123))),
+        username=_entorno('CLICKHOUSE_USER', ch.get('user', 'default')),
+        password=_entorno('CLICKHOUSE_PASSWORD', ''),
+        database=_entorno('CLICKHOUSE_DATABASE', ch.get('database')), connect_timeout=5)
+
+
+def ajustes_de(rol, guardados):
+    """Los ajustes de un usuario: lo que guardó en la web sobre los valores por defecto."""
+    ajustes = {**AJUSTES_USUARIO, **{k: v for k, v in guardados.items() if k in AJUSTES_USUARIO}}
+    if rol == 'comercio':
+        ajustes['sistema'] = '0'
+    return ajustes
+
+
+def usuarios():
+    """Los usuarios activos de la web con sus ajustes de avisos: [{email, rol, comercio_id, correo, ...}].
+    Sin base de datos o sin usuarios, []: nunca impide avisar a los canales del servidor."""
     try:
-        import logging
-        import clickhouse_connect
-        logging.getLogger('clickhouse_connect').setLevel(logging.CRITICAL)   # sin base de datos no es un error
-        ch = _config.get('clickhouse') or {}
-        cliente = clickhouse_connect.get_client(
-            host=_entorno('CLICKHOUSE_HOST', ch.get('host', 'localhost')),
-            port=int(_entorno('CLICKHOUSE_PORT', ch.get('port', 8123))),
-            username=_entorno('CLICKHOUSE_USER', ch.get('user', 'default')),
-            password=_entorno('CLICKHOUSE_PASSWORD', ''),
-            database=_entorno('CLICKHOUSE_DATABASE', ch.get('database')), connect_timeout=5)
-        if not cliente.command('EXISTS TABLE ajustes'):
-            return {}
-        return {clave: valor for clave, valor in cliente.query('SELECT clave, valor FROM ajustes FINAL').result_rows
-                if clave in CLAVES_WEB}
+        cliente = _clickhouse()
+        if not cliente.command('EXISTS TABLE usuarios'):
+            return []
+        guardados = {}
+        if cliente.command('EXISTS TABLE ajustes_usuario'):
+            for email, clave, valor in cliente.query(
+                    'SELECT email, clave, valor FROM ajustes_usuario FINAL').result_rows:
+                guardados.setdefault(email, {})[clave] = valor
+        return [{'email': email, 'rol': rol, 'comercio_id': comercio_id, **ajustes_de(rol, guardados.get(email, {}))}
+                for email, rol, comercio_id in cliente.query(
+                    'SELECT email, rol, comercio_id FROM usuarios FINAL WHERE activo').result_rows]
     except Exception:
-        return {}
+        return []
 
 
-def _valor(web, clave, entorno, por_defecto=None):
-    """Lo que el cliente puso en la web (aunque sea vacío: entonces está desactivado) o, si nunca lo
-    configuró, lo de .env."""
-    return web[clave].strip() if clave in web else _entorno(entorno, por_defecto)
-
-
-def canales(web=None):
-    """Los canales configurados: {'teams': url, 'slack': url, 'correo': {...}} (solo los que hay).
-    web: los ajustes de la web, si ya se han leído (si no, se leen)."""
-    web = ajustes_web() if web is None else web
-    salida = {}
-    if _valor(web, 'teams_webhook_url', 'TEAMS_WEBHOOK_URL'):
-        salida['teams'] = _valor(web, 'teams_webhook_url', 'TEAMS_WEBHOOK_URL')
-    if _valor(web, 'slack_webhook_url', 'SLACK_WEBHOOK_URL'):
-        salida['slack'] = _valor(web, 'slack_webhook_url', 'SLACK_WEBHOOK_URL')
+def _correo_config(destinatarios):
+    """El servidor de correo (del proveedor, en .env) para esos destinatarios; None si no hay servidor."""
     correo = _cfg.get('correo') or {}
     servidor = _entorno('SMTP_SERVIDOR', correo.get('servidor'))
-    destinatarios = _valor(web, 'correo_destinatarios', 'CORREO_DESTINATARIOS') \
-        or ','.join(correo.get('destinatarios') or [])
-    destinatarios = [d.strip() for d in destinatarios.split(',') if d.strip()]
-    if servidor and destinatarios:
-        usuario = _entorno('SMTP_USUARIO')
-        salida['correo'] = {
-            'servidor': servidor, 'puerto': int(_entorno('SMTP_PUERTO', correo.get('puerto', 587))),
+    if not (servidor and destinatarios):
+        return None
+    usuario = _entorno('SMTP_USUARIO')
+    return {'servidor': servidor, 'puerto': int(_entorno('SMTP_PUERTO', correo.get('puerto', 587))),
             'usuario': usuario, 'password': _entorno('SMTP_PASSWORD'),
             'remitente': _entorno('CORREO_REMITENTE', usuario or 'antifraude@localhost'),
-            'destinatarios': destinatarios,
-        }
+            'destinatarios': destinatarios}
+
+
+def canales():
+    """Los canales del servidor (.env / Secret de Kubernetes): {'teams': url, 'slack': url, 'correo': {...}}
+    (solo los que hay). Reciben todo; los de cada usuario van aparte (canales_de)."""
+    salida = {}
+    if _entorno('TEAMS_WEBHOOK_URL'):
+        salida['teams'] = _entorno('TEAMS_WEBHOOK_URL')
+    if _entorno('SLACK_WEBHOOK_URL'):
+        salida['slack'] = _entorno('SLACK_WEBHOOK_URL')
+    destinatarios = _entorno('CORREO_DESTINATARIOS') or ','.join((_cfg.get('correo') or {}).get('destinatarios') or [])
+    correo = _correo_config([d.strip() for d in destinatarios.split(',') if d.strip()])
+    if correo:
+        salida['correo'] = correo
+    return salida
+
+
+def canales_de(usuario):
+    """Los canales de un usuario de la web: su correo (si lo tiene activado y hay servidor) y su Teams."""
+    salida = {}
+    if usuario.get('teams_webhook_url'):
+        salida['teams'] = usuario['teams_webhook_url']
+    correo = _correo_config([usuario['email']]) if usuario.get('correo') == '1' else None
+    if correo:
+        salida['correo'] = correo
     return salida
 
 
@@ -152,60 +184,98 @@ def _correo(c, titulo, texto, nivel, lineas):
 ENVIOS = {'teams': _teams, 'slack': _slack, 'correo': _correo}
 
 
-def notificar(titulo, texto, nivel='info', lineas=(), tipo=None):
-    """Envía el mensaje a todos los canales configurados. tipo ('avisos_fraude', 'fallos_pipeline' o
-    'drift') permite apagar cada clase de mensaje en config.yaml o, los de fraude y drift, desde la
-    web. Nunca lanza excepciones. Devuelve cuántos canales lo han recibido."""
-    web = ajustes_web()
-    activo = web[tipo] == '1' if tipo in web else _cfg.get(tipo, True)
-    if tipo and not activo:
-        return 0
-    configurados = canales(web)
-    if not configurados:
-        print('Notificaciones: no hay ningún canal configurado (Teams, Slack o correo); solo queda en la web y el log')
-        return 0
+def enviar(destinos, titulo, texto, nivel='info', lineas=(), quien=''):
+    """Envía a esos canales ({nombre: destino}). Nunca lanza excepciones. Devuelve cuántos lo han recibido."""
     enviados = 0
-    for nombre, destino in configurados.items():
+    for nombre, destino in destinos.items():
+        donde = f'{nombre} de {quien}' if quien else nombre
         try:
             resultado = ENVIOS[nombre](destino, titulo, texto, nivel, list(lineas))
-            print(f'Notificaciones: enviado a {nombre} ({resultado})')
+            print(f'Notificaciones: enviado a {donde} ({resultado})')
             enviados += 1
         except Exception as e:
-            print(f'Notificaciones: no se ha podido enviar a {nombre} ({str(e).splitlines()[0][:200]})')
+            print(f'Notificaciones: no se ha podido enviar a {donde} ({str(e).splitlines()[0][:200]})')
     return enviados
 
 
-def notificar_avisos(avisos):
-    """Un solo mensaje con los avisos de fraude nuevos de una ejecución (generar_avisos.py): los
-    críticos y más recientes primero, max_lineas en detalle y del resto solo el total. Así la primera
-    ejecución, que crea los avisos de todo el histórico, no manda cientos de mensajes."""
-    if not avisos:
+def _sin_canales():
+    print('Notificaciones: no hay ningún canal configurado (ni en el servidor ni en los usuarios de la web); '
+          'solo queda en la web y el log')
+
+
+def notificar(titulo, texto, nivel='info', lineas=(), tipo=None):
+    """Envía el mensaje a los canales del servidor y, si es del sistema (tipo 'fallos_pipeline' o 'drift'),
+    a los administradores y analistas que lo tienen activado en la web. Cada tipo se puede apagar del todo
+    en config.yaml. Nunca lanza excepciones. Devuelve cuántos canales lo han recibido."""
+    if tipo and not _cfg.get(tipo, True):
         return 0
+    destinos = [(canales(), '')]
+    if tipo in ('fallos_pipeline', 'drift'):
+        destinos += [(canales_de(u), u['email']) for u in usuarios() if u['rol'] != 'comercio' and u['sistema'] == '1']
+    destinos = [(d, quien) for d, quien in destinos if d]
+    if not destinos:
+        _sin_canales()
+        return 0
+    return sum(enviar(d, titulo, texto, nivel, lineas, quien) for d, quien in destinos)
+
+
+def a_correo(email, titulo, texto, lineas=()):
+    """Un correo a una sola persona (su cuenta de la web aprobada, una invitación...). Devuelve si se ha
+    enviado: sin servidor de correo, False (la web enseña entonces lo que habría que decirle)."""
+    correo = _correo_config([email])
+    return bool(correo) and enviar({'correo': correo}, titulo, texto, 'info', lineas, email) == 1
+
+
+def _resumen(avisos, comercio=False):
+    """(titulo, texto, nivel, lineas) de un mensaje con varios avisos: los críticos y más recientes primero,
+    max_lineas en detalle y del resto solo el total. A un comercio no se le dice en qué otros comercios
+    se usó la tarjeta: solo la tarjeta y que hay pagos sospechosos en el suyo."""
     orden = sorted(avisos, key=lambda a: str(a['dia']), reverse=True)               # los más recientes...
     orden = sorted(orden, key=lambda a: -NIVELES_AVISO.get(a['nivel'], 0))          # ...dentro de cada nivel
     maximo = int(_cfg.get('max_lineas', 10))
     criticos = sum(a['nivel'] == 'critico' for a in avisos)
-    lineas = [f'{a["dia"]} [{a["nivel"].upper()}] {a["mensaje"]}' for a in orden[:maximo]]
+    lineas = [f'{a["dia"]} [{a["nivel"].upper()}] '
+              + (f'{a["mensaje"].split(":")[0]}: pagos sospechosos en tu comercio' if comercio else a['mensaje'])
+              for a in orden[:maximo]]
     if len(avisos) > maximo:
         lineas.append(f'... y {len(avisos) - maximo} más: el detalle está en la web, pestaña Avisos')
-    return notificar(f'{len(avisos)} aviso{"s" if len(avisos) != 1 else ""} de fraude nuevo'
-                     f'{"s" if len(avisos) != 1 else ""} ({criticos} crítico{"s" if criticos != 1 else ""})',
-                     'Casos (misma tarjeta y día) que hay que revisar cuanto antes:',
-                     'critico' if criticos else 'alto', lineas, tipo='avisos_fraude')
+    return (f'{len(avisos)} aviso{"s" if len(avisos) != 1 else ""} de fraude nuevo'
+            f'{"s" if len(avisos) != 1 else ""} ({criticos} crítico{"s" if criticos != 1 else ""})',
+            'Casos (misma tarjeta y día) que hay que revisar cuanto antes:', 'critico' if criticos else 'alto', lineas)
+
+
+def notificar_avisos(avisos):
+    """Los avisos de fraude nuevos de una ejecución (generar_avisos.py), en un solo mensaje por destino:
+    los canales del servidor y la gente de la entidad reciben todos; cada comercio, solo los de sus pagos. Así la
+    primera ejecución, que crea los avisos de todo el histórico, no manda cientos de mensajes."""
+    if not avisos or not _cfg.get('avisos_fraude', True):
+        return 0
+    destinos = [(canales(), '', avisos, False)]
+    for u in usuarios():
+        if u['avisos_fraude'] != '1':
+            continue
+        comercio = u['rol'] == 'comercio'
+        suyos = [a for a in avisos if u['comercio_id'] in a.get('comercios', [])] if comercio else avisos
+        destinos.append((canales_de(u), u['email'], suyos, comercio))
+    destinos = [d for d in destinos if d[0] and d[2]]
+    if not destinos:
+        _sin_canales()
+        return 0
+    return sum(enviar(d, *_resumen(suyos, comercio), quien=quien) for d, quien, suyos, comercio in destinos)
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--prueba', action='store_true', help='envía un mensaje de prueba a todos los canales')
+    parser.add_argument('--prueba', action='store_true', help='envía un mensaje de prueba a los canales del servidor')
     parser.add_argument('--titulo')
     parser.add_argument('--texto', default='')
     parser.add_argument('--nivel', default='info', choices=sorted(COLOR_TEAMS))
     parser.add_argument('--tipo', choices=['avisos_fraude', 'fallos_pipeline', 'drift'])
     args = parser.parse_args()
     if args.prueba:
-        print('Canales configurados:', ', '.join(canales()) or 'ninguno')
-        enviados = notificar('Prueba de notificaciones', 'Si lees esto, el canal está bien configurado.', 'info',
-                             ['Mensaje enviado con python pipeline/notificar.py --prueba'])
+        print('Canales del servidor:', ', '.join(canales()) or 'ninguno')
+        enviados = enviar(canales(), 'Prueba de notificaciones', 'Si lees esto, el canal está bien configurado.',
+                          'info', ['Mensaje enviado con python pipeline/notificar.py --prueba'])
         sys.exit(0 if enviados or not canales() else 1)
     if not args.titulo:
         parser.error('falta --titulo (o usa --prueba)')

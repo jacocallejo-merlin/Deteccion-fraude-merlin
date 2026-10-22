@@ -1,13 +1,14 @@
 # La web de los modelos (web_modelos/app.py): el informe visual de los modelos entrenados, cuál se usa
 # y por qué. Misma imagen que el pipeline, arrancada con uvicorn en el puerto 8001.
-# No usa ClickHouse: lee del volumen "artefactos" (en solo lectura) lo que deja el pipeline en
-# modelos/, datos_ml/ y resultados/. Igualmente carga el ConfigMap y el Secret de ClickHouse porque
-# config.py los exige al importarse.
+# Lee del volumen "artefactos" (en solo lectura) lo que deja el pipeline en modelos/, datos_ml/ y
+# resultados/. Solo es para el administrador de la entidad: comprueba en ClickHouse la sesión iniciada en la web de casos
+# (por eso carga el ConfigMap y el Secret de ClickHouse). Sin sesión manda al login del puerto 8000.
 #
 # Para abrirla desde el ordenador (después, http://localhost:8001):
 #   kubectl -n fraude port-forward service/fraude-web-modelos 8001:8001
 #
 # Si el pipeline aún no se ha ejecutado, la página carga igual y avisa de que faltan los resultados.
+# Las sondas piden "/": sin sesión responde 303 (a iniciar sesión), que Kubernetes da por bueno.
 apiVersion: v1
 kind: Service
 metadata:

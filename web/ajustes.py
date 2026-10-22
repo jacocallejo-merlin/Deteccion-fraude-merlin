@@ -1,38 +1,38 @@
 """
-Ajustes de avisos desde la web: el cliente pone aquí su canal de Teams (o Slack) y los correos donde
-quiere recibir los avisos, sin tocar ficheros del servidor. Se guardan en la tabla ajustes de
-ClickHouse y pipeline/notificar.py los lee en cada envío (mandan sobre .env).
+Mis avisos: cada usuario de la web elige dónde recibe los avisos de los casos graves, además de en la
+web. Por defecto le llegan a su correo (el de su cuenta); si quiere, también a su Teams (su propio chat o
+un canal). Se guardan en la tabla ajustes_usuario de ClickHouse y pipeline/notificar.py los lee en cada
+envío. Un comercio solo recibe los avisos de sus pagos; los del sistema (drift, fallos) son de la entidad.
 
 Lo que no se configura aquí es del proveedor del servicio: el servidor de correo y su contraseña siguen
-en .env / el Secret de Kubernetes. Como el resto de la web, no pide inicio de sesión (ver limitaciones).
+en .env / el Secret de Kubernetes. Las rutas piden sesión (web/sesiones.py): cada uno ve y cambia lo suyo.
 """
 import contextlib
 import io
-import re
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 import notificar
+from web.sesiones import usuario_de
 
-CORREO = re.compile(r'^[^@\s,]+@[^@\s,]+\.[^@\s,]+$')
 CREAR_TABLA = '''
-    CREATE TABLE IF NOT EXISTS ajustes (
+    CREATE TABLE IF NOT EXISTS ajustes_usuario (
+        email       String,
         clave       LowCardinality(String),
         valor       String,
         actualizado DateTime DEFAULT now()
     ) ENGINE = ReplacingMergeTree(actualizado)
-    ORDER BY clave'''
+    ORDER BY (email, clave)'''
 
 
 class Ajustes(BaseModel):
-    """Solo se cambia lo que viene (None = se deja como está). Una dirección vacía desactiva el canal."""
+    """Solo se cambia lo que viene (None = se deja como está). Una dirección de Teams vacía lo desactiva."""
+    correo: Optional[bool] = None
     teams_webhook_url: Optional[str] = None
-    slack_webhook_url: Optional[str] = None
-    correo_destinatarios: Optional[str] = None
     avisos_fraude: Optional[bool] = None
-    drift: Optional[bool] = None
+    sistema: Optional[bool] = None
 
 
 def oculta(url):
@@ -44,56 +44,53 @@ def crear_router(cliente):
     """cliente: la función de web/app.py que devuelve la conexión a ClickHouse."""
     router = APIRouter()
 
+    def mis_ajustes(u):
+        cliente().command(CREAR_TABLA)
+        guardados = dict(cliente().query('SELECT clave, valor FROM ajustes_usuario FINAL WHERE email = {e:String}',
+                                         parameters={'e': u['email']}).result_rows)
+        return {**u, **notificar.ajustes_de(u['rol'], guardados)}
+
     @router.get('/api/ajustes')
-    def leer():
-        web = notificar.ajustes_web()
-        activos = notificar.canales(web)
-        correo = activos.get('correo') or {}
+    def leer(request: Request):
+        a = mis_ajustes(usuario_de(request))
         return {
-            'teams': {'activo': 'teams' in activos, 'final': oculta(activos.get('teams')),
-                      'desde_web': 'teams_webhook_url' in web},
-            'slack': {'activo': 'slack' in activos, 'final': oculta(activos.get('slack')),
-                      'desde_web': 'slack_webhook_url' in web},
+            'email': a['email'], 'rol': a['rol'],
+            'correo': a['correo'] == '1',
             # Sin servidor de correo (lo pone el proveedor) los correos no se pueden enviar
-            'correo_servidor': bool(notificar._entorno('SMTP_SERVIDOR', (notificar._cfg.get('correo') or {}).get('servidor'))),
-            'correo_destinatarios': web.get('correo_destinatarios',
-                                            ', '.join(correo.get('destinatarios', []))),
-            'avisos_fraude': web['avisos_fraude'] == '1' if 'avisos_fraude' in web else notificar._cfg.get('avisos_fraude', True),
-            'drift': web['drift'] == '1' if 'drift' in web else notificar._cfg.get('drift', True),
+            'correo_servidor': notificar._correo_config([a['email']]) is not None,
+            'teams': {'activo': bool(a['teams_webhook_url']), 'final': oculta(a['teams_webhook_url'])},
+            'avisos_fraude': a['avisos_fraude'] == '1',
+            'sistema': a['sistema'] == '1' if a['rol'] != 'comercio' else None,
         }
 
     @router.post('/api/ajustes')
-    def guardar(a: Ajustes):
+    def guardar(a: Ajustes, request: Request):
+        u = usuario_de(request)
         filas = []
-        for clave in ('teams_webhook_url', 'slack_webhook_url'):
-            url = getattr(a, clave)
-            if url is None:
-                continue
-            url = url.strip()
+        if a.teams_webhook_url is not None:
+            url = a.teams_webhook_url.strip()
             if url and not url.startswith('https://'):
-                raise HTTPException(422, 'La dirección del canal tiene que empezar por https://')
-            filas.append([clave, url])
-        if a.correo_destinatarios is not None:
-            correos = [c.strip() for c in a.correo_destinatarios.replace(';', ',').split(',') if c.strip()]
-            malos = [c for c in correos if not CORREO.match(c)]
-            if malos:
-                raise HTTPException(422, f'Correo no válido: {malos[0]}')
-            filas.append(['correo_destinatarios', ', '.join(correos)])
-        for clave in ('avisos_fraude', 'drift'):
+                raise HTTPException(422, 'La dirección de Teams tiene que empezar por https://')
+            filas.append(['teams_webhook_url', url])
+        for clave in ('correo', 'avisos_fraude') + (('sistema',) if u['rol'] != 'comercio' else ()):
             if getattr(a, clave) is not None:
                 filas.append([clave, '1' if getattr(a, clave) else '0'])
         if filas:
             cliente().command(CREAR_TABLA)
-            cliente().insert('ajustes', filas, column_names=['clave', 'valor'])
-        return leer()
+            cliente().insert('ajustes_usuario', [[u['email'], *f] for f in filas],
+                             column_names=['email', 'clave', 'valor'])
+        return leer(request)
 
     @router.post('/api/ajustes/prueba')
-    def prueba():
-        """Manda un mensaje de prueba a los canales activos y devuelve lo que ha pasado con cada uno."""
+    def prueba(request: Request):
+        """Manda un mensaje de prueba a los canales de este usuario y devuelve lo que ha pasado con cada uno."""
+        destinos = notificar.canales_de(mis_ajustes(usuario_de(request)))
+        if not destinos:
+            return {'enviados': 0, 'detalle': ['No tienes ningún canal activo: activa el correo o pon tu Teams.']}
         salida = io.StringIO()
         with contextlib.redirect_stdout(salida):
-            enviados = notificar.notificar('Prueba de avisos de Centinela',
-                                           'Si lees esto, este canal recibirá los avisos de fraude.', 'info')
+            enviados = notificar.enviar(destinos, 'Prueba de avisos de Centinela',
+                                        'Si lees esto, aquí recibirás los avisos de fraude.', 'info')
         return {'enviados': enviados, 'detalle': [l for l in salida.getvalue().splitlines() if l.strip()]}
 
     return router

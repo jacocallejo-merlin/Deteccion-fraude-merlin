@@ -3,7 +3,10 @@ Web de los modelos: un informe visual, para dirección, de los modelos que hemos
 
     uvicorn web_modelos.app:app --port 8001 --reload   # desde la raíz del proyecto -> http://localhost:8001
 
-No usa ClickHouse: lee lo que deja el pipeline en disco. Las notas de cada modelo en el examen final
+Solo para el administrador de la entidad (es el informe técnico, no una herramienta del día a día): usa
+la sesión de la web de casos (web/sesiones.py; el navegador
+manda la misma cookie a los dos puertos) y, sin ella, manda a iniciar sesión allí. ClickHouse solo se usa
+para comprobar la sesión; los datos los lee de lo que deja el pipeline en disco. Las notas de cada modelo en el examen final
 (modelos/*_scores_test.parquet), la respuesta real de cada pago (datos_ml/info_test.parquet), cómo se
 entrenaron (modelos/resumen_entrenamiento.json, autoencoder_resumen.json) y las comparativas de resultados/.
 
@@ -18,13 +21,15 @@ import os
 import sys
 from pathlib import Path
 
+import clickhouse_connect
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 RAIZ = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RAIZ))
-from config import CONFIG
+from config import CONFIG, DATABASE, HOST, PASSWORD, PORT, USER
+from web.sesiones import Almacen, ProtegerWeb
 
 ESTATICOS = Path(__file__).resolve().parent / 'static'
 MODELOS = RAIZ / 'modelos'
@@ -83,6 +88,29 @@ FRAUDE_NUEVO = 'cash_out_multicomercio'   # aparece solo en el examen: ningún m
 
 app = FastAPI(title='Centinela · Modelos', docs_url='/api/docs', redoc_url=None)
 app.mount('/static', StaticFiles(directory=ESTATICOS), name='static')
+
+
+def web_casos(request):
+    """Dónde está la web de casos: WEB_CASOS_URL (publicada, "/": la misma dirección) o, si no, la misma
+    máquina en el puerto 8000."""
+    if os.environ.get('WEB_CASOS_URL') is not None:
+        return os.environ['WEB_CASOS_URL'].rstrip('/')
+    return f'{request.url.scheme}://{request.url.hostname}:8000'
+
+
+_conexion = []
+
+
+def cliente():
+    if not _conexion:
+        _conexion.append(clickhouse_connect.get_client(host=HOST, port=PORT, username=USER, password=PASSWORD,
+                                                       database=DATABASE, autogenerate_session_id=False))
+    return _conexion[0]
+
+
+_almacen = Almacen(cliente)
+app.add_middleware(ProtegerWeb, almacen=lambda: _almacen, solo_roles=('administrador',),
+                   login=lambda request: f'{web_casos(request)}/login')
 
 _cache = {'clave': None, 'datos': None}
 

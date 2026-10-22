@@ -28,7 +28,7 @@ const guardar = (clave, valor) => { try { localStorage.setItem(clave, valor); } 
 
 const estado = {
   pestana: 'alertas', comercio: leer('comercio', '0'), filtroEstado: 'pendientes', filtroAvisos: 'no_leidos',
-  usuario: leer('usuario', 'Analista'), demo: leer('demo', '0') === '1', comercios: {},
+  usuario: '', demo: leer('demo', '0') === '1', comercios: {},
   noLeidos: null, caso: null, niveles: ['critico', 'alto'],
   ordenAlertas: leer('ordenAlertas', 'riesgo'), ordenTransacciones: leer('ordenTransacciones', 'reciente'),
 };
@@ -71,7 +71,10 @@ async function api(ruta, parametros = {}, cuerpo = null) {
   if (estado.demo) url.searchParams.set('demo', 'true');
   const opciones = cuerpo ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(cuerpo) } : {};
   const r = await fetch(url, opciones);
+  // Sin sesión (o caducada): a iniciar sesión, y de vuelta aquí al entrar
+  if (r.status === 401 && ruta !== '/api/login') location.href = `/login?volver=${encodeURIComponent(location.href)}`;
   const datos = await r.json().catch(() => ({}));
+  if (r.status === 403 && datos.cambiar_contrasena) location.href = '/login?cambiar=1';   // contraseña provisional
   if (!r.ok) {
     const detalle = Array.isArray(datos.detail) ? datos.detail.map((d) => d.msg).join('; ') : datos.detail;
     throw new Error(detalle || `Error ${r.status}`);
@@ -618,14 +621,24 @@ document.addEventListener('click', (e) => {
 document.getElementById('velo').addEventListener('click', cerrarCaso);
 document.getElementById('cerrar-ficha').addEventListener('click', cerrarCaso);
 
-const botonUsuario = document.getElementById('cambiar-usuario');
-botonUsuario.textContent = estado.usuario;
-botonUsuario.addEventListener('click', () => {
-  const nombre = (window.prompt('¿Quién revisa los casos?', estado.usuario) || '').trim();
-  if (!nombre) return;
-  estado.usuario = nombre.slice(0, 80);
-  guardar('usuario', estado.usuario);
-  botonUsuario.textContent = estado.usuario;
+// Quién ha iniciado sesión (web/sesiones.py). Un comercio solo ve lo suyo: sin selector de comercios,
+// sin la web de modelos ni el modo demostración (el servidor lo impone igualmente)
+function aplicarSesion(s) {
+  estado.sesion = s;
+  estado.usuario = s.nombre;
+  document.getElementById('sesion-nombre').textContent = s.nombre;
+  // La pestaña Cuentas (cuentas.js) y la web de modelos, solo para el administrador de la entidad
+  document.getElementById('nav-cuentas-boton').hidden = s.rol !== 'administrador';
+  document.getElementById('ir-modelos').hidden = s.rol !== 'administrador';
+  if (s.rol === 'comercio') {
+    estado.comercio = String(s.comercio_id);
+    estado.demo = false;
+    ['comercio', 'zona-demo'].forEach((id) => { document.getElementById(id).hidden = true; });
+  }
+}
+document.getElementById('cerrar-sesion').addEventListener('click', async () => {
+  await fetch('/api/logout', { method: 'POST' }).catch(() => {});
+  location.href = '/login';
 });
 const casillaDemo = document.getElementById('modo-demo');
 casillaDemo.checked = estado.demo;
@@ -638,6 +651,7 @@ casillaDemo.addEventListener('change', () => {
 // ------------------------------------------------------------------------------ inicio
 (async () => {
   try {
+    aplicarSesion(await api('/api/sesion'));
     await cargarContexto();
   } catch (e) {
     mostrarError('lista-casos', e);

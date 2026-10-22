@@ -18,7 +18,7 @@ def sin_canales(monkeypatch):
     for v in VARIABLES:
         monkeypatch.delenv(v, raising=False)
     monkeypatch.setitem(notificar._cfg, "correo", {})
-    monkeypatch.setattr(notificar, "ajustes_web", lambda: {})     # sin pantalla de ajustes guardada
+    monkeypatch.setattr(notificar, "usuarios", lambda: [])        # sin usuarios de la web
 
 
 @pytest.fixture
@@ -83,17 +83,28 @@ def test_resumen_de_avisos_en_un_mensaje(envios, monkeypatch):
     assert notificar.notificar_avisos([]) == 0
 
 
-def test_ajustes_de_la_web_mandan_sobre_env(envios, monkeypatch):
-    """Lo que el cliente guarda en la pantalla de ajustes manda sobre .env: otra dirección de Teams,
-    un canal vaciado (= desactivado) y los avisos de fraude apagados."""
-    web = {"teams_webhook_url": "https://teams.ejemplo/del-cliente", "slack_webhook_url": ""}
-    monkeypatch.setattr(notificar, "ajustes_web", lambda: dict(web))
-    assert notificar.notificar("t", "x") == 1
-    assert [u for u, _ in envios] == ["https://teams.ejemplo/del-cliente"]
-    web["avisos_fraude"] = "0"
-    assert notificar.notificar("t", "x", tipo="avisos_fraude") == 0
-    web["avisos_fraude"] = "1"
-    assert notificar.notificar("t", "x", tipo="avisos_fraude") == 1
+def test_avisos_a_cada_usuario(envios, monkeypatch):
+    """Cada usuario recibe en su Teams lo suyo: el analista todos los avisos y los del sistema; el comercio,
+    solo los de sus pagos y sin los nombres de otros comercios; quien los apagó, nada."""
+    monkeypatch.delenv("SLACK_WEBHOOK_URL")
+    def usuario(email, rol, comercio, **ajustes):
+        return {"email": email, "rol": rol, "comercio_id": comercio,
+                **notificar.ajustes_de(rol, {"teams_webhook_url": f"https://teams.ejemplo/{email}", **ajustes})}
+    monkeypatch.setattr(notificar, "usuarios", lambda: [
+        usuario("ana", "analista", 0), usuario("tienda", "comercio", 12),
+        usuario("callado", "analista", 0, avisos_fraude="0", sistema="0")])
+    avisos = [{"dia": "2026-08-02", "nivel": "critico", "comercios": [12, 30],
+               "mensaje": "Tarjeta 1234: 2 pagos sospechosos por 90 € en 2 comercios (Moda Sol, Otra)."},
+              {"dia": "2026-08-02", "nivel": "alto", "comercios": [30], "mensaje": "Tarjeta 9999: de otra tienda."}]
+    assert notificar.notificar_avisos(avisos) == 3               # servidor, ana y tienda
+    textos = {u: [b["text"] for b in c["attachments"][0]["content"]["body"]] for u, c in envios}
+    assert "2 avisos" in textos["https://teams.ejemplo/ana"][0]
+    tienda = textos["https://teams.ejemplo/tienda"]
+    assert "1 aviso" in tienda[0] and "Tarjeta 1234: pagos sospechosos en tu comercio" in tienda[2]
+    assert not any("Otra" in t for t in tienda)
+    envios.clear()
+    assert notificar.notificar("Drift", "x", tipo="drift") == 2    # servidor y ana (el comercio no)
+    assert sorted(u for u, _ in envios) == ["https://teams.ejemplo/ana", "https://teams.ejemplo/flujo"]
 
 
 def test_limpiar_ficheros(tmp_path):
