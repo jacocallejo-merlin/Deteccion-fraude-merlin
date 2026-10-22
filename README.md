@@ -690,6 +690,11 @@ cada reinicio vuelve a la copia de los datos, así que las revisiones hechas en 
 ni puntúa: enseña los datos del momento en que se publicó. El mismo contenedor sirve para Hugging Face Spaces
 (`--huggingface <usuario>/centinela`, que para Docker ya exige el plan PRO).
 
+Al publicar, las fechas se desplazan para que el último día con datos sea el de la publicación: los mismos días,
+con la misma separación, pero al día (la web dice "Datos hasta hoy" aunque la simulación vaya por otra fecha). Solo
+cambia lo publicado; la base de datos del PC y el estado del scoring diario conservan sus fechas. Las horas reales
+(cuándo se creó un aviso o se pulsó en la web) no se tocan. Para publicar sin desplazar: `--fechas-originales`.
+
 ### Actualizarla cada día sola (GitHub Actions)
 
 El workflow `.github/workflows/scoring-diario.yml` hace cada noche, en los servidores de GitHub y sin ningún
