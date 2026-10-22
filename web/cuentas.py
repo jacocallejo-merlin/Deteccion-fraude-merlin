@@ -17,6 +17,7 @@ Los comercios registrados se guardan también en la tabla empresa, que el pipeli
 los datos desde cero (main.py --desde-cero), la web los vuelve a poner en la tabla comercio.
 """
 import json
+import os
 import re
 import time
 from typing import Literal, Optional
@@ -26,12 +27,14 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 import notificar
-from web.sesiones import cifrar, con_sesion, contrasena_provisional, contrasena_valida, usuario_de
+from web.sesiones import (DOMINIO_INVITADO, cifrar, con_sesion, contrasena_provisional, contrasena_valida,
+                          es_invitado, usuario_de)
 
 CORREO = re.compile(r'^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$')
 PRIMER_REGISTRADO = 100_000           # los comercios que se registran, a partir de aquí (no chocan con los de la entidad)
 # Rutas sin sesión (las añade web/app.py a las públicas del middleware) y las solo de administradores
-PUBLICAS = {'/api/recuperar', '/api/recuperar/confirmar', '/api/registro', '/api/registro/confirmar'}
+PUBLICAS = {'/api/recuperar', '/api/recuperar/confirmar', '/api/registro', '/api/registro/confirmar',
+            '/api/invitado'}
 DE_ADMINISTRADORES = ('/api/cuentas',)
 CAMPOS_EMPRESA = ['nombre', 'cif', 'categoria', 'pais', 'ciudad', 'direccion', 'telefono', 'web']
 
@@ -109,6 +112,19 @@ def correo_valido(email):
     return email
 
 
+class Invitado(BaseModel):
+    rol: Literal['administrador', 'analista', 'comercio']
+
+
+def invitados_permitidos(request):
+    """Entrar como invitado, para enseñar o probar la web: en este equipo (localhost) o si se activa con
+    MODO_INVITADO=1 (la web publicada para el tutor). En una instalación de verdad, apagado."""
+    valor = os.environ.get('MODO_INVITADO', '').strip().lower()
+    if valor in ('0', 'no', 'false'):
+        return False
+    return valor in ('1', 'si', 'sí', 'true') or request.url.hostname in ('localhost', '127.0.0.1', 'testserver')
+
+
 def en_local(request):
     """¿Se puede enseñar el código en pantalla? Solo sin servidor de correo y abriendo la web en este equipo."""
     return notificar._correo_config(['x@x.x']) is None and request.url.hostname in ('localhost', '127.0.0.1', 'testserver')
@@ -140,6 +156,26 @@ def crear_router(almacen, nombre_comercio, cliente):
         if notificar._correo_config([email]) is None:
             print(f'Centinela: código de {proposito} para {email}: {codigo} (no hay servidor de correo)', flush=True)
         return {'codigo_demo': codigo} if en_local(request) else {}
+
+    # ------------------------------------------------------------------ entrar como invitado
+    @router.get('/api/invitado')
+    def hay_invitados(request: Request):
+        return {'disponible': invitados_permitidos(request)}
+
+    @router.post('/api/invitado')
+    def entrar_como_invitado(i: Invitado, request: Request):
+        """Una cuenta de solo lectura por rol (el comercio de invitado es el primero de los datos, con historial).
+        Su contraseña es aleatoria y no se enseña: solo se entra por aquí."""
+        if not invitados_permitidos(request):
+            raise HTTPException(404, 'Not Found')
+        email = f'{i.rol}{DOMINIO_INVITADO}'
+        if almacen().usuario(email) is None:
+            comercio = cliente().query('SELECT min(comercio_id) FROM comercio').result_rows[0][0] if i.rol == 'comercio' else 0
+            nombre = {'administrador': 'Invitado (administrador)', 'analista': 'Invitado (analista)',
+                      'comercio': 'Invitado (comercio)'}[i.rol]
+            almacen().guardar_usuario(email, nombre, i.rol, comercio, contrasena_provisional() * 3,
+                                      revisada_por='invitado')
+        return con_sesion(JSONResponse({'rol': i.rol, 'invitado': True}), request, almacen(), email, False)
 
     # ------------------------------------------------------------------ contraseña olvidada
     @router.post('/api/recuperar')
@@ -246,6 +282,8 @@ def crear_router(almacen, nombre_comercio, cliente):
         nombres = {}
         filas = []
         for c in almacen().cuentas():
+            if es_invitado(c):
+                continue                          # las de invitado no son de nadie: no se gestionan
             if c['comercio_id'] and c['comercio_id'] not in nombres:
                 nombres[c['comercio_id']] = nombre_comercio(c['comercio_id'])
             filas.append({**c, 'comercio': nombres.get(c['comercio_id'])})

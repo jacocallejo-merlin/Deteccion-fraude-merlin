@@ -627,6 +627,7 @@ function aplicarSesion(s) {
   estado.sesion = s;
   estado.usuario = s.nombre;
   document.getElementById('sesion-nombre').textContent = s.nombre;
+  document.getElementById('barra-invitado').hidden = !s.invitado;      // modo invitado: solo mirar
   // La pestaña Cuentas (cuentas.js) y la web de modelos, solo para el administrador de la entidad
   document.getElementById('nav-cuentas-boton').hidden = s.rol !== 'administrador';
   document.getElementById('ir-modelos').hidden = s.rol !== 'administrador';
@@ -636,6 +637,7 @@ function aplicarSesion(s) {
     ['comercio', 'zona-demo'].forEach((id) => { document.getElementById(id).hidden = true; });
   }
 }
+document.getElementById('salir-invitado').addEventListener('click', () => document.getElementById('cerrar-sesion').click());
 document.getElementById('cerrar-sesion').addEventListener('click', async () => {
   await fetch('/api/logout', { method: 'POST' }).catch(() => {});
   location.href = '/login';

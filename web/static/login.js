@@ -8,8 +8,10 @@ const parametros = new URLSearchParams(location.search);
 let provisional = '';            // la contraseña con la que se acaba de entrar, si hay que cambiarla
 
 function destino() {
+  const volver = parametros.get('volver');
+  if (!volver) return '/';
   try {
-    const url = new URL(parametros.get('volver'), location.origin);
+    const url = new URL(volver, location.origin);
     if (url.hostname === location.hostname && !url.pathname.startsWith('/login')) return url.href;
   } catch (e) { /* sin volver o no válido: a la portada */ }
   return '/';
@@ -105,6 +107,17 @@ alEnviar('form-cambiar', 'm-cambiar', async () => {
   await enviar('/api/perfil/contrasena', { actual: provisional || $('k-actual').value, nueva: $('k-nueva').value });
   location.href = destino();
 });
+
+// ------------------------------------------------------------------ entrar como invitado (solo mirar)
+fetch('/api/invitado').then((r) => r.json()).then((d) => { $('zona-invitado').hidden = !d.disponible; }).catch(() => {});
+document.querySelectorAll('[data-invitado]').forEach((b) => b.addEventListener('click', async () => {
+  try {
+    await enviar('/api/invitado', { rol: b.dataset.invitado });
+    location.href = destino();
+  } catch (err) {
+    $('m-entrar').textContent = err.message;
+  }
+}));
 
 // Llegar con una sesión que aún tiene la contraseña provisional (la web manda aquí con ?cambiar=1)
 if (parametros.get('cambiar')) verVista('vista-cambiar');

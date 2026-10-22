@@ -452,3 +452,13 @@ tr.apagada td { color: var(--suave); }
 .demo-codigo { margin: 0; padding: 10px 12px; border-radius: var(--radio); background: #3A3214; color: #F3D98B; font-size: 14px; }
 .dos-campos { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 @media (max-width: 520px) { .dos-campos { grid-template-columns: 1fr; } }
+
+/* ============================================================ modo invitado */
+.login .invitado { margin-top: 10px; padding-top: 16px; border-top: 1px solid var(--linea-noche); }
+.login .invitado .sub { margin: 0 0 10px; }
+.botones-invitado { display: flex; gap: 8px; flex-wrap: wrap; }
+.login .boton.secundario-noche { background: transparent; border: 1px solid var(--linea-noche); color: var(--sobre-noche);
+  padding: 8px 12px; }
+.login .boton.secundario-noche:hover { border-color: var(--sobre-noche-suave); background: #16303A; }
+.barra-invitado { background: #F3D98B; color: #3A3214; text-align: center; padding: 7px 16px; font-size: 14px; }
+.barra-invitado .enlace { color: #3A3214; text-decoration: underline; margin-left: 8px; }

@@ -52,6 +52,8 @@ ESTATICOS_SESION = Path(__file__).resolve().parent / 'static'
 LOGIN_HTML = ESTATICOS_SESION / 'login.html'
 # Con una contraseña provisional solo se puede cambiarla (y ver quién eres o salir)
 SIN_CAMBIAR_CONTRASENA = {'/api/sesion', '/api/logout', '/api/perfil/contrasena'}
+# Las cuentas de invitado (para enseñar la web sin contraseñas, ver web/cuentas.py) solo pueden mirar
+DOMINIO_INVITADO = '@invitado.centinela'
 
 TABLAS = ['''
     CREATE TABLE IF NOT EXISTS usuarios (
@@ -128,6 +130,10 @@ def en_utc(fila, *columnas):
         if isinstance(fila.get(c), datetime) and fila[c].tzinfo is None:
             fila[c] = fila[c].replace(tzinfo=timezone.utc)
     return fila
+
+
+def es_invitado(usuario):
+    return usuario['email'].endswith(DOMINIO_INVITADO)
 
 
 def ve_todo(usuario):
@@ -335,6 +341,8 @@ class ProtegerWeb:
                 return await _json(401, 'Inicia sesión para ver estos datos')(scope, receive, send)
             destino = f'{self.login(request)}?volver={quote(str(request.url), safe="")}'
             return await RedirectResponse(destino, status_code=303)(scope, receive, send)
+        if es_invitado(usuario) and scope['method'] not in ('GET', 'HEAD') and ruta != '/api/logout':
+            return await _json(403, 'Estás como invitado: puedes mirarlo todo, pero no cambiar nada')(scope, receive, send)
         if usuario['cambiar_contrasena'] and ruta not in SIN_CAMBIAR_CONTRASENA:
             if es_api:
                 return await _json(403, 'Antes tienes que cambiar tu contraseña provisional',
@@ -454,7 +462,7 @@ def crear_router(almacen, nombre_comercio=lambda comercio_id: None):
     @router.get('/api/sesion')
     def sesion(request: Request):
         u = usuario_de(request)
-        return {**u, 'cambiar_contrasena': bool(u['cambiar_contrasena']),
+        return {**u, 'cambiar_contrasena': bool(u['cambiar_contrasena']), 'invitado': es_invitado(u),
                 'comercio_nombre': nombre_comercio(u['comercio_id']) if u['rol'] == 'comercio' else None}
 
     # ------------------------------------------------------------------ Mi perfil

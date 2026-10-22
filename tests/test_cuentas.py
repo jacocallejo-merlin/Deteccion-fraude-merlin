@@ -209,3 +209,27 @@ def test_cerrar_la_sesion_en_otros_equipos(entorno):
     entrar(otro_equipo, entorno["email"]("analista"))
     assert entorno["analista"].post("/api/perfil/cerrar-otras", json={}).json()["cerradas"] >= 1
     assert otro_equipo.get("/api/sesion").status_code == 401
+
+
+# ---------------------------------------------------------------------------- entrar como invitado
+def test_invitado_solo_mira(entorno):
+    for rol in ["administrador", "analista", "comercio"]:
+        invitado = TestClient(entorno["app"])
+        assert invitado.get("/api/invitado").json() == {"disponible": True}        # en local, sí
+        assert invitado.post("/api/invitado", json={"rol": rol}).status_code == 200
+        s = invitado.get("/api/sesion").json()
+        assert s["rol"] == rol and s["invitado"] is True
+        assert invitado.get("/api/contexto").status_code == 200                    # mira
+        r = invitado.post("/api/perfil", json={"nombre": "Otro nombre"})           # pero no cambia nada
+        assert r.status_code == 403 and "invitado" in r.json()["detail"]
+        assert invitado.post("/api/logout").status_code == 200                     # salir, sí
+    # No salen en la pestaña Cuentas: no son de nadie
+    assert not any(c["email"].endswith("@invitado.centinela")
+                   for c in entorno["admin"].get("/api/cuentas").json()["cuentas"])
+
+
+def test_invitado_apagado(entorno, monkeypatch):
+    monkeypatch.setenv("MODO_INVITADO", "0")
+    anonimo = TestClient(entorno["app"])
+    assert anonimo.get("/api/invitado").json() == {"disponible": False}
+    assert anonimo.post("/api/invitado", json={"rol": "administrador"}).status_code == 404

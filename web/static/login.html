@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400..800&display=swap">
-  <link rel="stylesheet" href="/static/estilos.css?v=20">
+  <link rel="stylesheet" href="/static/estilos.css?v=21">
 </head>
 <body class="pagina-login">
   <main class="login noche">
@@ -34,6 +34,14 @@
       <p class="sub"><button type="button" class="enlace-noche" data-vista="vista-olvido">¿Has olvidado tu contraseña?</button></p>
       <p class="sub">¿Eres un comercio y aún no tienes cuenta?
         <button type="button" class="enlace-noche" data-vista="vista-registro">Regístrate</button></p>
+      <div class="invitado" id="zona-invitado" hidden>
+        <p class="sub">¿Solo quieres echar un vistazo? Entra como invitado (puedes mirarlo todo, pero no cambiar nada):</p>
+        <div class="botones-invitado">
+          <button type="button" class="boton secundario-noche" data-invitado="administrador">Administrador</button>
+          <button type="button" class="boton secundario-noche" data-invitado="analista">Analista</button>
+          <button type="button" class="boton secundario-noche" data-invitado="comercio">Comercio</button>
+        </div>
+      </div>
     </section>
 
     <!-- ============================================================ contraseña olvidada: 1, el correo -->
@@ -137,6 +145,6 @@
       </form>
     </section>
   </main>
-  <script src="/static/login.js?v=4"></script>
+  <script src="/static/login.js?v=6"></script>
 </body>
 </html>
