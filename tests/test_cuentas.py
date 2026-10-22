@@ -95,9 +95,14 @@ def test_registro_de_un_comercio(entorno):
     # Configura tu empresa: la primera vez, sin configurar y sin pagos
     e = nuevo.get("/api/empresa").json()
     assert e["configurada"] is False and e["registrada"] is True and e["pagos"] == 0 and e["sectores"]
-    e = nuevo.post("/api/empresa", json={"nombre": "Tienda Tests", "cif": "B12345678", "categoria": "moda",
-                                         "pais": "España", "ciudad": "Vigo", "telefono": "986000000"}).json()
-    assert e["configurada"] is True and e["cif"] == "B12345678"
+    empresa = {"nombre": "Tienda Tests", "cif": "b-1234567-4", "categoria": "moda", "pais": "España",
+               "ciudad": "Vigo", "telefono": "986 000 000"}
+    for campo in ["nombre", "cif", "telefono", "ciudad"]:                    # obligatorios
+        assert nuevo.post("/api/empresa", json={**empresa, campo: ""}).status_code == 422, campo
+    assert nuevo.post("/api/empresa", json={**empresa, "cif": "B12345675"}).status_code == 422   # control mal
+    assert nuevo.post("/api/empresa", json={**empresa, "telefono": "1234"}).status_code == 422
+    e = nuevo.post("/api/empresa", json=empresa).json()
+    assert e["configurada"] is True and e["cif"] == "B12345674"             # limpio: sin guiones y en mayúsculas
     assert nuevo.get("/api/sesion").json()["comercio_nombre"] == "Tienda Tests"   # el nombre, también en comercio
     # Solo ve lo suyo: ni los demás comercios ni la gestión de cuentas
     assert [c["id"] for c in nuevo.get("/api/contexto").json()["comercios"]] == [s["comercio_id"]]
@@ -110,6 +115,7 @@ def test_registro_no_valido(entorno):
     anonimo = TestClient(entorno["app"])
     datos = {"empresa": "Otra", "nombre": "Otro", "email": entorno["email"]("otra"), "contrasena": CONTRASENA}
     assert anonimo.post("/api/registro", json={**datos, "contrasena": "corta"}).status_code == 422
+    assert anonimo.post("/api/registro", json={**datos, "contrasena": "sinsimbolo123"}).status_code == 422   # sin símbolo
     assert anonimo.post("/api/registro", json={**datos, "email": "no-es-un-correo"}).status_code == 422
     assert anonimo.post("/api/registro", json={**datos, "email": entorno["email"]("analista")}).status_code == 409
     anonimo.post("/api/registro", json=datos)

@@ -261,30 +261,30 @@
         <input id="em-nombre" type="text" required minlength="2" maxlength="120" autocomplete="off">
       </label>
       <div class="dos-campos">
-        <label class="campo">CIF o NIF
-          <input id="em-cif" type="text" maxlength="20" autocomplete="off">
+        <label class="campo">NIF o CIF
+          <input id="em-cif" type="text" required maxlength="20" autocomplete="off" placeholder="B12345674">
         </label>
         <label class="campo">Sector
-          <input id="em-categoria" type="text" maxlength="40" list="em-sectores" placeholder="Por ejemplo: moda">
+          <input id="em-categoria" type="text" required maxlength="40" list="em-sectores" placeholder="Por ejemplo: moda">
           <datalist id="em-sectores"></datalist>
         </label>
       </div>
       <div class="dos-campos">
         <label class="campo">País
-          <input id="em-pais" type="text" maxlength="40" autocomplete="country-name">
+          <input id="em-pais" type="text" required maxlength="40" autocomplete="country-name" placeholder="España">
         </label>
         <label class="campo">Ciudad
-          <input id="em-ciudad" type="text" maxlength="60" autocomplete="address-level2">
+          <input id="em-ciudad" type="text" required maxlength="60" autocomplete="address-level2">
         </label>
       </div>
-      <label class="campo">Dirección
+      <label class="campo">Dirección (opcional)
         <input id="em-direccion" type="text" maxlength="200" autocomplete="street-address">
       </label>
       <div class="dos-campos">
         <label class="campo">Teléfono
-          <input id="em-telefono" type="tel" maxlength="30" autocomplete="tel">
+          <input id="em-telefono" type="tel" required maxlength="30" autocomplete="tel" placeholder="981 123 456">
         </label>
-        <label class="campo">Web
+        <label class="campo">Web (opcional)
           <input id="em-web" type="text" maxlength="200" placeholder="www.miempresa.com" autocomplete="url">
         </label>
       </div>
@@ -319,7 +319,7 @@
       </label>
       <label class="campo">Contraseña nueva
         <input id="pf-nueva" type="password" required minlength="8" autocomplete="new-password">
-        <span class="sub">Al menos 8 caracteres. Se cerrará la sesión en los demás equipos.</span>
+        <span class="sub">Al menos 8 caracteres y algún símbolo (! . - _ @). Se cerrará la sesión en los demás equipos.</span>
       </label>
       <label class="campo">Repite la nueva
         <input id="pf-repetida" type="password" required minlength="8" autocomplete="new-password">
@@ -383,6 +383,6 @@
   <script src="/static/ajustes.js?v=3"></script>
   <script src="/static/cuentas.js?v=4"></script>
   <script src="/static/perfil.js?v=2"></script>
-  <script src="/static/empresa.js?v=2"></script>
+  <script src="/static/empresa.js?v=3"></script>
 </body>
 </html>

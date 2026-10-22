@@ -108,15 +108,19 @@ def comprobar(contrasena, sal, hash_guardado):
 
 
 def contrasena_valida(contrasena):
-    if len(contrasena) < MINIMO_CONTRASENA:
-        raise HTTPException(422, f'La contraseña tiene que tener al menos {MINIMO_CONTRASENA} caracteres')
+    """Al menos 8 caracteres y al menos un símbolo (algo que no sea letra ni número: ! . - _ @ ...)."""
+    if len(contrasena) < MINIMO_CONTRASENA or contrasena.isalnum():
+        raise HTTPException(422, f'La contraseña tiene que tener al menos {MINIMO_CONTRASENA} caracteres y algún '
+                                 'símbolo (por ejemplo ! . - _ @)')
     return contrasena
 
 
 def contrasena_provisional():
-    """Fácil de dictar: sin letras que se confundan (0/O, 1/l)."""
+    """Fácil de dictar (sin letras que se confundan, como 0/O o 1/l) y con un símbolo, como las demás."""
     letras = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789'
-    return ''.join(secrets.choice(letras) for _ in range(10))
+    texto = ''.join(secrets.choice(letras) for _ in range(9))
+    return f'{texto[:5]}-{texto[5:]}'
+
 
 
 def huella_codigo(email, codigo):

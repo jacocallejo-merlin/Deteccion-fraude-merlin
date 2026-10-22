@@ -81,14 +81,54 @@ class Confirmacion(BaseModel):
 
 
 class Empresa(BaseModel):
-    nombre: str = Field(min_length=2, max_length=120)
-    cif: str = Field('', max_length=20)
-    categoria: str = Field('', max_length=40)
-    pais: str = Field('', max_length=40)
-    ciudad: str = Field('', max_length=60)
+    """Obligatorios: nombre, NIF/CIF, sector, país, ciudad y teléfono. Opcionales: dirección y web."""
+    nombre: str = Field(max_length=120)
+    cif: str = Field(max_length=20)
+    categoria: str = Field(max_length=40)
+    pais: str = Field(max_length=40)
+    ciudad: str = Field(max_length=60)
     direccion: str = Field('', max_length=200)
-    telefono: str = Field('', max_length=30)
+    telefono: str = Field(max_length=30)
     web: str = Field('', max_length=200)
+
+
+LETRAS_DNI = 'TRWAGMYFPDXBNJZSQVHLCKE'
+
+
+def nif_espanol_valido(nif):
+    """NIF de persona (12345678Z), NIE (X1234567L) o CIF de empresa (B12345674), con su letra o dígito de control."""
+    if re.fullmatch(r'\d{8}[A-Z]', nif):
+        return nif[-1] == LETRAS_DNI[int(nif[:8]) % 23]
+    if re.fullmatch(r'[XYZ]\d{7}[A-Z]', nif):
+        return nif[-1] == LETRAS_DNI[int('XYZ'.index(nif[0]).__str__() + nif[1:8]) % 23]
+    if re.fullmatch(r'[ABCDEFGHJNPQRSUVW]\d{7}[0-9A-J]', nif):
+        cifras = [int(c) for c in nif[1:8]]
+        pares = sum(cifras[1::2])
+        impares = sum(sum(divmod(2 * c, 10)) for c in cifras[0::2])
+        control = (10 - (pares + impares) % 10) % 10
+        return nif[-1] in (str(control), 'JABCDEFGHI'[control])
+    return False
+
+
+def validar_empresa(e):
+    """Los datos de la empresa, limpios. Lanza un 422 que dice qué falta o qué está mal."""
+    v = {k: getattr(e, k).strip() for k in CAMPOS_EMPRESA}
+    nombres = {'nombre': 'el nombre comercial', 'cif': 'el NIF o CIF', 'categoria': 'el sector', 'pais': 'el país',
+               'ciudad': 'la ciudad', 'telefono': 'el teléfono'}
+    faltan = [texto for campo, texto in nombres.items() if not v[campo]]
+    if faltan:
+        raise HTTPException(422, 'Falta ' + ', '.join(faltan))
+    if len(v['nombre']) < 2:
+        raise HTTPException(422, 'El nombre comercial es demasiado corto')
+    v['cif'] = re.sub(r'[\s.-]', '', v['cif']).upper()
+    if v['pais'].lower() in ('españa', 'espana', 'spain', 'es'):
+        if not nif_espanol_valido(v['cif']):
+            raise HTTPException(422, 'Ese NIF o CIF no es válido (comprueba la letra o el último dígito)')
+    elif not re.fullmatch(r'[A-Z0-9]{5,15}', v['cif']):
+        raise HTTPException(422, 'Ese número de identificación fiscal no es válido')
+    if len(re.sub(r'\D', '', v['telefono'])) < 9 or not re.fullmatch(r'\+?[\d\s()-]{9,25}', v['telefono']):
+        raise HTTPException(422, 'Ese teléfono no es válido (al menos 9 cifras)')
+    return v
 
 
 class NuevaCuenta(BaseModel):
@@ -283,7 +323,7 @@ def crear_router(almacen, nombre_comercio, cliente):
     def guardar_empresa(e: Empresa, request: Request):
         u = solo_comercios(request)
         antes = mi_empresa(u['comercio_id'])
-        valores = {k: getattr(e, k).strip() for k in CAMPOS_EMPRESA}
+        valores = validar_empresa(e)
         cliente().insert('empresa', [[u['comercio_id'], *valores.values(), antes['registrada'], 1]],
                          column_names=['comercio_id', *CAMPOS_EMPRESA, 'registrada', 'configurada'])
         # El nombre, el sector y la ciudad, también donde los leen las webs y el pipeline
