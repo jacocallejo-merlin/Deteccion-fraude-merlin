@@ -39,16 +39,21 @@ SALIDA = RAIZ / 'despliegue' / '_contenedor'
 # Lo que necesitan las webs, relativo a la raíz del proyecto
 CODIGO = ['config.py', 'config.yaml', 'pipeline/generar_avisos.py', 'pipeline/notificar.py',
           'web', 'web_modelos/app.py', 'web_modelos/static']
-# Nunca salen del PC: los ajustes de avisos (web/ajustes.py) guardan el enlace de Teams/Slack y los correos
-PRIVADAS = {'ajustes'}
+# Nunca salen del PC: los ajustes de avisos (web/ajustes.py) guardan el enlace de Teams/Slack y los correos, y
+# las sesiones abiertas y los códigos de 6 cifras darían acceso a una cuenta
+PRIVADAS = {'ajustes', 'ajustes_usuario', 'sesiones', 'codigos'}
 # Las tablas que consultan las webs (web/app.py y generar_avisos.py) y las que leen sus vistas. Las de entrenamiento
 # (anomaly_scores, evento, sesion...) no se suben: no hacen falta y no cabrían en la memoria del plan gratuito.
 TABLAS = {'alerta', 'analista', 'aviso', 'aviso_leido', 'cliente', 'comercio', 'features_transaccion',
           'feedback_analistas', 'metodo_pago', 'patron', 'revision_web', 'riesgo_transaccion', 'transaccion',
-          'transacciones_enriquecidas'}
+          'transacciones_enriquecidas',
+          # Las cuentas de la web (web/sesiones.py), para entrar en la publicada con los mismos correos y contraseñas
+          # que en este PC (las contraseñas van cifradas), y los datos de los comercios registrados (web/cuentas.py)
+          'usuarios', 'empresa'}
 # Las fechas que no se desplazan: no son del calendario de la simulación sino la hora real del ordenador en que se
 # escribieron (cuándo se creó el aviso, cuándo pulsó alguien en la web)
-HORA_REAL = {('aviso', 'creado'), ('aviso_leido', 'leido'), ('revision_web', 'fecha_real')}
+HORA_REAL = {('aviso', 'creado'), ('aviso_leido', 'leido'), ('revision_web', 'fecha_real'),
+             ('usuarios', 'creada'), ('usuarios', 'actualizado'), ('empresa', 'actualizado')}
 
 
 def copiar(relativa):

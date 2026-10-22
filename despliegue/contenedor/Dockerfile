@@ -32,7 +32,8 @@ ENV CLICKHOUSE_HOST=127.0.0.1 \
     CLICKHOUSE_PASSWORD=centinela-local \
     CLICKHOUSE_WATCHDOG_ENABLE=0 \
     WEB_MODELOS_URL=/modelos/ \
-    WEB_CASOS_URL=/
+    WEB_CASOS_URL=/ \
+    MODO_INVITADO=1
 
 EXPOSE 7860
 CMD ["sh", "arrancar.sh"]
