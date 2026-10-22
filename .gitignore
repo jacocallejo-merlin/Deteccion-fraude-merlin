@@ -15,3 +15,7 @@ __pycache__/
 *.pyc
 # Configuracion local de Claude Code (no es del proyecto)
 .claude/
+
+# Contenedor de publicación que arma despliegue/publicar.py
+despliegue/_contenedor/
+despliegue/_estado/

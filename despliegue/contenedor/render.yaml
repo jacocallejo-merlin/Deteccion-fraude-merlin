@@ -1,0 +1,10 @@
+# Blueprint de Render: en https://dashboard.render.com, New > Blueprint y elegir el repositorio que sube
+# despliegue/publicar.py --git. Un servicio web gratuito construido con el Dockerfile de esta carpeta.
+services:
+  - type: web
+    name: centinela
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/salud
+    autoDeploy: true

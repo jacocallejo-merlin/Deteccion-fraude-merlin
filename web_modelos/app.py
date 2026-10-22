@@ -7,15 +7,17 @@ No usa ClickHouse: lee lo que deja el pipeline en disco. Las notas de cada model
 (modelos/*_scores_test.parquet), la respuesta real de cada pago (datos_ml/info_test.parquet), cómo se
 entrenaron (modelos/resumen_entrenamiento.json, autoencoder_resumen.json) y las comparativas de resultados/.
 
+Publicada en internet (despliegue/publicar.py) no lee esos archivos: sirve publicado.json, el mismo resultado
+calculado al publicar, y así el contenedor no necesita pandas.
+
 Todos los modelos se comparan en igualdad de condiciones: cada uno puede avisar del mismo número de pagos
 que el equipo revisa al día (~1 % de los pagos, el "presupuesto" de la comparativa).
 """
 import json
+import os
 import sys
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -28,6 +30,7 @@ ESTATICOS = Path(__file__).resolve().parent / 'static'
 MODELOS = RAIZ / 'modelos'
 RESULTADOS = RAIZ / 'resultados'
 INFO_TEST = RAIZ / 'datos_ml' / 'info_test.parquet'
+PUBLICADO = Path(__file__).resolve().parent / 'publicado.json'   # solo existe en el contenedor publicado
 
 # Cada modelo en lenguaje claro: la idea en una frase
 DETECTORES = {
@@ -95,6 +98,9 @@ def _leer_json(ruta):
 
 
 def _calcular():
+    import numpy as np    # aquí y no arriba: la web publicada no los carga (ver PUBLICADO)
+    import pandas as pd
+
     info = pd.read_parquet(INFO_TEST)
     comparativa = pd.read_csv(RESULTADOS / 'comparativa_test.csv').set_index('detector')
     y = info['es_fraude'].to_numpy().astype(bool)
@@ -178,6 +184,10 @@ def pagina():
 @app.get('/api/modelos')
 def modelos():
     """Todo lo que enseña la página. Se recalcula solo si el pipeline ha cambiado algún archivo."""
+    if PUBLICADO.exists():
+        if _cache['clave'] != 'publicado':
+            _cache['datos'], _cache['clave'] = json.loads(PUBLICADO.read_text(encoding='utf-8')), 'publicado'
+        return {**_cache['datos'], 'web_casos': os.getenv('WEB_CASOS_URL')}
     faltan = [str(a.relative_to(RAIZ)) for a in _archivos() if not a.exists()]
     if faltan:
         raise HTTPException(503, 'Faltan los resultados de los modelos (' + ', '.join(faltan[:3])
@@ -189,4 +199,5 @@ def modelos():
         except Exception as e:
             raise HTTPException(503, f'No se han podido leer los resultados de los modelos: {str(e)[:200]}')
         _cache['clave'] = clave
-    return _cache['datos']
+    # la web de casos: la que diga WEB_CASOS_URL (despliegue con una sola dirección) o, si no, el puerto 8000
+    return {**_cache['datos'], 'web_casos': os.getenv('WEB_CASOS_URL')}

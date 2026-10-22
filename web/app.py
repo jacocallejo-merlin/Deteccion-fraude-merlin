@@ -17,6 +17,7 @@ alertas.dias_cierre días sin él. Revisar a mano es opcional y adelanta el cier
 "Ahora" es la hora de los datos, no la del ordenador: el final del último día puntuado. Así una
 demo con datos de 2026 se comporta como si el sistema estuviera en marcha ese día.
 """
+import os
 import sys
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -290,7 +291,8 @@ def contexto():
     """La hora de los datos y la lista de comercios para el selector."""
     hoy, ahora, inicio = reloj()
     comercios = filas('SELECT comercio_id AS id, nombre, categoria_negocio AS categoria FROM comercio ORDER BY nombre')
-    return {'hoy': hoy, 'ahora': ahora, 'inicio': inicio, 'comercios': comercios, 'niveles': NIVELES}
+    return {'hoy': hoy, 'ahora': ahora, 'inicio': inicio, 'comercios': comercios, 'niveles': NIVELES,
+            'web_modelos': os.getenv('WEB_MODELOS_URL')}   # sin ella, el enlace va al puerto 8001
 
 
 # ---------------------------------------------------------------------------------- el día

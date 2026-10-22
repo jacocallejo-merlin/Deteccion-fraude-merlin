@@ -1,0 +1,81 @@
+# Scoring diario en la nube: cada noche añade un día de pagos, lo puntúa y actualiza la web publicada en Render,
+# sin que nadie tenga que tener el ordenador encendido (lo mismo que el DAG fraude_scoring de Airflow).
+#
+#   1. Recupera el estado del día anterior (base de datos y modelos) de la rama "estado" del repositorio de la web
+#   2. python main.py --scoring
+#   3. Guarda el estado nuevo en esa rama y publica la web (Render se reconstruye solo con cada publicación)
+#
+# Necesita, en Settings > Secrets and variables > Actions de este repositorio, el secreto CENTINELA_WEB_TOKEN:
+# un token de GitHub con permiso de escritura (Contents: Read and write) sobre el repositorio de la web.
+# La primera vez, el estado se sube desde el PC: python despliegue/estado.py guardar --git <URL del repositorio>
+name: scoring diario
+
+on:
+  schedule:
+    - cron: "0 2 * * *"       # 02:00 UTC = 03:00 en invierno, 04:00 en verano (hora de Madrid)
+  workflow_dispatch:          # también se puede lanzar a mano desde la pestaña Actions
+
+concurrency:
+  group: scoring-diario       # nunca dos a la vez: las dos escribirían el mismo estado
+  cancel-in-progress: false
+
+jobs:
+  scoring:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:26.9     # la misma que docker-compose.yml y k8s/
+        env:
+          CLICKHOUSE_USER: default
+          CLICKHOUSE_PASSWORD: password
+          CLICKHOUSE_DB: fraude_pagos
+        ports:
+          - 8123:8123
+        options: >-
+          --health-cmd "wget --spider -q http://localhost:8123/ping"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+
+    env:
+      # lo que lee config.py (la contraseña es la del servicio de arriba, solo existe en el CI)
+      CLICKHOUSE_HOST: localhost
+      CLICKHOUSE_PASSWORD: password
+      PYTHONIOENCODING: utf-8
+      # repositorio de la web publicada; se puede cambiar con la variable CENTINELA_WEB_REPO (usuario/repositorio)
+      REPO_WEB: https://x-access-token:${{ secrets.CENTINELA_WEB_TOKEN }}@github.com/${{ vars.CENTINELA_WEB_REPO || 'jacocallejo-merlin/centinela-web' }}.git
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements-pipeline.txt
+
+      - name: Dependencias
+        # torch solo CPU, como en el Dockerfile: la de PyPI trae CUDA y ocupa varios GB
+        run: |
+          pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements-pipeline.txt
+
+      - name: Comprobar el token
+        run: |
+          if [ -z "${{ secrets.CENTINELA_WEB_TOKEN }}" ]; then
+            echo "::error::Falta el secreto CENTINELA_WEB_TOKEN (ver la cabecera de este archivo)"; exit 1
+          fi
+          git config --global user.name "Centinela (scoring diario)"
+          git config --global user.email "centinela@users.noreply.github.com"
+
+      - name: Recuperar el estado del día anterior
+        run: python despliegue/estado.py restaurar --git "$REPO_WEB" --sobrescribir
+
+      - name: Scoring de un día nuevo
+        run: python main.py --scoring
+
+      - name: Guardar el estado
+        run: python despliegue/estado.py guardar --git "$REPO_WEB"
+
+      - name: Publicar la web
+        run: python despliegue/publicar.py --git "$REPO_WEB"

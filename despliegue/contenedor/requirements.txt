@@ -1,0 +1,9 @@
+# Lo que usan las dos webs, con las mismas versiones que requirements-pipeline.txt. Sin pandas ni pyarrow:
+# la web de modelos sirve sus cifras ya calculadas (web_modelos/publicado.json)
+clickhouse-connect==1.8.0
+fastapi==0.143.2
+uvicorn==0.54.0
+numpy==2.5.3
+python-dotenv==1.2.3
+PyYAML==6.0.3
+tzdata==2026.4

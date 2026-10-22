@@ -3,9 +3,6 @@
 // encuentra?". La responde el bloque más grande (los 201 fraudes del examen, marcados por cada modelo) y su cifra,
 // la mayor de la pantalla. Todo se dibuja desde /api/modelos; los totales salen de las filas.
 
-// La web de casos corre en la misma máquina, en el puerto 8000 (local, Docker y port-forward de k8s)
-document.getElementById('ir-casos').href = `${location.protocol}//${location.hostname}:8000/`;
-
 const nf = new Intl.NumberFormat('es-ES');
 const num = (n) => nf.format(n);
 const pct = (v) => `${nf.format(Math.round(v))} %`;
@@ -397,10 +394,12 @@ function pintarTodo() {
 
 async function cargar() {
   try {
-    const r = await fetch('/api/modelos');
+    const r = await fetch('api/modelos');   // relativa: funciona en / y colgando de /modelos/
     const datos = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(datos.detail || `Error ${r.status}`);
     estado.datos = datos;
+    // La web de casos: la que diga el servidor o, si no, la misma máquina en el puerto 8000
+    document.getElementById('ir-casos').href = datos.web_casos || `${location.protocol}//${location.hostname}:8000/`;
     if (document.fonts && document.fonts.ready) await document.fonts.ready;   // las etiquetas se miden con la fuente cargada
     pintarTodo();
   } catch (e) {

@@ -1,0 +1,30 @@
+<!-- Un único usuario, con la contraseña de la variable CLICKHOUSE_PASSWORD (Dockerfile) y solo desde localhost.
+     Consultas con pocos hilos y memoria acotada (ver clickhouse.xml). -->
+<clickhouse>
+    <profiles>
+        <default>
+            <max_threads>2</max_threads>
+            <max_memory_usage>157286400</max_memory_usage>   <!-- 150 MB por consulta -->
+            <max_insert_threads>1</max_insert_threads>
+            <max_block_size>8192</max_block_size>
+            <input_format_parallel_parsing>0</input_format_parallel_parsing>
+            <output_format_parallel_formatting>0</output_format_parallel_formatting>
+            <log_queries>0</log_queries>
+        </default>
+    </profiles>
+    <quotas>
+        <default/>
+    </quotas>
+    <users>
+        <default>
+            <password from_env="CLICKHOUSE_PASSWORD"/>
+            <networks>
+                <ip>127.0.0.1</ip>
+                <ip>::1</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+            <access_management>1</access_management>
+        </default>
+    </users>
+</clickhouse>

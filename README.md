@@ -668,6 +668,54 @@ kubectl create -f k8s/job-pipeline-completo.yaml
 Para Kubernetes hacen falta `kind` y `kubectl`; para Airflow, el compose de Airflow (ya incluido en
 el repositorio).
 
+### Publicarlo en internet (Render)
+
+Las dos webs, con una dirección pública fija y HTTPS: `https://centinela-xxxx.onrender.com` (casos en `/`,
+modelos en `/modelos/`). El plan gratuito de Render no pide tarjeta. Se publica un único contenedor
+(plantilla en `despliegue/contenedor/`) con ClickHouse, las dos webs y una copia de la base de datos tal y como
+está ahora, ajustado para caber en los 512 MB de memoria del plan gratuito.
+
+```powershell
+# Una sola vez: crear en GitHub un repositorio vacío (p. ej. centinela-web) y una cuenta en https://render.com
+
+# Preparar y subir. Repetirlo para publicar datos nuevos tras el pipeline (reemplaza la versión anterior)
+.venv\Scripts\python despliegue/publicar.py --git https://github.com/<usuario>/centinela-web.git
+
+# La primera vez, en el panel de Render: New > Blueprint > elegir ese repositorio > Apply
+```
+
+Render construye la imagen en unos minutos y después la vuelve a construir sola con cada publicación.
+Límites del plan gratuito: se duerme tras 15 minutos sin visitas (despierta solo al entrar, en un minuto) y en
+cada reinicio vuelve a la copia de los datos, así que las revisiones hechas en la web no se guardan. No entrena
+ni puntúa: enseña los datos del momento en que se publicó. El mismo contenedor sirve para Hugging Face Spaces
+(`--huggingface <usuario>/centinela`, que para Docker ya exige el plan PRO).
+
+### Actualizarla cada día sola (GitHub Actions)
+
+El workflow `.github/workflows/scoring-diario.yml` hace cada noche, en los servidores de GitHub y sin ningún
+ordenador encendido, lo mismo que el DAG `fraude_scoring`: recupera el estado del día anterior, ejecuta
+`python main.py --scoring` (un día simulado más), guarda el estado nuevo y publica la web. El estado (la base de
+datos completa, `datos_ml/`, `modelos/`, `resultados/` y los recalibrados de `historico/`) vive en la rama
+`estado` del repositorio de la web; lo gestiona `despliegue/estado.py`.
+
+```powershell
+# Una sola vez:
+# 1. Un token de GitHub (Settings > Developer settings > Fine-grained tokens) con acceso solo al repositorio
+#    de la web y permiso "Contents: Read and write"
+# 2. Guardarlo en este repositorio: Settings > Secrets and variables > Actions > New repository secret,
+#    con el nombre CENTINELA_WEB_TOKEN
+# 3. Subir el estado actual desde el PC (los días siguientes ya los añade GitHub)
+.venv\Scripts\python despliegue/estado.py guardar --git https://github.com/<usuario>/centinela-web.git
+```
+
+Se ejecuta a las 02:00 UTC y también se puede lanzar a mano (pestaña *Actions* > *scoring diario* > *Run
+workflow*). Cada ejecución añade el día simulado siguiente al último, no la fecha real. Si el workflow vive en un
+repositorio público, GitHub lo pausa tras 60 días sin commits en él.
+
+Desde entonces la web la alimenta el estado de la nube, no la base de datos del PC: lo que se ejecute en local
+(Airflow, `main.py`) ya no llega a la web. Volver a lanzar `estado.py guardar` desde el PC reemplaza el estado de
+la nube por el local; hacerlo solo a propósito (por ejemplo, tras reentrenar los modelos) y sin Airflow a medias.
+
 **Importante:** no lanzar a la vez el entrenamiento y el scoring diario, porque los dos rehacen las
 mismas tablas. Por eso en Airflow y en Kubernetes tienen horas distintas.
 

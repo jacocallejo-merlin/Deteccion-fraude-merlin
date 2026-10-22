@@ -14,3 +14,6 @@ httpx==0.28.1
 
 # Notebooks de notebooks/ (exploración, Hitos 1 y 2)
 ipykernel==7.3.0
+
+# Publicar en Hugging Face Spaces (despliegue/subir_huggingface.py)
+huggingface_hub==2.2.0

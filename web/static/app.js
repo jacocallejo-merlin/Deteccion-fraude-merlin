@@ -2,9 +2,6 @@
 // Centinela: el parte de la noche, el registro de casos, el resumen, el buscador de pagos y los avisos.
 // Pide los datos a web/app.py.
 
-// La web de los modelos corre en la misma máquina, en el puerto 8001 (local, Docker y port-forward de k8s)
-document.getElementById('ir-modelos').href = `${location.protocol}//${location.hostname}:8001/`;
-
 const COLOR = { critico: '#D33A2C', alto: '#E0952B', medio: '#C9A400', fraude: '#D33A2C', legitima: '#0B7A64',
   pendiente: '#2E4A52', vigilancia: '#D8DDD6', sin_incidencia: '#B4BDB9', tinta: '#18211F', linea: '#DCE0DA',
   suave: '#5E6A66' };
@@ -106,6 +103,9 @@ function flotante(titulo, texto, alPulsar) {
 async function cargarContexto() {
   const c = await api('/api/contexto');
   estado.contexto = c;
+  // La web de los modelos: la que diga el servidor (despliegue con una sola dirección) o, si no, la misma
+  // máquina en el puerto 8001 (local, Docker y port-forward de k8s)
+  document.getElementById('ir-modelos').href = c.web_modelos || `${location.protocol}//${location.hostname}:8001/`;
   document.getElementById('reloj').textContent =
     `Datos hasta el ${fechaLarga(c.hoy)}. En marcha desde el ${fechaLarga(c.inicio)}.`;
   // El nivel medio es opcional (config.yaml): sin él, no hay filtro para verlo

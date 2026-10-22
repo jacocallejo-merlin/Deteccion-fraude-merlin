@@ -1,0 +1,52 @@
+<!-- ClickHouse dentro del contenedor de publicación: solo accesible desde el propio contenedor y con los datos
+     en /tmp (los planes gratuitos no guardan el disco entre reinicios; cargar_instantanea.py lo vuelve a llenar).
+     Ajustado para caber, junto con las dos webs, en los 512 MB del plan gratuito de Render: con ~35 MB de
+     datos no hacen falta cachés grandes ni las tablas de registro de system. -->
+<clickhouse>
+    <logger>
+        <level>warning</level>
+        <console>1</console>
+    </logger>
+    <listen_host>127.0.0.1</listen_host>
+    <http_port>8123</http_port>
+    <tcp_port>9000</tcp_port>
+    <path>/tmp/clickhouse/</path>
+    <tmp_path>/tmp/clickhouse/tmp/</tmp_path>
+    <user_files_path>/tmp/clickhouse/user_files/</user_files_path>
+    <users_config>usuarios.xml</users_config>
+    <default_profile>default</default_profile>
+
+    <!-- Memoria: tope del servidor y cachés pequeñas -->
+    <!-- ClickHouse mide la memoria de todo el contenedor (cgroup), Python incluido: el tope está justo por debajo
+         de los 512 MB, para que falle una consulta antes de que el sistema mate el contenedor -->
+    <max_server_memory_usage>482344960</max_server_memory_usage>   <!-- 460 MB -->
+    <mark_cache_size>16777216</mark_cache_size>
+    <index_mark_cache_size>0</index_mark_cache_size>
+    <uncompressed_cache_size>0</uncompressed_cache_size>
+    <primary_index_cache_size>16777216</primary_index_cache_size>
+    <mmap_cache_size>64</mmap_cache_size>
+    <compiled_expression_cache_size>8388608</compiled_expression_cache_size>
+    <query_condition_cache_size>8388608</query_condition_cache_size>
+    <page_cache_max_size>0</page_cache_max_size>
+
+    <!-- Pocos hilos: la web hace pocas consultas y pequeñas -->
+    <max_thread_pool_size>256</max_thread_pool_size>
+    <concurrent_threads_soft_limit_num>2</concurrent_threads_soft_limit_num>
+    <background_pool_size>2</background_pool_size>
+    <background_merges_mutations_concurrency_ratio>2</background_merges_mutations_concurrency_ratio>
+    <background_schedule_pool_size>4</background_schedule_pool_size>
+    <background_common_pool_size>2</background_common_pool_size>
+    <background_move_pool_size>1</background_move_pool_size>
+    <background_fetches_pool_size>1</background_fetches_pool_size>
+    <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>
+    <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>
+    <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>
+    <tables_loader_foreground_pool_size>2</tables_loader_foreground_pool_size>
+    <tables_loader_background_pool_size>1</tables_loader_background_pool_size>
+    <!-- Con tan pocos hilos de fondo, ClickHouse exige bajar también estos umbrales de las mutaciones -->
+    <merge_tree>
+        <number_of_free_entries_in_pool_to_execute_mutation>2</number_of_free_entries_in_pool_to_execute_mutation>
+        <number_of_free_entries_in_pool_to_lower_max_size_of_merge>2</number_of_free_entries_in_pool_to_lower_max_size_of_merge>
+        <number_of_free_entries_in_pool_to_execute_optimize_entire_partition>2</number_of_free_entries_in_pool_to_execute_optimize_entire_partition>
+    </merge_tree>
+</clickhouse>
