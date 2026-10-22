@@ -119,5 +119,46 @@ document.querySelectorAll('[data-invitado]').forEach((b) => b.addEventListener('
   }
 }));
 
+// El invitado de comercio elige antes qué empresa ver, por nombre o por sector
+let empresas = [];
+const escapar = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+function pintarEmpresas() {
+  const texto = $('ie-buscar').value.trim().toLowerCase();
+  const sector = $('ie-sector').value;
+  const vistas = empresas.filter((e) => (!sector || e.categoria === sector) && e.nombre.toLowerCase().includes(texto));
+  $('ie-lista').innerHTML = vistas.length ? vistas.map((e) => `
+    <button type="button" class="empresa-opcion" role="listitem" data-comercio="${e.id}">
+      <b>${escapar(e.nombre)}</b>
+      <span class="sub">${escapar([e.categoria, e.ciudad].filter(Boolean).join(' · '))}${e.pagos ? ` · ${e.pagos.toLocaleString('es-ES')} pagos` : ' · sin pagos aún'}</span>
+    </button>`).join('') : '<p class="sub">No hay ninguna empresa con ese nombre en ese sector.</p>';
+}
+
+document.querySelector('[data-vista="vista-invitado-comercio"]').addEventListener('click', async () => {
+  if (empresas.length) return;
+  try {
+    const r = await fetch('/api/invitado/comercios');
+    empresas = await r.json();
+    const sectores = [...new Set(empresas.map((e) => e.categoria).filter(Boolean))].sort();
+    $('ie-sector').innerHTML = '<option value="">Todos los sectores</option>'
+      + sectores.map((s) => `<option>${escapar(s)}</option>`).join('');
+    pintarEmpresas();
+  } catch (err) {
+    $('m-invitado').textContent = 'No se ha podido cargar la lista de empresas';
+  }
+});
+$('ie-buscar').addEventListener('input', pintarEmpresas);
+$('ie-sector').addEventListener('change', pintarEmpresas);
+$('ie-lista').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-comercio]');
+  if (!b) return;
+  try {
+    await enviar('/api/invitado', { rol: 'comercio', comercio_id: Number(b.dataset.comercio) });
+    location.href = '/';
+  } catch (err) {
+    $('m-invitado').textContent = err.message;
+  }
+});
+
 // Llegar con una sesión que aún tiene la contraseña provisional (la web manda aquí con ?cambiar=1)
 if (parametros.get('cambiar')) verVista('vista-cambiar');

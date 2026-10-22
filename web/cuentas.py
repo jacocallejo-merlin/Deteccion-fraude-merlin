@@ -34,7 +34,7 @@ CORREO = re.compile(r'^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$')
 PRIMER_REGISTRADO = 100_000           # los comercios que se registran, a partir de aquí (no chocan con los de la entidad)
 # Rutas sin sesión (las añade web/app.py a las públicas del middleware) y las solo de administradores
 PUBLICAS = {'/api/recuperar', '/api/recuperar/confirmar', '/api/registro', '/api/registro/confirmar',
-            '/api/invitado'}
+            '/api/invitado', '/api/invitado/comercios'}
 DE_ADMINISTRADORES = ('/api/cuentas',)
 CAMPOS_EMPRESA = ['nombre', 'cif', 'categoria', 'pais', 'ciudad', 'direccion', 'telefono', 'web']
 
@@ -114,6 +114,7 @@ def correo_valido(email):
 
 class Invitado(BaseModel):
     rol: Literal['administrador', 'analista', 'comercio']
+    comercio_id: int = Field(0, ge=0)            # el invitado de comercio elige qué empresa ver
 
 
 def invitados_permitidos(request):
@@ -162,18 +163,35 @@ def crear_router(almacen, nombre_comercio, cliente):
     def hay_invitados(request: Request):
         return {'disponible': invitados_permitidos(request)}
 
-    @router.post('/api/invitado')
-    def entrar_como_invitado(i: Invitado, request: Request):
-        """Una cuenta de solo lectura por rol (el comercio de invitado es el primero de los datos, con historial).
-        Su contraseña es aleatoria y no se enseña: solo se entra por aquí."""
+    @router.get('/api/invitado/comercios')
+    def comercios_para_invitado(request: Request):
+        """Las empresas que puede elegir el invitado de comercio (nombre, sector y ciudad), con cuántos pagos
+        tiene cada una. Solo con el modo invitado activado: si no, la lista no es pública."""
         if not invitados_permitidos(request):
             raise HTTPException(404, 'Not Found')
-        email = f'{i.rol}{DOMINIO_INVITADO}'
+        return list(cliente().query('''
+            SELECT c.comercio_id AS id, c.nombre AS nombre, c.categoria_negocio AS categoria, c.ciudad AS ciudad,
+                   ifNull(p.pagos, 0) AS pagos
+            FROM comercio AS c
+            LEFT JOIN (SELECT comercio_id, count() AS pagos FROM transacciones_enriquecidas GROUP BY comercio_id) AS p
+                   ON p.comercio_id = c.comercio_id
+            ORDER BY c.nombre''').named_results())
+
+    @router.post('/api/invitado')
+    def entrar_como_invitado(i: Invitado, request: Request):
+        """Una cuenta de solo lectura por rol y, para comercios, una por empresa (así dos personas pueden mirar
+        empresas distintas a la vez). Su contraseña es aleatoria y no se enseña: solo se entra por aquí."""
+        if not invitados_permitidos(request):
+            raise HTTPException(404, 'Not Found')
+        if i.rol == 'comercio':
+            nombre = nombre_comercio(i.comercio_id) if i.comercio_id else None
+            if nombre is None:
+                raise HTTPException(422, 'Elige la empresa que quieres ver')
+            email, nombre = f'comercio-{i.comercio_id}{DOMINIO_INVITADO}', f'Invitado ({nombre})'
+        else:
+            email, nombre = f'{i.rol}{DOMINIO_INVITADO}', f'Invitado ({i.rol})'
         if almacen().usuario(email) is None:
-            comercio = cliente().query('SELECT min(comercio_id) FROM comercio').result_rows[0][0] if i.rol == 'comercio' else 0
-            nombre = {'administrador': 'Invitado (administrador)', 'analista': 'Invitado (analista)',
-                      'comercio': 'Invitado (comercio)'}[i.rol]
-            almacen().guardar_usuario(email, nombre, i.rol, comercio, contrasena_provisional() * 3,
+            almacen().guardar_usuario(email, nombre, i.rol, i.comercio_id, contrasena_provisional() * 3,
                                       revisada_por='invitado')
         return con_sesion(JSONResponse({'rol': i.rol, 'invitado': True}), request, almacen(), email, False)
 

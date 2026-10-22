@@ -43,6 +43,7 @@ em('form-empresa').addEventListener('submit', async (ev) => {
 api('/api/sesion').then(async (s) => {
   if (s.rol !== 'comercio') return;
   em('abrir-empresa').hidden = false;
+  if (s.invitado) return;          // el invitado solo mira: no se le pide configurar nada
   const e = await api('/api/empresa');
   if (!e.configurada) {
     pintarEmpresa(e);

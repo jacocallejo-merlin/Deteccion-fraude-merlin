@@ -216,9 +216,10 @@ def test_invitado_solo_mira(entorno):
     for rol in ["administrador", "analista", "comercio"]:
         invitado = TestClient(entorno["app"])
         assert invitado.get("/api/invitado").json() == {"disponible": True}        # en local, sí
-        assert invitado.post("/api/invitado", json={"rol": rol}).status_code == 200
+        comercio = entorno["comercio"] if rol == "comercio" else 0
+        assert invitado.post("/api/invitado", json={"rol": rol, "comercio_id": comercio}).status_code == 200
         s = invitado.get("/api/sesion").json()
-        assert s["rol"] == rol and s["invitado"] is True
+        assert s["rol"] == rol and s["invitado"] is True and s["comercio_id"] == comercio
         assert invitado.get("/api/contexto").status_code == 200                    # mira
         r = invitado.post("/api/perfil", json={"nombre": "Otro nombre"})           # pero no cambia nada
         assert r.status_code == 403 and "invitado" in r.json()["detail"]
@@ -228,8 +229,19 @@ def test_invitado_solo_mira(entorno):
                    for c in entorno["admin"].get("/api/cuentas").json()["cuentas"])
 
 
+def test_invitado_de_comercio_elige_la_empresa(entorno):
+    anonimo = TestClient(entorno["app"])
+    empresas = anonimo.get("/api/invitado/comercios").json()
+    assert empresas and {"id", "nombre", "categoria", "ciudad", "pagos"} <= set(empresas[0])
+    assert anonimo.post("/api/invitado", json={"rol": "comercio"}).status_code == 422          # sin elegir, no
+    otra = next(e["id"] for e in empresas if e["id"] != entorno["comercio"])
+    anonimo.post("/api/invitado", json={"rol": "comercio", "comercio_id": otra})
+    assert {c["id"] for c in anonimo.get("/api/contexto").json()["comercios"]} == {otra}       # solo esa
+
+
 def test_invitado_apagado(entorno, monkeypatch):
     monkeypatch.setenv("MODO_INVITADO", "0")
     anonimo = TestClient(entorno["app"])
     assert anonimo.get("/api/invitado").json() == {"disponible": False}
     assert anonimo.post("/api/invitado", json={"rol": "administrador"}).status_code == 404
+    assert anonimo.get("/api/invitado/comercios").status_code == 404        # la lista de empresas no es pública
