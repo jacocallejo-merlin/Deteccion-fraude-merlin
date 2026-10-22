@@ -119,7 +119,11 @@ def cargar_recalibrador():
     variables que las de config.yaml (entonces toca recalibrar)."""
     if not RUTA_RECALIBRADOR.exists():
         return None
-    recal = joblib.load(RUTA_RECALIBRADOR)
+    try:
+        recal = joblib.load(RUTA_RECALIBRADOR)
+    except Exception as e:   # p. ej. guardado con otra versión de scikit-learn: no se puede usar, se rehace
+        print(f'No se puede leer {RUTA_RECALIBRADOR.name} ({type(e).__name__}: {e}): se recalibra de nuevo')
+        return None
     if (recal['run_id_base'] != run_id_base()
             or recal.get('variables_extra', []) != variables_extra_en(recal['corte'])
             or recal.get('variables_quitadas', []) != variables_quitadas_en(recal['corte'])):
