@@ -672,3 +672,9 @@ def patrones(comercio: int = Comercio, dias: int = Dias):
                         'GROUP BY cliente_id HAVING fraudes > 0 ORDER BY fraudes DESC, importe_fraude DESC LIMIT 8', **p),
         'clientes_con_fraude': clientes_fraude['con_fraude'], 'clientes_activos': clientes_fraude['clientes'],
     }
+
+
+# ---------------------------------------------------------------------------------- ajustes
+# Canal de Teams / Slack y correos de los avisos, configurables desde la web (web/ajustes.py)
+from web.ajustes import crear_router  # noqa: E402
+app.include_router(crear_router(cliente))

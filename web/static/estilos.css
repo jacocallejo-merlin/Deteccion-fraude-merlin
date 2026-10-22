@@ -373,3 +373,20 @@ footer { max-width: var(--ancho); margin: 0 auto; padding: 18px 24px 30px; borde
 /* ------------------------------------------------------------ patrones de fraude (patrones.js) */
 .patrones { margin-top: 48px; padding-top: 22px; border-top: 2px solid var(--tinta); }
 .patrones .explicacion { margin: 6px 0 22px; }
+
+/* ------------------------------------------------------------ ajustes de avisos (ajustes.js) */
+.ajustes { width: min(560px, calc(100vw - 32px)); padding: 0; border: 0; border-radius: var(--radio);
+  background: var(--papel); color: var(--tinta); box-shadow: 0 18px 50px rgba(0, 0, 0, .25); }
+.ajustes::backdrop { background: rgba(14, 22, 24, .45); }
+.ajustes form { display: flex; flex-direction: column; gap: 14px; padding: 0 0 22px; }
+.ajustes form > :not(.ficha-cabecera) { margin-left: 24px; margin-right: 24px; }
+.ajustes .sub { margin: 0; }
+.ajustes .campo { display: flex; flex-direction: column; gap: 6px; font-weight: 600; border: 0; padding: 0; }
+.ajustes .campo legend { padding: 0; margin-bottom: 6px; }
+.ajustes .campo .sub, .ajustes .casilla { font-weight: 400; }
+.ajustes input[type=url], .ajustes input[type=text] { font: inherit; padding: 8px 10px; border: 1px solid var(--linea);
+  border-radius: var(--radio); background: var(--blanco); }
+.ajustes .boton:not(.secundario) { background: var(--tinta); color: var(--blanco); }
+.ayuda-teams { font-size: 13.5px; color: var(--suave); margin-top: -6px; }
+.ayuda-teams summary { cursor: pointer; color: var(--vigia); font-weight: 600; }
+.error-texto { color: var(--alarma); }

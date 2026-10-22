@@ -18,6 +18,7 @@ def sin_canales(monkeypatch):
     for v in VARIABLES:
         monkeypatch.delenv(v, raising=False)
     monkeypatch.setitem(notificar._cfg, "correo", {})
+    monkeypatch.setattr(notificar, "ajustes_web", lambda: {})     # sin pantalla de ajustes guardada
 
 
 @pytest.fixture
@@ -80,6 +81,19 @@ def test_resumen_de_avisos_en_un_mensaje(envios, monkeypatch):
     assert "2026-08-20" in slack[3]                            # después, los más recientes
     assert "18 más" in slack[-1]
     assert notificar.notificar_avisos([]) == 0
+
+
+def test_ajustes_de_la_web_mandan_sobre_env(envios, monkeypatch):
+    """Lo que el cliente guarda en la pantalla de ajustes manda sobre .env: otra dirección de Teams,
+    un canal vaciado (= desactivado) y los avisos de fraude apagados."""
+    web = {"teams_webhook_url": "https://teams.ejemplo/del-cliente", "slack_webhook_url": ""}
+    monkeypatch.setattr(notificar, "ajustes_web", lambda: dict(web))
+    assert notificar.notificar("t", "x") == 1
+    assert [u for u, _ in envios] == ["https://teams.ejemplo/del-cliente"]
+    web["avisos_fraude"] = "0"
+    assert notificar.notificar("t", "x", tipo="avisos_fraude") == 0
+    web["avisos_fraude"] = "1"
+    assert notificar.notificar("t", "x", tipo="avisos_fraude") == 1
 
 
 def test_limpiar_ficheros(tmp_path):

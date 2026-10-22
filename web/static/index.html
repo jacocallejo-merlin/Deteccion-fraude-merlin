@@ -46,6 +46,10 @@
             <button class="enlace panel-pie" data-ir="avisos">Ver todos los avisos</button>
           </div>
         </div>
+        <button id="abrir-ajustes" class="campana" aria-label="Ajustes de avisos" title="Ajustes de avisos">
+          <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true"><path fill="currentColor"
+            d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 0 0 .12-.61l-1.92-3.32a.49.49 0 0 0-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.48.48 0 0 0-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96a.49.49 0 0 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.09.63-.09.94s.02.64.07.94l-2.03 1.58a.49.49 0 0 0-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2z"/></svg>
+        </button>
         <a class="ir-otra" id="ir-modelos" href="http://localhost:8001/">Modelos <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" d="M3 8h9M8.5 4.5 12 8l-3.5 3.5"/></svg></a>
       </div>
     </div>
@@ -200,6 +204,49 @@
 
   <div id="avisos-flotantes" class="avisos-flotantes" aria-live="polite"></div>
 
+  <!-- ============================================================== AJUSTES DE AVISOS (ajustes.js) -->
+  <dialog id="ajustes" class="ajustes" aria-labelledby="ajustes-titulo">
+    <form id="form-ajustes" method="dialog">
+      <div class="ficha-cabecera">
+        <h2 id="ajustes-titulo">Ajustes de avisos</h2>
+        <button type="button" class="cerrar" id="cerrar-ajustes" aria-label="Cerrar">×</button>
+      </div>
+      <p class="sub">Dónde quieres recibir los avisos de los casos graves, además de en esta web.</p>
+
+      <label class="campo">Canal de Microsoft Teams
+        <input id="aj-teams" type="url" autocomplete="off" placeholder="https://… (pega la dirección del flujo de Teams)">
+        <span class="sub" id="aj-teams-estado"></span>
+      </label>
+      <details class="ayuda-teams">
+        <summary>¿Cómo consigo la dirección de Teams?</summary>
+        <p>En el canal de Teams: «…» → <b>Flujos de trabajo</b> → plantilla <b>«Publicar en un canal cuando se recibe
+          una solicitud de webhook»</b>. Elige el equipo y el canal y, al terminar, copia la dirección que te da.</p>
+      </details>
+
+      <label class="campo">Canal de Slack (opcional)
+        <input id="aj-slack" type="url" autocomplete="off" placeholder="https://hooks.slack.com/…">
+        <span class="sub" id="aj-slack-estado"></span>
+      </label>
+
+      <label class="campo">Correos
+        <input id="aj-correos" type="text" autocomplete="off" placeholder="analista@banco.com, fraude@banco.com">
+        <span class="sub" id="aj-correo-estado"></span>
+      </label>
+
+      <fieldset class="campo">
+        <legend>Qué avisar</legend>
+        <label class="casilla"><input type="checkbox" id="aj-fraude"> Casos de fraude nuevos, altos y críticos</label>
+        <label class="casilla"><input type="checkbox" id="aj-drift"> Cambios en los pagos que pueden afectar al modelo</label>
+      </fieldset>
+
+      <p class="sub" id="aj-mensaje" aria-live="polite"></p>
+      <div class="botones">
+        <button type="submit" class="boton" id="aj-guardar">Guardar</button>
+        <button type="button" class="boton secundario" id="aj-probar">Enviar mensaje de prueba</button>
+      </div>
+    </form>
+  </dialog>
+
   <footer>
     <span id="reloj"></span>
     <span>Revisa: <button class="enlace" id="cambiar-usuario"></button></span>
@@ -207,5 +254,6 @@
   </footer>
   <script src="/static/app.js?v=15"></script>
   <script src="/static/patrones.js?v=1"></script>
+  <script src="/static/ajustes.js?v=1"></script>
 </body>
 </html>

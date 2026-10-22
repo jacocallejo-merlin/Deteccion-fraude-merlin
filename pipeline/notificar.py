@@ -41,12 +41,16 @@ except ImportError:
     pass
 
 with open(RAIZ / 'config.yaml', encoding='utf-8') as f:
-    _cfg = yaml.safe_load(f).get('notificaciones') or {}
+    _config = yaml.safe_load(f)
+_cfg = _config.get('notificaciones') or {}
 
 # Color de la tarjeta de Teams y etiqueta del asunto según el nivel
 COLOR_TEAMS = {'critico': 'Attention', 'error': 'Attention', 'alto': 'Warning', 'aviso': 'Warning',
                'info': 'Good'}
 NIVELES_AVISO = {'critico': 3, 'alto': 2, 'medio': 1}
+# Lo que el cliente puede configurar desde la web (tabla ajustes). El servidor de correo y su
+# contraseña no: son del proveedor del servicio y siguen en .env / el Secret de Kubernetes
+CLAVES_WEB = ('teams_webhook_url', 'slack_webhook_url', 'correo_destinatarios', 'avisos_fraude', 'drift')
 
 
 def _entorno(nombre, por_defecto=None):
@@ -54,16 +58,47 @@ def _entorno(nombre, por_defecto=None):
     return valor or por_defecto
 
 
-def canales():
-    """Los canales configurados: {'teams': url, 'slack': url, 'correo': {...}} (solo los que hay)."""
+def ajustes_web():
+    """Ajustes guardados desde la web (pantalla de ajustes, tabla ajustes de ClickHouse): {clave: texto}.
+    Mandan sobre .env. Sin base de datos o sin tabla, {}: nunca impide avisar con lo de .env."""
+    try:
+        import logging
+        import clickhouse_connect
+        logging.getLogger('clickhouse_connect').setLevel(logging.CRITICAL)   # sin base de datos no es un error
+        ch = _config.get('clickhouse') or {}
+        cliente = clickhouse_connect.get_client(
+            host=_entorno('CLICKHOUSE_HOST', ch.get('host', 'localhost')),
+            port=int(_entorno('CLICKHOUSE_PORT', ch.get('port', 8123))),
+            username=_entorno('CLICKHOUSE_USER', ch.get('user', 'default')),
+            password=_entorno('CLICKHOUSE_PASSWORD', ''),
+            database=_entorno('CLICKHOUSE_DATABASE', ch.get('database')), connect_timeout=5)
+        if not cliente.command('EXISTS TABLE ajustes'):
+            return {}
+        return {clave: valor for clave, valor in cliente.query('SELECT clave, valor FROM ajustes FINAL').result_rows
+                if clave in CLAVES_WEB}
+    except Exception:
+        return {}
+
+
+def _valor(web, clave, entorno, por_defecto=None):
+    """Lo que el cliente puso en la web (aunque sea vacío: entonces está desactivado) o, si nunca lo
+    configuró, lo de .env."""
+    return web[clave].strip() if clave in web else _entorno(entorno, por_defecto)
+
+
+def canales(web=None):
+    """Los canales configurados: {'teams': url, 'slack': url, 'correo': {...}} (solo los que hay).
+    web: los ajustes de la web, si ya se han leído (si no, se leen)."""
+    web = ajustes_web() if web is None else web
     salida = {}
-    if _entorno('TEAMS_WEBHOOK_URL'):
-        salida['teams'] = _entorno('TEAMS_WEBHOOK_URL')
-    if _entorno('SLACK_WEBHOOK_URL'):
-        salida['slack'] = _entorno('SLACK_WEBHOOK_URL')
+    if _valor(web, 'teams_webhook_url', 'TEAMS_WEBHOOK_URL'):
+        salida['teams'] = _valor(web, 'teams_webhook_url', 'TEAMS_WEBHOOK_URL')
+    if _valor(web, 'slack_webhook_url', 'SLACK_WEBHOOK_URL'):
+        salida['slack'] = _valor(web, 'slack_webhook_url', 'SLACK_WEBHOOK_URL')
     correo = _cfg.get('correo') or {}
     servidor = _entorno('SMTP_SERVIDOR', correo.get('servidor'))
-    destinatarios = _entorno('CORREO_DESTINATARIOS') or ','.join(correo.get('destinatarios') or [])
+    destinatarios = _valor(web, 'correo_destinatarios', 'CORREO_DESTINATARIOS') \
+        or ','.join(correo.get('destinatarios') or [])
     destinatarios = [d.strip() for d in destinatarios.split(',') if d.strip()]
     if servidor and destinatarios:
         usuario = _entorno('SMTP_USUARIO')
@@ -119,11 +154,13 @@ ENVIOS = {'teams': _teams, 'slack': _slack, 'correo': _correo}
 
 def notificar(titulo, texto, nivel='info', lineas=(), tipo=None):
     """Envía el mensaje a todos los canales configurados. tipo ('avisos_fraude', 'fallos_pipeline' o
-    'drift') permite apagar cada clase de mensaje en config.yaml. Nunca lanza excepciones.
-    Devuelve cuántos canales lo han recibido."""
-    if tipo and not _cfg.get(tipo, True):
+    'drift') permite apagar cada clase de mensaje en config.yaml o, los de fraude y drift, desde la
+    web. Nunca lanza excepciones. Devuelve cuántos canales lo han recibido."""
+    web = ajustes_web()
+    activo = web[tipo] == '1' if tipo in web else _cfg.get(tipo, True)
+    if tipo and not activo:
         return 0
-    configurados = canales()
+    configurados = canales(web)
     if not configurados:
         print('Notificaciones: no hay ningún canal configurado (Teams, Slack o correo); solo queda en la web y el log')
         return 0
