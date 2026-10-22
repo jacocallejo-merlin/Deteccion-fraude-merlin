@@ -1,7 +1,11 @@
 """
-Añade un día (o --dias) de transacciones nuevas a las tablas de origen, como si llegara el lote
-diario del banco: transacciones legítimas, unos pocos casos de fraude conocido y los mismos errores
-de formato que el dataset inicial. Después hay que lanzar carga_transacciones.py y el resto del ETL.
+Añade los días de transacciones nuevas que falten hasta hoy (hora de Madrid) a las tablas de origen, como si
+llegara el lote diario del banco: transacciones legítimas, unos pocos casos de fraude conocido y los mismos
+errores de formato que el dataset inicial. Después hay que lanzar carga_transacciones.py y el resto del ETL.
+
+Normalmente falta un día. Si ya hay datos de hoy no genera nada (nunca días futuros), y si una noche no se
+ejecutó recupera los días que faltan, hasta MAX_DIAS_PENDIENTES: más que eso suele ser una base de datos antigua,
+y entonces se para en vez de llenarla de días. Con --dias N genera N días seguidos sin mirar el calendario.
 
 También llegan las confirmaciones del banco (contracargos) de ese día: de los fraudes aún sin
 confirmar, los de días anteriores y los del propio lote, se confirman los que tocan con el mismo
@@ -20,6 +24,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from statistics import NormalDist
+from zoneinfo import ZoneInfo
 
 import numpy as np
 
@@ -29,6 +34,7 @@ from carga_transacciones import FECHA
 from config import CONFIG, DATABASE, HOST, PASSWORD, PORT, USER
 
 TABLAS_LOTE = ["sesion", "evento", "devolucion", "transaccion"]   # transaccion SIEMPRE la última
+MAX_DIAS_PENDIENTES = 7     # sin --dias, más días pendientes que estos = base de datos antigua: se para
 # casos de fraude que caben en un lote corto (bust_out y devolucion_abusiva duran semanas)
 TIPOS_FRAUDE_LOTE = ["pico_gasto", "card_testing", "smurfing", "account_takeover",
                      "ip_sospechosa", "dispositivo_nuevo", "bot"]
@@ -255,15 +261,30 @@ def lote_de_un_dia(client, mundo):
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--dias", type=int, default=1,
-                        help="días seguidos que se generan, cada uno con su semilla (1 por defecto)")
+    parser.add_argument("--dias", type=int,
+                        help="días seguidos que se generan, cada uno con su semilla, sin mirar el calendario "
+                             "(sin él: los que falten hasta hoy)")
     args = parser.parse_args()
 
     client = conectar()
+    dias = args.dias
+    if dias is None:
+        ultimo = uno(client, "SELECT max(timestamp) FROM sesion "
+                             f"WHERE sesion_id <= {estado_actual(client)['sesion']}").date()
+        hoy = datetime.now(ZoneInfo("Europe/Madrid")).date()
+        dias = max(0, (hoy - ultimo).days)
+        if not dias:
+            print(f"Los datos ya llegan hasta hoy ({ultimo:%d-%m-%Y}): no hay ningún día nuevo que generar")
+            return
+        if dias > MAX_DIAS_PENDIENTES:
+            sys.exit(f"Los datos acaban el {ultimo:%d-%m-%Y} y faltan {dias} días hasta hoy: más de "
+                     f"{MAX_DIAS_PENDIENTES}, parece una base de datos antigua. Para regenerarla al día: "
+                     f"python main.py --desde-cero. Para generar esos días de todos modos: --dias {dias}")
+        print(f"Los datos acaban el {ultimo:%d-%m-%Y}: se generan {dias} día/s, hasta hoy")
     mundo = generar_mundo()      # una sola vez: es lo más lento y no cambia de un día a otro
-    for _ in range(args.dias):
+    for _ in range(dias):
         lote_de_un_dia(client, mundo)
-    print(f"\nListo: {args.dias} día/s. Siguiente paso: carga_transacciones.py")
+    print(f"\nListo: {dias} día/s. Siguiente paso: carga_transacciones.py")
 
 
 if __name__ == "__main__":

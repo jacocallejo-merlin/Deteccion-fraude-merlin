@@ -41,7 +41,7 @@ PASOS_DATOS = {'pipeline/crear_tablas.py', 'pipeline/dataset.py'}
 
 # --scoring: lo que se ejecuta cada día con los modelos ya entrenados (igual que el DAG fraude_scoring)
 PASOS_SCORING = [
-    ('pipeline/generar_lote.py',                   'Añade un día de transacciones nuevas a las tablas de origen'),
+    ('pipeline/generar_lote.py',                   'Añade los días que falten hasta hoy (normalmente uno)'),
     ('pipeline/carga_transacciones.py',            'Convierte las transacciones brutas (fechas en texto)'),
     ('pipeline/limpieza.py',                       'Corrige duplicados y formatos inconsistentes'),
     ('pipeline/crear_tabla_enriquecida.py',        'Une las tablas en transacciones_enriquecidas'),

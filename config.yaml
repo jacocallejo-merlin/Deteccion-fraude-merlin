@@ -10,6 +10,11 @@ semilla: 42
 # dataset.py: tamaño y realismo del dataset sintético
 dataset:
   dias: 180
+  # Final del periodo del dataset inicial (el primer instante que ya no entra): acaba el día anterior. Se puso
+  # al regenerar el 22-10-2026 para que los datos lleguen hasta ese día; desde entonces el scoring diario añade
+  # cada noche el día que toca, sin pasarse nunca de hoy. Fija a propósito: con "hoy" automático, cada --desde-cero
+  # daría datos distintos. Si se cambia, mover también ajuste.fecha_decision los mismos días.
+  fecha_fin: 2026-10-23
   transacciones_dia: 600       # media de transacciones legítimas al día
   # En tarjetas reales el fraude es muy inferior al 1 % de las operaciones. 0,5 % es un compromiso:
   # más bajo dejaría muy pocos fraudes de cada tipo en validación y test para medir nada.
@@ -169,10 +174,11 @@ feedback:
 # Hito 6: ajuste de umbrales y variables con lo validado (ajustar_umbrales.py)
 ajuste:
   semanas_validacion: 3        # fecha de decisión: tras 3 semanas de feedback se ajusta con lo validado
-  # La decisión se tomó el 2026-08-08 (inicio del test + 3 semanas en el primer entrenamiento). Se fija
+  # La decisión se tomó el 2026-09-29 (inicio del test + 3 semanas en el primer entrenamiento). Se fija
   # porque cada reentrenamiento semanal recalcula el 70/30 con todos los días y movería el inicio del test
-  # (y con él esta fecha). null = calcularla. Si se cambia el dataset (dataset.dias, semilla), poner null.
-  fecha_decision: 2026-08-08
+  # (y con él esta fecha). null = calcularla. Si se cambia el dataset (dataset.dias, semilla), poner null;
+  # si solo se mueve dataset.fecha_fin, mover esta los mismos días (era 2026-08-08 con fecha_fin 2026-09-01).
+  fecha_decision: 2026-09-29
   dias_madurez: 30             # reglas: solo transacciones de hace >= 30 días (el banco ya ha confirmado ~85 %)
   mejora_minima: 0.02          # un cambio se adopta solo si mejora la validación (F1 o PR-AUC) al menos esto
   # Quitar variables: además, la mejora tiene que mantenerse en este porcentaje de remuestreos

@@ -690,16 +690,11 @@ cada reinicio vuelve a la copia de los datos, así que las revisiones hechas en 
 ni puntúa: enseña los datos del momento en que se publicó. El mismo contenedor sirve para Hugging Face Spaces
 (`--huggingface <usuario>/centinela`, que para Docker ya exige el plan PRO).
 
-Al publicar, las fechas se desplazan para que el último día con datos sea el de la publicación: los mismos días,
-con la misma separación, pero al día (la web dice "Datos hasta hoy" aunque la simulación vaya por otra fecha). Solo
-cambia lo publicado; la base de datos del PC y el estado del scoring diario conservan sus fechas. Las horas reales
-(cuándo se creó un aviso o se pulsó en la web) no se tocan. Para publicar sin desplazar: `--fechas-originales`.
-
 ### Actualizarla cada día sola (GitHub Actions)
 
 El workflow `.github/workflows/scoring-diario.yml` hace cada noche, en los servidores de GitHub y sin ningún
 ordenador encendido, lo mismo que el DAG `fraude_scoring`: recupera el estado del día anterior, ejecuta
-`python main.py --scoring` (un día simulado más), guarda el estado nuevo y publica la web. El estado (la base de
+`python main.py --scoring` (el día de hoy), guarda el estado nuevo y publica la web. El estado (la base de
 datos completa, `datos_ml/`, `modelos/`, `resultados/` y los recalibrados de `historico/`) vive en la rama
 `estado` del repositorio de la web; lo gestiona `despliegue/estado.py`.
 
@@ -714,7 +709,7 @@ datos completa, `datos_ml/`, `modelos/`, `resultados/` y los recalibrados de `hi
 ```
 
 Se ejecuta a las 02:00 UTC y también se puede lanzar a mano (pestaña *Actions* > *scoring diario* > *Run
-workflow*). Cada ejecución añade el día simulado siguiente al último, no la fecha real. Si el workflow vive en un
+workflow*). Cada ejecución añade los días que falten hasta hoy: normalmente uno, ninguno si ya se ejecutó ese día. Si el workflow vive en un
 repositorio público, GitHub lo pausa tras 60 días sin commits en él.
 
 Desde entonces la web la alimenta el estado de la nube, no la base de datos del PC: lo que se ejecute en local

@@ -12,10 +12,6 @@ Para publicar datos nuevos después de una ejecución del pipeline, basta con vo
 
 --git sube la carpeta a un repositorio de GitHub aparte (vacío la primera vez; se reescribe en cada publicación)
 que Render construye con su render.yaml. --huggingface necesita antes `hf auth login` con un token de escritura.
-
-Las fechas de la copia se desplazan para que el último día con datos sea el día en que se publica (hora de Madrid):
-los mismos días, con el mismo orden y separación, pero al día. Solo en lo publicado: la base de datos del PC y el
-estado del scoring diario conservan las fechas de la simulación. --fechas-originales lo desactiva.
 """
 import argparse
 import gzip
@@ -23,9 +19,7 @@ import json
 import shutil
 import subprocess
 import sys
-from datetime import date, datetime, timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 RAIZ = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(RAIZ))
@@ -39,13 +33,19 @@ SALIDA = RAIZ / 'despliegue' / '_contenedor'
 # Lo que necesitan las webs, relativo a la raíz del proyecto
 CODIGO = ['config.py', 'config.yaml', 'pipeline/generar_avisos.py', 'pipeline/notificar.py',
           'web', 'web_modelos/app.py', 'web_modelos/static']
+<<<<<<< Updated upstream
 # Nunca salen del PC: los ajustes de avisos (web/ajustes.py) guardan el enlace de Teams/Slack y los correos, y
 # las sesiones abiertas y los códigos de 6 cifras darían acceso a una cuenta
 PRIVADAS = {'ajustes', 'ajustes_usuario', 'sesiones', 'codigos'}
+=======
+>>>>>>> Stashed changes
 # Las tablas que consultan las webs (web/app.py y generar_avisos.py) y las que leen sus vistas. Las de entrenamiento
 # (anomaly_scores, evento, sesion...) no se suben: no hacen falta y no cabrían en la memoria del plan gratuito.
+# Nunca salen del PC: los ajustes de avisos (web/ajustes.py) guardan el enlace de Teams/Slack y los correos
+PRIVADAS = {'ajustes'}
 TABLAS = {'alerta', 'analista', 'aviso', 'aviso_leido', 'cliente', 'comercio', 'features_transaccion',
           'feedback_analistas', 'metodo_pago', 'patron', 'revision_web', 'riesgo_transaccion', 'transaccion',
+<<<<<<< Updated upstream
           'transacciones_enriquecidas',
           # Las cuentas de la web (web/sesiones.py), para entrar en la publicada con los mismos correos y contraseñas
           # que en este PC (las contraseñas van cifradas), y los datos de los comercios registrados (web/cuentas.py)
@@ -54,6 +54,9 @@ TABLAS = {'alerta', 'analista', 'aviso', 'aviso_leido', 'cliente', 'comercio', '
 # escribieron (cuándo se creó el aviso, cuándo pulsó alguien en la web)
 HORA_REAL = {('aviso', 'creado'), ('aviso_leido', 'leido'), ('revision_web', 'fecha_real'),
              ('usuarios', 'creada'), ('usuarios', 'actualizado'), ('empresa', 'actualizado')}
+=======
+          'transacciones_enriquecidas'}
+>>>>>>> Stashed changes
 
 
 def copiar(relativa):
@@ -65,25 +68,10 @@ def copiar(relativa):
         shutil.copy2(origen, destino)
 
 
-def conectar():
-    return clickhouse_connect.get_client(host=HOST, port=PORT, username=USER, password=PASSWORD)
-
-
-def dias_hasta_hoy():
-    """Cuántos días hay que sumar a las fechas para que el último día con datos sea hoy (hora de Madrid)."""
-    ultimo = conectar().command(f'SELECT toDate(max(timestamp)) FROM {DATABASE}.transaccion')
-    if isinstance(ultimo, str):
-        ultimo = date.fromisoformat(ultimo)
-    return (datetime.now(ZoneInfo('Europe/Madrid')).date() - ultimo).days
-
-
-def exportar_base(carpeta, solo=None, desplazar=0):
+def exportar_base(carpeta, solo=None):
     """Copia de la base de datos en `carpeta`: de cada tabla (solo las de `solo`, si se da), su CREATE y sus filas en
-    formato Native comprimido; de las vistas, el CREATE. La carga despliegue/contenedor/cargar_instantanea.py.
-    Con desplazar=N, las fechas de la simulación salen N días más tarde (las de HORA_REAL, tal cual)."""
-    cliente = conectar()
-    fechas = cliente.query("SELECT table, name FROM system.columns WHERE database = {base:String} "
-                           "AND type LIKE '%Date%'", parameters={'base': DATABASE}).result_rows
+    formato Native comprimido; de las vistas, el CREATE. La carga despliegue/contenedor/cargar_instantanea.py."""
+    cliente = clickhouse_connect.get_client(host=HOST, port=PORT, username=USER, password=PASSWORD)
     filas = cliente.query('SELECT name, engine, create_table_query FROM system.tables '
                           'WHERE database = {base:String} ORDER BY name', parameters={'base': DATABASE}).result_rows
     if not filas:
@@ -95,11 +83,8 @@ def exportar_base(carpeta, solo=None, desplazar=0):
         vista = motor == 'View'
         tablas.append({'nombre': nombre, 'vista': vista, 'sql': sql})
         if not vista:
-            columnas = [c for t, c in fechas if t == nombre and (t, c) not in HORA_REAL] if desplazar else []
-            reemplazos = (' REPLACE (' + ', '.join(f'{c} + INTERVAL {desplazar} DAY AS {c}' for c in columnas) + ')'
-                          if columnas else '')
             # bloques pequeños: el contenedor los inserta uno a uno sin pasarse de memoria (cargar_instantanea.py)
-            datos = cliente.raw_query(f'SELECT *{reemplazos} FROM {DATABASE}.{nombre}', fmt='Native',
+            datos = cliente.raw_query(f'SELECT * FROM {DATABASE}.{nombre}', fmt='Native',
                                       settings={'max_block_size': 8192})
             (carpeta / f'{nombre}.native.gz').write_bytes(gzip.compress(datos))
     (carpeta / 'tablas.json').write_text(json.dumps({'base': DATABASE, 'tablas': tablas}, ensure_ascii=False, indent=1),
@@ -107,21 +92,15 @@ def exportar_base(carpeta, solo=None, desplazar=0):
     return len(filas)
 
 
-def publicar_modelos(desplazar=0):
-    """Las cifras de la web de modelos, calculadas aquí: el contenedor las sirve tal cual, sin pandas ni parquet.
-    Sus fechas (el periodo del examen y el inicio de cada semana) se desplazan igual que las de la base de datos."""
+def publicar_modelos():
+    """Las cifras de la web de modelos, calculadas aquí: el contenedor las sirve tal cual, sin pandas ni parquet."""
     from fastapi import HTTPException
     from web_modelos import app as web_modelos
     try:
-        datos = dict(web_modelos.modelos())
+        datos = web_modelos.modelos()
     except HTTPException as e:
         raise SystemExit(e.detail)
     datos.pop('web_casos', None)
-
-    def mover(dia):
-        return str(date.fromisoformat(dia) + timedelta(days=desplazar))
-    datos['desde'], datos['hasta'] = mover(datos['desde']), mover(datos['hasta'])
-    datos['semanas'] = [{**s, 'desde': mover(s['desde'])} for s in datos['semanas']]
     (SALIDA / 'web_modelos' / 'publicado.json').write_text(json.dumps(datos, ensure_ascii=False), encoding='utf-8')
 
 
@@ -130,17 +109,15 @@ def vaciar(carpeta):
         shutil.rmtree(carpeta, onerror=lambda f, ruta, _: (Path(ruta).chmod(0o700), f(ruta)))   # .git es de solo lectura
 
 
-def preparar(fechas_originales=False):
+def preparar():
     vaciar(SALIDA)
     shutil.copytree(PLANTILLA, SALIDA, ignore=shutil.ignore_patterns('__pycache__'))
     for relativa in CODIGO:
         copiar(relativa)
-    desplazar = 0 if fechas_originales else dias_hasta_hoy()
-    publicar_modelos(desplazar)
-    n = exportar_base(SALIDA / 'instantanea', TABLAS, desplazar)
+    publicar_modelos()
+    n = exportar_base(SALIDA / 'instantanea', TABLAS)
     megas = sum(f.stat().st_size for f in SALIDA.rglob('*') if f.is_file()) / 1e6
-    print(f'Contenedor preparado en {SALIDA.relative_to(RAIZ)}: {n} tablas y vistas de {DATABASE}, {megas:.1f} MB'
-          + (f'; fechas desplazadas {desplazar} días (el último día con datos es hoy)' if desplazar else ''))
+    print(f'Contenedor preparado en {SALIDA.relative_to(RAIZ)}: {n} tablas y vistas de {DATABASE}, {megas:.1f} MB')
 
 
 def subir_git(carpeta, url, rama, mensaje):
@@ -179,10 +156,8 @@ def main():
     destino.add_argument('--git', metavar='URL', help='repositorio de GitHub que construye Render')
     destino.add_argument('--huggingface', metavar='USUARIO/SPACE', help='Space de Hugging Face (Docker; plan PRO)')
     p.add_argument('--privado', action='store_true', help='con --huggingface: Space privado')
-    p.add_argument('--fechas-originales', action='store_true',
-                   help='publica las fechas de la simulación tal cual, sin desplazarlas hasta hoy')
     args = p.parse_args()
-    preparar(args.fechas_originales)
+    preparar()
     if args.git:
         publicar_git(args.git)
     elif args.huggingface:

@@ -777,7 +777,8 @@ def resumen(fab):
         print(f"    {tipo}: {n}")
 
 
-FECHA_FIN = datetime(2026, 9, 1)   # final del periodo del dataset inicial
+# Final del periodo del dataset inicial (config.yaml: dataset.fecha_fin)
+FECHA_FIN = datetime.combine(datetime.fromisoformat(str(CONFIG_DATASET['fecha_fin'])).date(), datetime.min.time())
 
 
 def sembrar(semilla):
