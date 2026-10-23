@@ -4,6 +4,7 @@ o para arreglos. Lo normal después es todo desde la web: el administrador da la
 pestaña Cuentas y los comercios se registran solos (web/cuentas.py). Desde la raíz del proyecto:
 
     python -m web.usuarios crear jefa@banco.com "Ana López" administrador     # al instalar: el administrador
+    python -m web.usuarios crear ana@x.com "Ana" analista --definitiva  # sin cambio obligatorio (web publicada)
     python -m web.usuarios demo                  # una cuenta de cada tipo para probar (enseña las contraseñas)
     python -m web.usuarios listar
     python -m web.usuarios contrasena jefa@banco.com      # una contraseña provisional nueva
@@ -42,6 +43,8 @@ def main():
     crear.add_argument('nombre')
     crear.add_argument('rol', choices=ROLES)
     crear.add_argument('--comercio', type=int, default=0, help='comercio_id (obligatorio para un comercio)')
+    crear.add_argument('--definitiva', action='store_true',
+                       help='sin cambio obligatorio al entrar (para la web publicada, que no guarda lo que se cambia en ella)')
     ordenes.add_parser('demo', help='admin@, analista@ y comercio@centinela.demo, con contraseñas ya definitivas')
     ordenes.add_parser('listar', help='las cuentas y su estado')
     for orden, ayuda in [('contrasena', 'le da una contraseña provisional nueva'), ('desactivar', 'quita el acceso')]:
@@ -58,10 +61,13 @@ def main():
         if almacen.ficha(args.email) is not None:
             raise SystemExit(f'Ya hay una cuenta con {args.email} (para otra contraseña: contrasena {args.email})')
         contrasena = contrasena_provisional()
-        almacen.guardar_usuario(args.email, args.nombre, args.rol, args.comercio, contrasena, provisional=True,
-                                revisada_por='instalación')
-        print(f'Cuenta lista: {args.email.lower()} ({args.rol}). Contraseña provisional: {contrasena}\n'
-              'Dásela a la persona: al entrar por primera vez tendrá que poner una suya.')
+        almacen.guardar_usuario(args.email, args.nombre, args.rol, args.comercio, contrasena,
+                                provisional=not args.definitiva, revisada_por='instalación')
+        if args.definitiva:
+            print(f'Cuenta lista: {args.email.lower()} ({args.rol}). Contraseña: {contrasena}')
+        else:
+            print(f'Cuenta lista: {args.email.lower()} ({args.rol}). Contraseña provisional: {contrasena}\n'
+                  'Dásela a la persona: al entrar por primera vez tendrá que poner una suya.')
     elif args.orden == 'demo':
         comercio_id = cliente().query('SELECT min(comercio_id) FROM comercio').result_rows[0][0]
         for email, nombre, rol, comercio in [('admin@centinela.demo', 'Administrador de prueba', 'administrador', 0),
