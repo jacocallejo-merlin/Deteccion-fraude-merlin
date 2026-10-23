@@ -42,8 +42,11 @@ def entorno(clickhouse, monkeypatch):
     admin.post("/api/login", json={"email": email("admin"), "contrasena": CONTRASENA})
     analista.post("/api/login", json={"email": email("analista"), "contrasena": CONTRASENA})
     comercio = clickhouse.query("SELECT min(comercio_id) FROM comercio").result_rows[0][0]
+    # En el CI solo está el ETL: las rutas de datos (/api/contexto...) necesitan el scoring. Lo que se ve con datos
+    # se comprueba solo si los hay (y entero en test_web.py); el acceso, con /api/perfil, que solo usa las cuentas
+    scoring = bool(clickhouse.command("EXISTS TABLE riesgo_transaccion"))
     yield {"app": app, "almacen": _almacen, "admin": admin, "analista": analista, "email": email,
-           "comercio": comercio, "clickhouse": clickhouse}
+           "comercio": comercio, "clickhouse": clickhouse, "scoring": scoring}
     borrar_cuentas_de_prueba(clickhouse)
 
 
@@ -105,8 +108,9 @@ def test_registro_de_un_comercio(entorno):
     assert e["configurada"] is True and e["cif"] == "B12345674"             # limpio: sin guiones y en mayúsculas
     assert nuevo.get("/api/sesion").json()["comercio_nombre"] == "Tienda Tests"   # el nombre, también en comercio
     # Solo ve lo suyo: ni los demás comercios ni la gestión de cuentas
-    assert [c["id"] for c in nuevo.get("/api/contexto").json()["comercios"]] == [s["comercio_id"]]
-    assert nuevo.get("/api/transacciones", params={"comercio": 0}).json() == []
+    if entorno["scoring"]:
+        assert [c["id"] for c in nuevo.get("/api/contexto").json()["comercios"]] == [s["comercio_id"]]
+        assert nuevo.get("/api/transacciones", params={"comercio": 0}).json() == []
     assert nuevo.get("/api/cuentas").status_code == 403
     assert entrar(TestClient(entorno["app"]), email).status_code == 200    # y entra con su contraseña
 
@@ -141,13 +145,13 @@ def test_contrasena_provisional_hay_que_cambiarla(entorno):
     nuevo = TestClient(entorno["app"])
     assert entrar(nuevo, email, provisional).json()["cambiar_contrasena"] is True
     # Hasta cambiarla no ve nada
-    r = nuevo.get("/api/contexto")
+    r = nuevo.get("/api/perfil")
     assert r.status_code == 403 and r.json()["cambiar_contrasena"] is True
     assert nuevo.get("/", follow_redirects=False).headers["location"] == "/login?cambiar=1"
     cambio = {"actual": provisional, "nueva": provisional}
     assert nuevo.post("/api/perfil/contrasena", json=cambio).status_code == 422    # tiene que ser otra
     assert nuevo.post("/api/perfil/contrasena", json={**cambio, "nueva": "mi-contrasena-1"}).status_code == 200
-    assert nuevo.get("/api/contexto").status_code == 200
+    assert nuevo.get("/api/perfil").status_code == 200
     assert entorno["admin"].post("/api/cuentas/crear", json={"rol": "analista", "email": email,
                                                              "nombre": "Otra vez"}).status_code == 409
 
@@ -226,7 +230,7 @@ def test_invitado_solo_mira(entorno):
         assert invitado.post("/api/invitado", json={"rol": rol, "comercio_id": comercio}).status_code == 200
         s = invitado.get("/api/sesion").json()
         assert s["rol"] == rol and s["invitado"] is True and s["comercio_id"] == comercio
-        assert invitado.get("/api/contexto").status_code == 200                    # mira
+        assert invitado.get("/api/perfil").status_code == 200                      # mira
         r = invitado.post("/api/perfil", json={"nombre": "Otro nombre"})           # pero no cambia nada
         assert r.status_code == 403 and "invitado" in r.json()["detail"]
         assert invitado.post("/api/logout").status_code == 200                     # salir, sí
@@ -242,7 +246,9 @@ def test_invitado_de_comercio_elige_la_empresa(entorno):
     assert anonimo.post("/api/invitado", json={"rol": "comercio"}).status_code == 422          # sin elegir, no
     otra = next(e["id"] for e in empresas if e["id"] != entorno["comercio"])
     anonimo.post("/api/invitado", json={"rol": "comercio", "comercio_id": otra})
-    assert {c["id"] for c in anonimo.get("/api/contexto").json()["comercios"]} == {otra}       # solo esa
+    assert anonimo.get("/api/sesion").json()["comercio_id"] == otra
+    if entorno["scoring"]:
+        assert {c["id"] for c in anonimo.get("/api/contexto").json()["comercios"]} == {otra}   # solo esa
 
 
 def test_invitado_apagado(entorno, monkeypatch):
