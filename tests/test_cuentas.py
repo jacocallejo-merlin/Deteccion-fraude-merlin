@@ -83,28 +83,44 @@ def test_codigo_con_demasiados_intentos(entorno):
 
 
 # ---------------------------------------------------------------------------- registro de un comercio
+EMPRESA = {"nombre": "Tienda Tests", "cif": "b-1234567-4", "categoria": "moda", "pais": "España",
+           "ciudad": "Vigo", "telefono": "986 000 000"}
+
+
 def test_registro_de_un_comercio(entorno):
+    from datetime import timedelta
+    from web.cuentas import hoy_madrid
     email = entorno["email"]("tienda")
     nuevo = TestClient(entorno["app"])
-    datos = {"empresa": "Tienda de Tests SL", "nombre": "Laura Gil", "email": email, "contrasena": CONTRASENA}
-    codigo = nuevo.post("/api/registro", json=datos).json()["codigo_demo"]
+    cuenta = {"nombre": "Laura Gil", "email": email, "contrasena": CONTRASENA}
+    # Paso 1: la cuenta. Paso 2: la empresa y su tamaño (lo que se puede elegir lo da /api/registro/opciones)
+    assert nuevo.post("/api/registro/comprobar", json=cuenta).json()["ok"] is True
+    opciones = nuevo.get("/api/registro/opciones").json()
+    assert "moda" in opciones["sectores"] and [t["clave"] for t in opciones["tamanos"]] == ["pequeno", "mediano", "grande"]
+    for campo in ["nombre", "cif", "telefono", "ciudad"]:                    # la empresa se valida antes del código
+        r = nuevo.post("/api/registro", json={**cuenta, "empresa": {**EMPRESA, campo: ""}})
+        assert r.status_code == 422, campo
+    assert nuevo.post("/api/registro", json={**cuenta, "empresa": {**EMPRESA, "cif": "B12345675"}}).status_code == 422
+    codigo = nuevo.post("/api/registro", json={**cuenta, "empresa": EMPRESA, "tamano": "mediano"}).json()["codigo_demo"]
     assert entrar(nuevo, email).status_code == 401                          # sin confirmar el correo, no existe
+    # Paso 3: el código. Se crean la cuenta y la empresa, ya configurada y dada de alta hoy
     r = nuevo.post("/api/registro/confirmar", json={"email": email, "codigo": codigo})
     assert r.status_code == 200 and r.json()["rol"] == "comercio"
     s = nuevo.get("/api/sesion").json()
-    assert s["comercio_id"] >= 100_000 and s["comercio_nombre"] == "Tienda de Tests SL"   # comercio nuevo, de cero
-    # Configura tu empresa: la primera vez, sin configurar y sin pagos
+    assert s["comercio_id"] >= 100_000 and s["comercio_nombre"] == "Tienda Tests"   # comercio nuevo, de cero
     e = nuevo.get("/api/empresa").json()
-    assert e["configurada"] is False and e["registrada"] is True and e["pagos"] == 0 and e["sectores"]
-    empresa = {"nombre": "Tienda Tests", "cif": "b-1234567-4", "categoria": "moda", "pais": "España",
-               "ciudad": "Vigo", "telefono": "986 000 000"}
+    assert e["configurada"] is True and e["registrada"] is True and e["pagos"] == 0 and e["sectores"]
+    assert e["cif"] == "B12345674" and e["categoria"] == "moda"              # limpio: sin guiones y en mayúsculas
+    hoy = hoy_madrid()
+    assert e["alta"] == str(hoy) and e["primeros_pagos"] == str(hoy + timedelta(days=1))   # pagos, desde mañana
+    assert e["tamano"] == "mediano" and e["pagos_dia"] > 0
+    # Mi empresa: se pueden cambiar los datos (con la misma validación) sin perder el alta
     for campo in ["nombre", "cif", "telefono", "ciudad"]:                    # obligatorios
-        assert nuevo.post("/api/empresa", json={**empresa, campo: ""}).status_code == 422, campo
-    assert nuevo.post("/api/empresa", json={**empresa, "cif": "B12345675"}).status_code == 422   # control mal
-    assert nuevo.post("/api/empresa", json={**empresa, "telefono": "1234"}).status_code == 422
-    e = nuevo.post("/api/empresa", json=empresa).json()
-    assert e["configurada"] is True and e["cif"] == "B12345674"             # limpio: sin guiones y en mayúsculas
-    assert nuevo.get("/api/sesion").json()["comercio_nombre"] == "Tienda Tests"   # el nombre, también en comercio
+        assert nuevo.post("/api/empresa", json={**EMPRESA, campo: ""}).status_code == 422, campo
+    assert nuevo.post("/api/empresa", json={**EMPRESA, "telefono": "1234"}).status_code == 422
+    e = nuevo.post("/api/empresa", json={**EMPRESA, "nombre": "Tienda Tests Vigo"}).json()
+    assert e["alta"] == str(hoy) and e["tamano"] == "mediano"
+    assert nuevo.get("/api/sesion").json()["comercio_nombre"] == "Tienda Tests Vigo"   # el nombre, también en comercio
     # Solo ve lo suyo: ni los demás comercios ni la gestión de cuentas
     if entorno["scoring"]:
         assert [c["id"] for c in nuevo.get("/api/contexto").json()["comercios"]] == [s["comercio_id"]]
@@ -115,13 +131,17 @@ def test_registro_de_un_comercio(entorno):
 
 def test_registro_no_valido(entorno):
     anonimo = TestClient(entorno["app"])
-    datos = {"empresa": "Otra", "nombre": "Otro", "email": entorno["email"]("otra"), "contrasena": CONTRASENA}
-    assert anonimo.post("/api/registro", json={**datos, "contrasena": "corta"}).status_code == 422
-    assert anonimo.post("/api/registro", json={**datos, "contrasena": "sinsimbolo123"}).status_code == 422   # sin símbolo
-    assert anonimo.post("/api/registro", json={**datos, "email": "no-es-un-correo"}).status_code == 422
-    assert anonimo.post("/api/registro", json={**datos, "email": entorno["email"]("analista")}).status_code == 409
-    anonimo.post("/api/registro", json=datos)
-    assert anonimo.post("/api/registro/confirmar", json={"email": datos["email"], "codigo": "12345"}).status_code == 422
+    cuenta = {"nombre": "Otro", "email": entorno["email"]("otra"), "contrasena": CONTRASENA}
+    comprobar = lambda **c: anonimo.post("/api/registro/comprobar", json={**cuenta, **c}).status_code   # noqa: E731
+    assert comprobar(contrasena="corta") == 422
+    assert comprobar(contrasena="sinsimbolo123") == 422                     # sin símbolo
+    assert comprobar(email="no-es-un-correo") == 422
+    assert comprobar(email=entorno["email"]("analista")) == 409             # ya tiene cuenta
+    # El registro entero vuelve a comprobar la cuenta (aunque alguien se salte el paso 1)
+    assert anonimo.post("/api/registro", json={**cuenta, "contrasena": "corta", "empresa": EMPRESA}).status_code == 422
+    assert anonimo.post("/api/registro", json={**cuenta, "empresa": EMPRESA, "tamano": "enorme"}).status_code == 422
+    anonimo.post("/api/registro", json={**cuenta, "empresa": EMPRESA})
+    assert anonimo.post("/api/registro/confirmar", json={"email": cuenta["email"], "codigo": "12345"}).status_code == 422
 
 
 def test_empresa_solo_para_comercios(entorno):

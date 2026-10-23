@@ -7,6 +7,9 @@ Normalmente falta un día. Si ya hay datos de hoy no genera nada (nunca días fu
 ejecutó recupera los días que faltan, hasta MAX_DIAS_PENDIENTES: más que eso suele ser una base de datos antigua,
 y entonces se para en vez de llenarla de días. Con --dias N genera N días seguidos sin mirar el calendario.
 
+Los comercios que se registran en la web reciben también pagos desde el día siguiente a su alta (ver más abajo,
+"comercios registrados en la web"): los lee de la base de datos de cuentas (CUENTAS_URL).
+
 También llegan las confirmaciones del banco (contracargos) de ese día: de los fraudes aún sin
 confirmar, los de días anteriores y los del propio lote, se confirman los que tocan con el mismo
 retraso que en el dataset inicial (dataset.etiquetas en config.yaml). Sin esto, en la operación
@@ -21,7 +24,7 @@ import argparse
 import copy
 import math
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from statistics import NormalDist
 from zoneinfo import ZoneInfo
@@ -158,6 +161,32 @@ def recortar(fab, fin):
     t["devolucion"] = [x for x in t["devolucion"] if x["transaccion_id"] in ids and x["fecha"] < fin]
 
 
+def caso_de_fraude(fab, rng, m, tipo, cid, comercio_id, inicio, fin, libres):
+    """Un caso de fraude de ese tipo, contra la tarjeta de ese cliente, en ese comercio (por uno de sus canales
+    online) y en algún momento del lote."""
+    canales_online = [ch for ch in m.canales_por_comercio[comercio_id] if m.canal_tipo[ch] != "datafono"]
+    c = {
+        "cid": cid,
+        "metodo": int(rng.choice(m.metodos_por_cliente[cid])),
+        "disp": int(rng.choice(m.disp_por_cliente[cid])),
+        "disp_nuevo": (int(rng.choice(m.dispositivos_estafador))
+                       if rng.random() < ds.P_USA_DISPOSITIVO_ESTAFADOR
+                       else ds.elegir_dispositivo_nuevo(rng, libres)),
+        "canal": int(rng.choice(canales_online)),
+        "momento": ds.hora_fraude(rng, ds.momento_aleatorio(rng, inicio, fin)),
+        "pais": m.perfiles[cid]["pais"],
+        "mu": m.perfiles[cid]["mu"],
+        "fecha_fin": fin,
+    }
+    n_antes = len(fab.tablas["transaccion"])
+    ds.CASOS[tipo](fab, rng, c)
+    for t in fab.tablas["transaccion"][n_antes:]:
+        if t["es_fraude"] == 1:
+            t["tipo_fraude"] = tipo
+            if tipo != "card_testing" and rng.random() < ds.P_RECHAZO_FRAUDE:
+                t["estado"] = "rechazada"
+
+
 def generar_fraude_lote(fab, rng, m, inicio, fin, libres):
     """Unos pocos casos de fraude conocidos, en la proporción del config.yaml."""
     n_legitimas = len(fab.tablas["transaccion"])
@@ -168,28 +197,100 @@ def generar_fraude_lote(fab, rng, m, inicio, fin, libres):
         tipo = str(rng.choice(TIPOS_FRAUDE_LOTE))
         cid = int(rng.choice(m.clientes_ids))
         comercio_id = int(rng.choice(m.comercios_ids))
-        canales_online = [ch for ch in m.canales_por_comercio[comercio_id] if m.canal_tipo[ch] != "datafono"]
-        c = {
-            "cid": cid,
-            "metodo": int(rng.choice(m.metodos_por_cliente[cid])),
-            "disp": int(rng.choice(m.disp_por_cliente[cid])),
-            "disp_nuevo": (int(rng.choice(m.dispositivos_estafador))
-                           if rng.random() < ds.P_USA_DISPOSITIVO_ESTAFADOR
-                           else ds.elegir_dispositivo_nuevo(rng, libres)),
-            "canal": int(rng.choice(canales_online)),
-            "momento": ds.hora_fraude(rng, ds.momento_aleatorio(rng, inicio, fin)),
-            "pais": m.perfiles[cid]["pais"],
-            "mu": m.perfiles[cid]["mu"],
-            "fecha_fin": fin,
-        }
-        n_antes = len(fab.tablas["transaccion"])
-        ds.CASOS[tipo](fab, rng, c)
-        for t in fab.tablas["transaccion"][n_antes:]:
-            if t["es_fraude"] == 1:
-                t["tipo_fraude"] = tipo
-                if tipo != "card_testing" and rng.random() < ds.P_RECHAZO_FRAUDE:
-                    t["estado"] = "rechazada"
+        caso_de_fraude(fab, rng, m, tipo, cid, comercio_id, inicio, fin, libres)
     return n_casos
+
+
+# ------------------------------------------------------------------------- comercios registrados en la web
+# Un comercio que se registra en la web (web/cuentas.py) recibe pagos desde el día siguiente a su alta: de los
+# mismos clientes simulados, con sus tarjetas, horarios e importes, y algún caso de fraude (config.yaml,
+# comercios_registrados). Van detrás del resto del lote y con generadores propios (semilla, día y comercio): los
+# pagos de los demás comercios salen igual que sin ellos, y un --desde-cero los reconstruye, cada comercio desde su alta.
+REGISTRADOS = CONFIG.get("comercios_registrados", {})
+SEMILLA_REGISTRADOS = 7          # separa sus generadores de los del resto del lote
+COLUMNAS_CANAL = ["canal_id", "comercio_id", "tipo", "ubicacion"]
+
+
+def comercios_registrados():
+    """Los comercios dados de alta en la web, de la base de datos de cuentas (web/bd_cuentas.py: la compartida
+    de CUENTAS_URL o, sin ella, la de este equipo), como mucho comercios_registrados.maximo, los primeros en
+    darse de alta. [] si no hay base de datos de cuentas."""
+    from web.bd_cuentas import BaseCuentas
+    bd = BaseCuentas()
+    if not bd.existe():
+        return []
+    filas = bd.filas("SELECT comercio_id, nombre, categoria, pais, ciudad, alta, tamano FROM empresa "
+                     "WHERE registrada = 1 AND alta != '' ORDER BY comercio_id")
+    pagos_dia = REGISTRADOS.get("pagos_dia", {})
+    return [{**f, "alta": date.fromisoformat(f["alta"]), "pagos_dia": pagos_dia.get(f["tamano"], pagos_dia.get("pequeno", 15))}
+            for f in filas[:REGISTRADOS.get("maximo", 30)]]
+
+
+def canales_de(comercio_id, ciudad):
+    """Los canales de pago de un comercio registrado, siempre los mismos: web o app y, a veces, datáfono (como los
+    del dataset). Sus números (comercio_id * 10 + 1, 2...) no chocan con los del dataset."""
+    rng = np.random.default_rng([CONFIG["semilla"], SEMILLA_REGISTRADOS, comercio_id])
+    tipos = [str(rng.choice(["web", "app"]))] + (["datafono"] if rng.random() < 0.6 else [])
+    return [{"canal_id": comercio_id * 10 + i, "comercio_id": comercio_id, "tipo": tipo,
+             "ubicacion": "online" if tipo != "datafono" else (ciudad or "tienda")} for i, tipo in enumerate(tipos, 1)]
+
+
+def dar_de_alta(client, registrados):
+    """En ClickHouse, lo que les falte: su fila en comercio (con el nombre, sector, país y ciudad de la web, que
+    pueden cambiar en Mi empresa) y sus canales en canal_pago, por los que se llega del pago al comercio."""
+    if not registrados:
+        return
+    ids = [r["comercio_id"] for r in registrados]
+    hay = {f[0]: f[1:] for f in client.query(
+        "SELECT comercio_id, nombre, categoria_negocio, pais, ciudad FROM comercio WHERE comercio_id IN {ids:Array(UInt32)}",
+        parameters={"ids": ids}).result_rows}
+    nuevos = [[r["comercio_id"], r["nombre"], r["categoria"], r["pais"], r["ciudad"]]
+              for r in registrados if r["comercio_id"] not in hay]
+    if nuevos:
+        client.insert("comercio", nuevos, column_names=["comercio_id", "nombre", "categoria_negocio", "pais", "ciudad"])
+    for r in registrados:
+        datos = (r["nombre"], r["categoria"], r["pais"], r["ciudad"])
+        if r["comercio_id"] in hay and [str(v).strip().lower() for v in hay[r["comercio_id"]]] != \
+                [str(v).strip().lower() for v in datos]:
+            client.command("ALTER TABLE comercio UPDATE nombre = {n:String}, categoria_negocio = {s:String}, "
+                           "pais = {p:String}, ciudad = {ci:String} WHERE comercio_id = {c:UInt32}",
+                           parameters={"n": datos[0], "s": datos[1], "p": datos[2], "ci": datos[3], "c": r["comercio_id"]},
+                           settings=AJUSTES_MUTACION)
+    canales_hay = {c for (c,) in client.query("SELECT canal_id FROM canal_pago WHERE comercio_id IN {ids:Array(UInt32)}",
+                                              parameters={"ids": ids}).result_rows}
+    faltan = [c for r in registrados for c in canales_de(r["comercio_id"], r["ciudad"]) if c["canal_id"] not in canales_hay]
+    if faltan:
+        client.insert("canal_pago", [[c[k] for k in COLUMNAS_CANAL] for c in faltan], column_names=COLUMNAS_CANAL)
+    print(f"Comercios registrados en la web: {len(registrados)} ({len(nuevos)} nuevos en ClickHouse)")
+
+
+def pagos_de_registrados(m, inicio, fin, semilla, registrados, libres, contadores):
+    """Los pagos del día de los comercios registrados antes de ese día, en una Fabrica aparte cuyos números siguen
+    tras `contadores` (los del resto del lote). Devuelve (fabrica, casos de fraude)."""
+    total = ds.Fabrica()
+    total._contadores = dict(contadores)
+    n_casos = 0
+    for r in [r for r in registrados if r["alta"] < inicio.date()]:
+        comercio_id = r["comercio_id"]
+        canales = canales_de(comercio_id, r["ciudad"])
+        mc = copy.copy(m)          # el mundo, con los canales de este comercio
+        mc.canales_por_comercio = {**m.canales_por_comercio, comercio_id: [c["canal_id"] for c in canales]}
+        mc.canal_tipo = {**m.canal_tipo, **{c["canal_id"]: c["tipo"] for c in canales}}
+        rng = np.random.default_rng([semilla, SEMILLA_REGISTRADOS, inicio.toordinal(), comercio_id])
+        fab = ds.Fabrica()         # una por comercio: las devoluciones se sacan de sus pagos, no de los de otros
+        fab._contadores = dict(total._contadores)
+        ds.generar_transacciones_normales(fab, rng, inicio, fin, m.clientes_ids, m.perfiles,
+                                          {cid: [comercio_id] for cid in m.clientes_ids}, m.metodos_por_cliente,
+                                          m.disp_por_cliente, mc.canales_por_comercio, mc.canal_tipo, [comercio_id],
+                                          libres, media_dia=r["pagos_dia"])
+        for _ in range(int(rng.poisson(REGISTRADOS.get("casos_fraude_semana", 2) / 7))):
+            caso_de_fraude(fab, rng, mc, str(rng.choice(TIPOS_FRAUDE_LOTE)), int(rng.choice(m.clientes_ids)),
+                           comercio_id, inicio, fin, libres)
+            n_casos += 1
+        for tabla in TABLAS_LOTE:
+            total.tablas[tabla].extend(fab.tablas[tabla])
+        total._contadores = fab._contadores
+    return total, n_casos
 
 
 def cargar(client, fab):
@@ -216,9 +317,10 @@ def generar_mundo():
                             ds.FECHA_FIN - timedelta(days=ds.CONFIG_DATASET["dias"]))
 
 
-def lote_de_un_dia(client, mundo):
+def lote_de_un_dia(client, mundo, registrados=()):
     """Genera y carga el día siguiente al último que hay. Todo sale de lo que hay en ClickHouse y
-    de la semilla de ese día: mismo estado y mismo día -> mismo lote."""
+    de la semilla de ese día: mismo estado y mismo día -> mismo lote. registrados: los comercios dados
+    de alta en la web (comercios_registrados), que reciben pagos desde el día siguiente a su alta."""
     ult = estado_actual(client)
     borrar_restos(client, ult)
     ultima_sesion = uno(client, f"SELECT max(timestamp) FROM sesion WHERE sesion_id <= {ult['sesion']}")
@@ -251,6 +353,20 @@ def lote_de_un_dia(client, mundo):
     if suciedad.get("activar"):
         ds.ensuciar(fab, semilla + inicio.toordinal(), suciedad)
 
+    # Los comercios registrados en la web, detrás: lo de arriba sale igual con ellos que sin ellos
+    otros, n_casos_reg = pagos_de_registrados(m, inicio, fin, semilla, registrados, libres, fab._contadores)
+    if otros.tablas["transaccion"]:
+        recortar(otros, fin)
+        confirmar_lote(otros, inicio, fin, semilla)
+        n_reg = len(otros.tablas["transaccion"])
+        n_com = len({t["canal_id"] // 10 for t in otros.tablas["transaccion"]})
+        print(f"Comercios registrados en la web: {n_reg:,} pagos en {n_com} comercio/s "
+              f"({sum(t['es_fraude'] for t in otros.tablas['transaccion'])} de fraude en {n_casos_reg} casos)")
+        if suciedad.get("activar"):
+            ds.ensuciar(otros, semilla + inicio.toordinal() + SEMILLA_REGISTRADOS * 1_000_000, suciedad)
+        for tabla in TABLAS_LOTE:
+            fab.tablas[tabla].extend(otros.tablas[tabla])
+
     print("\nCargando en ClickHouse...")
     # Antes que el lote: si la carga falla a medias, al repetir el mismo día sale lo mismo
     n_conf, n_pend = confirmar_pendientes(client, inicio, fin, semilla)
@@ -281,9 +397,11 @@ def main():
                      f"{MAX_DIAS_PENDIENTES}, parece una base de datos antigua. Para regenerarla al día: "
                      f"python main.py --desde-cero. Para generar esos días de todos modos: --dias {dias}")
         print(f"Los datos acaban el {ultimo:%d-%m-%Y}: se generan {dias} día/s, hasta hoy")
+    registrados = comercios_registrados()
+    dar_de_alta(client, registrados)
     mundo = generar_mundo()      # una sola vez: es lo más lento y no cambia de un día a otro
     for _ in range(dias):
-        lote_de_un_dia(client, mundo)
+        lote_de_un_dia(client, mundo, registrados)
     print(f"\nListo: {dias} día/s. Siguiente paso: carga_transacciones.py")
 
 

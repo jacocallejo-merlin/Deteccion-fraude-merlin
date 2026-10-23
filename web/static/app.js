@@ -492,6 +492,7 @@ async function comprobarAvisos(primeraVez = false) {
     if (estado.contexto && datos.hoy !== estado.contexto.hoy) {
       await cargarContexto();
       recargar(['alertas', 'resumen', 'transacciones', 'avisos']);
+      document.querySelector('.bienvenida')?.remove();   // un comercio recién registrado: ya le han llegado pagos
     }
     actualizarCampana(datos);
     document.getElementById('panel-lista').innerHTML = datos.avisos.length ? datos.avisos.map(filaAviso).join('')

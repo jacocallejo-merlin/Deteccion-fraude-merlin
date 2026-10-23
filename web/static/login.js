@@ -85,20 +85,43 @@ alEnviar('form-nueva', 'm-nueva', async () => {
   location.href = destino();
 });
 
-// ------------------------------------------------------------------ registro de un comercio
+// ------------------------------------------------------------------ registro de un comercio (3 pasos)
+const CAMPOS_EMPRESA = ['nombre', 'cif', 'categoria', 'pais', 'ciudad', 'direccion', 'telefono', 'web'];
+const cuenta = () => ({ nombre: $('r-nombre').value, email: $('r-email').value, contrasena: $('r-contrasena').value });
+
+// Paso 1: la cuenta. El servidor comprueba ya el correo y la contraseña, antes de pedir la empresa
 alEnviar('form-registro', 'm-registro', async () => {
   iguales('r-contrasena', 'r-repetida');
-  const r = await enviar('/api/registro', {
-    empresa: $('r-empresa').value, nombre: $('r-nombre').value, email: $('r-email').value, contrasena: $('r-contrasena').value,
-  });
-  $('confirmar-texto').textContent = `Te hemos mandado un código de 6 cifras a ${$('r-email').value}. Vale 15 minutos.`;
+  await enviar('/api/registro/comprobar', cuenta());
+  verVista('vista-registro-empresa');
+});
+
+// Paso 2: la empresa y su tamaño (cuántos pagos al día le llegarán). Con eso se manda el código
+async function cargarOpciones() {
+  if ($('re-tamanos').children.length) return;
+  const o = await fetch('/api/registro/opciones').then((r) => r.json());
+  $('re-sectores').innerHTML = o.sectores.map((s) => `<option value="${escapar(s)}">`).join('');
+  $('re-tamanos').innerHTML = o.tamanos.map((t, i) => `
+    <label class="tamano"><input type="radio" name="tamano" value="${t.clave}" ${i === 0 ? 'checked' : ''}>
+      <b>${escapar(t.nombre)}</b><span class="sub">unos ${t.pagos_dia} pagos al día</span></label>`).join('');
+}
+document.querySelector('[data-vista="vista-registro"]').addEventListener('click', () => cargarOpciones().catch(() => {}));
+
+alEnviar('form-registro-empresa', 'm-registro-empresa', async () => {
+  await cargarOpciones();
+  const empresa = Object.fromEntries(CAMPOS_EMPRESA.map((c) => [c, $(`re-${c}`).value]));
+  const tamano = document.querySelector('input[name=tamano]:checked')?.value || 'pequeno';
+  const r = await enviar('/api/registro', { ...cuenta(), empresa, tamano });
+  $('confirmar-texto').textContent = `Te hemos mandado un código de 6 cifras a ${$('r-email').value} `
+    + '(mira también en el correo no deseado). Vale 15 minutos.';
   codigoDemo('confirmar-demo', r);
   verVista('vista-confirmar');
 });
 
+// Paso 3: el código. Se crean la cuenta y la empresa, y entra
 alEnviar('form-confirmar', 'm-confirmar', async () => {
   await enviar('/api/registro/confirmar', { email: $('r-email').value, codigo: $('c-codigo').value });
-  location.href = '/';           // la primera vez, la web le pide configurar su empresa
+  location.href = '/';
 });
 
 // ------------------------------------------------------------------ cambiar la contraseña provisional

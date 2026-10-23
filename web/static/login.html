@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400..800&display=swap">
-  <link rel="stylesheet" href="/static/estilos.css?v=22">
+  <link rel="stylesheet" href="/static/estilos.css?v=24">
 </head>
 <body class="pagina-login">
   <main class="login noche">
@@ -94,15 +94,14 @@
       <p class="sub"><button type="button" class="enlace-noche" data-vista="vista-olvido">No me ha llegado: pedir otro código</button></p>
     </section>
 
-    <!-- ============================================================ registro de un comercio: 1, los datos -->
+    <!-- ============================================================ registro de un comercio: 1, la cuenta -->
     <section id="vista-registro" class="vista" hidden>
+      <p class="pasos">Paso 1 de 3 · Tu cuenta</p>
       <h1>Registra tu comercio</h1>
-      <p class="sub">Crea la cuenta de tu empresa. Verás tus pagos y los avisos de fraude en cuanto tu entidad empiece a
-        enviarlos. Si tu comercio ya trabaja con la entidad, pídele la cuenta a ella: así verás también tu historial.</p>
+      <p class="sub">Da de alta tu comercio en Centinela. Desde el día siguiente al alta, tu entidad nos envía cada noche
+        los pagos del día: verás cuáles son sospechosos de fraude y te avisaremos de los graves. Si tu comercio ya trabaja
+        con la entidad, pídele la cuenta a ella: así verás también tu historial.</p>
       <form id="form-registro">
-        <label class="campo">Nombre de tu empresa
-          <input id="r-empresa" type="text" autocomplete="organization" required minlength="2" maxlength="120">
-        </label>
         <label class="campo">Tu nombre
           <input id="r-nombre" type="text" autocomplete="name" required minlength="2" maxlength="80">
         </label>
@@ -117,13 +116,61 @@
           <input id="r-repetida" type="password" autocomplete="new-password" required minlength="8">
         </label>
         <p class="error-texto" id="m-registro" aria-live="polite"></p>
-        <button type="submit" class="boton">Crear la cuenta</button>
+        <button type="submit" class="boton">Siguiente: tu empresa</button>
       </form>
       <p class="sub">¿Ya tienes cuenta? <button type="button" class="enlace-noche" data-vista="vista-entrar">Inicia sesión</button></p>
     </section>
 
-    <!-- ============================================================ registro de un comercio: 2, el código -->
+    <!-- ============================================================ registro de un comercio: 2, la empresa -->
+    <section id="vista-registro-empresa" class="vista" hidden>
+      <p class="pasos">Paso 2 de 3 · Tu empresa</p>
+      <h1>Los datos de tu empresa</h1>
+      <p class="sub">Con ellos queda dada de alta. Podrás cambiarlos cuando quieras desde Mi empresa.</p>
+      <form id="form-registro-empresa">
+        <label class="campo">Nombre comercial
+          <input id="re-nombre" type="text" autocomplete="organization" required minlength="2" maxlength="120">
+        </label>
+        <div class="dos-campos">
+          <label class="campo">NIF o CIF
+            <input id="re-cif" type="text" required maxlength="20" autocomplete="off" placeholder="B12345674">
+          </label>
+          <label class="campo">Sector
+            <input id="re-categoria" type="text" required maxlength="40" list="re-sectores" placeholder="Por ejemplo: moda">
+            <datalist id="re-sectores"></datalist>
+          </label>
+        </div>
+        <div class="dos-campos">
+          <label class="campo">País
+            <input id="re-pais" type="text" required maxlength="40" autocomplete="country-name" value="España">
+          </label>
+          <label class="campo">Ciudad
+            <input id="re-ciudad" type="text" required maxlength="60" autocomplete="address-level2">
+          </label>
+        </div>
+        <label class="campo">Dirección (opcional)
+          <input id="re-direccion" type="text" maxlength="200" autocomplete="street-address">
+        </label>
+        <div class="dos-campos">
+          <label class="campo">Teléfono
+            <input id="re-telefono" type="tel" required maxlength="30" autocomplete="tel" placeholder="981 123 456">
+          </label>
+          <label class="campo">Web (opcional)
+            <input id="re-web" type="text" maxlength="200" placeholder="www.miempresa.com" autocomplete="url">
+          </label>
+        </div>
+        <fieldset class="tamanos">
+          <legend>¿Cuántos pagos recibes al día?</legend>
+          <div id="re-tamanos"></div>
+        </fieldset>
+        <p class="error-texto" id="m-registro-empresa" aria-live="polite"></p>
+        <button type="submit" class="boton">Enviarme el código</button>
+      </form>
+      <p class="sub"><button type="button" class="enlace-noche" data-vista="vista-registro">Volver</button></p>
+    </section>
+
+    <!-- ============================================================ registro de un comercio: 3, el código -->
     <section id="vista-confirmar" class="vista" hidden>
+      <p class="pasos">Paso 3 de 3 · Confirma tu correo</p>
       <h1>Confirma tu correo</h1>
       <p class="sub" id="confirmar-texto"></p>
       <p class="demo-codigo" id="confirmar-demo" hidden></p>
@@ -135,7 +182,7 @@
         <p class="error-texto" id="m-confirmar" aria-live="polite"></p>
         <button type="submit" class="boton">Confirmar y entrar</button>
       </form>
-      <p class="sub"><button type="button" class="enlace-noche" data-vista="vista-registro">Volver</button></p>
+      <p class="sub"><button type="button" class="enlace-noche" data-vista="vista-registro-empresa">Volver</button></p>
     </section>
 
     <!-- ============================================================ cambiar la contraseña provisional -->
@@ -158,6 +205,6 @@
       </form>
     </section>
   </main>
-  <script src="/static/login.js?v=7"></script>
+  <script src="/static/login.js?v=8"></script>
 </body>
 </html>

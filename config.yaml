@@ -34,6 +34,19 @@ dataset:
     retraso_sigma: 0.9
     p_nunca_confirmado: 0.10
 
+# Comercios que se registran en la web (web/cuentas.py). Desde el día siguiente a su alta, el lote de cada noche
+# (generar_lote.py) les genera pagos de los mismos clientes simulados, con algún caso de fraude, y pasan por todo el
+# pipeline como los demás: al entrar ven sus pagos del día y cuáles son sospechosos.
+comercios_registrados:
+  maximo: 30                   # como mucho estos (los primeros en darse de alta): cualquiera puede registrarse
+  pagos_dia:                   # media de pagos al día según el tamaño que eligen al registrarse
+    pequeno: 15
+    mediano: 40
+    grande: 80
+  # Casos de fraude a la semana en cada uno (1 caso = 1 a 12 pagos). Más que la tasa real (~0,5 %, que en un
+  # comercio pequeño daría un caso cada varias semanas), para que en la demo se vea alguno.
+  casos_fraude_semana: 2
+
 # dataset.py: errores típicos de los datos reales que se meten al cargar (carga_transacciones.py y
 # limpieza.py los corrigen). Tienen su propia semilla: el dataset de fondo no cambia al activarlos.
 suciedad:

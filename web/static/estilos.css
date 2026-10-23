@@ -412,6 +412,23 @@ footer { max-width: var(--ancho); margin: 0 auto; padding: 18px 24px 30px; borde
 .login input[type=text], .login input[type=tel], .login input[type=number] { padding: 10px 12px;
   border: 1px solid var(--linea-noche); border-radius: var(--radio); background: #16303A; color: var(--blanco); }
 .quitar-teams { align-self: flex-start; margin-top: -8px; font-size: 13.5px; }
+/* Registro de un comercio en 3 pasos: en qué paso va y el tamaño de la empresa */
+.login .pasos { margin: 8px 0 -10px; color: var(--sobre-noche-suave); font-size: 12.5px; font-weight: 600;
+  letter-spacing: .04em; text-transform: uppercase; }
+.login .dos-campos { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }   /* que no se salgan del formulario */
+.login .campo input { width: 100%; box-sizing: border-box; }
+.login .tamanos { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.login .tamanos legend { font-weight: 600; margin-bottom: 8px; }
+.login .tamano { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; align-items: center; padding: 10px 12px;
+  border: 1px solid var(--linea-noche); border-radius: var(--radio); background: #16303A; cursor: pointer; }
+.login .tamano + .tamano { margin-top: 8px; }
+.login .tamano input { grid-row: span 2; accent-color: var(--vigia); }
+.login .tamano:has(input:checked) { border-color: var(--vigia); }
+
+/* Comercio recién registrado: aún sin pagos, cuándo llegan los primeros (empresa.js) */
+.bienvenida { max-width: var(--ancho); margin: 20px auto 0; padding: 14px 18px; border-radius: var(--radio);
+  background: var(--resalte); border: 1px solid var(--linea); }
+.bienvenida b { display: block; margin-bottom: 4px; }
 
 /* ============================================================ pestaña Cuentas (cuentas.js) */
 .paneles-cuentas { display: grid; grid-template-columns: 1fr; gap: 24px; padding: 8px 0 24px; }
@@ -451,7 +468,7 @@ tr.apagada td { color: var(--suave); }
 .login input[type=text], .login input[type=email], .login input[type=password] { min-width: 0; }
 .demo-codigo { margin: 0; padding: 10px 12px; border-radius: var(--radio); background: #3A3214; color: #F3D98B; font-size: 14px; }
 .dos-campos { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-@media (max-width: 520px) { .dos-campos { grid-template-columns: 1fr; } }
+@media (max-width: 520px) { .dos-campos, .login .dos-campos { grid-template-columns: 1fr; } }
 
 /* ============================================================ modo invitado */
 .login .invitado { margin-top: 10px; padding-top: 16px; border-top: 1px solid var(--linea-noche); }

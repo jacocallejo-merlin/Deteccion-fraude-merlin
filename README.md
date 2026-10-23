@@ -779,13 +779,20 @@ contraseña): el tipo de cuenta lo dice la propia cuenta y la web lleva a cada u
   enseña nada más hasta entonces (lo comprueba el servidor).
 - **¿Has olvidado tu contraseña?** Se escribe el correo, llega un **código de 6 cifras** (vale 15
   minutos, 5 intentos) y con él se pone una nueva. Se cierra la sesión en los demás equipos.
-- **Registro de un comercio.** Nombre de la empresa, su nombre, su correo y una contraseña; llega un
-  código para confirmar que el correo es suyo y entra. Se crea como **comercio nuevo** (número desde
-  100000) y empieza de cero: la primera vez ve **Configura tu empresa** (CIF, sector, ciudad, teléfono...)
-  y su panel vacío hasta que la entidad envíe sus pagos. Registrándose nunca se puede quedar con un
-  comercio que ya existe, porque vería sus pagos: a esos les da la cuenta el administrador. Los
-  registrados se guardan también en la tabla `empresa`, que el pipeline no toca: si se rehacen los datos
-  (`main.py --desde-cero`), la web los vuelve a poner.
+- **Registro de un comercio, en tres pasos.** 1) Su nombre, su correo y una contraseña. 2) Los datos de la
+  empresa (nombre comercial, NIF/CIF, sector, país, ciudad, teléfono...) y su **tamaño** (pequeño, mediano
+  o grande: unos 15, 40 u 80 pagos al día). 3) El código que le llega para confirmar el correo. Entonces se
+  crean la cuenta y la empresa, como **comercio nuevo** (número desde 100000) **dado de alta ese día**.
+  Registrándose nunca se puede quedar con un comercio que ya existe, porque vería sus pagos: a esos les da
+  la cuenta el administrador (y configuran su empresa la primera vez que entran).
+- **Sus pagos, desde el día siguiente.** El lote de cada noche (`generar_lote.py`) genera también pagos para
+  los comercios registrados: de los mismos clientes simulados, por sus propios canales (web o app y, a veces,
+  datáfono) y con algún caso de fraude (`comercios_registrados` en `config.yaml`: tamaños, casos por semana y
+  un máximo de comercios). Pasan por todo el pipeline como los demás, así que cada mañana el comercio ve sus
+  pagos del día, cuáles son sospechosos y, si lo tiene activado en Mis avisos, le llega el aviso. Hasta
+  entonces, la web le dice cuándo llegan los primeros. Los pagos de los demás comercios no cambian (cada
+  comercio registrado tiene su propia semilla) y `main.py --desde-cero` los reconstruye, cada uno desde su
+  alta, porque la empresa y su fecha de alta están en la base de datos de cuentas, que el pipeline no borra.
 - **Mi perfil** (el círculo con las iniciales, arriba a la derecha): nombre, teléfono, cambiar la
   contraseña, cerrar la sesión en los demás equipos y **Mis avisos**; los comercios, también **Mi empresa**.
 

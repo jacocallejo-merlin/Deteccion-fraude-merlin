@@ -5,13 +5,30 @@
 const em = (id) => document.getElementById(id);
 const CAMPOS = ['nombre', 'cif', 'categoria', 'pais', 'ciudad', 'direccion', 'telefono', 'web'];
 
+const fechaLargaEmpresa = (d) => new Date(`${d}T00:00:00`).toLocaleDateString('es-ES', { day: 'numeric', month: 'long' });
+
 function pintarEmpresa(e) {
   CAMPOS.forEach((c) => { em(`em-${c}`).value = e[c] || ''; });
   em('em-sectores').innerHTML = e.sectores.map((s) => `<option value="${esc(s)}">`).join('');
   em('empresa-titulo').textContent = e.configurada ? 'Mi empresa' : 'Configura tu empresa';
-  const vacio = e.pagos ? '' : ' Aún no hay pagos tuyos: aparecerán aquí en cuanto tu entidad empiece a enviarlos.';
-  em('em-intro').textContent = e.configurada ? `Comercio número ${e.comercio_id}.${vacio}`
+  const alta = e.alta ? ` Dado de alta el ${fechaLargaEmpresa(e.alta)}, con unos ${e.pagos_dia} pagos al día.` : '';
+  const vacio = e.pagos ? '' : e.primeros_pagos ? ` Tus primeros pagos llegarán el ${fechaLargaEmpresa(e.primeros_pagos)}.`
+    : ' Aún no hay pagos tuyos: aparecerán aquí en cuanto tu entidad empiece a enviarlos.';
+  em('em-intro').textContent = e.configurada ? `Comercio número ${e.comercio_id}.${alta}${vacio}`
     : `Bienvenido a Centinela. Antes de empezar, completa los datos de tu empresa (puedes cambiarlos cuando quieras desde tu perfil).${vacio}`;
+}
+
+// Un comercio recién registrado aún no tiene pagos: en vez de una web vacía, cuándo le llegan los primeros
+function avisarPrimerosPagos(e) {
+  if (e.pagos || !e.primeros_pagos) return;
+  const aviso = document.createElement('div');
+  aviso.className = 'bienvenida';
+  aviso.setAttribute('role', 'status');
+  aviso.innerHTML = `<b>Bienvenido a Centinela, ${esc(e.nombre)}.</b>Tu comercio está dado de alta desde el `
+    + `${fechaLargaEmpresa(e.alta)}. Tu entidad nos envía cada noche los pagos del día: los primeros llegarán el `
+    + `${fechaLargaEmpresa(e.primeros_pagos)}, y a partir de entonces verás aquí cada mañana tus pagos del día y cuáles `
+    + 'son sospechosos de fraude. Puedes elegir cómo te avisamos de los graves en Mis avisos.';
+  document.getElementById('contenido').prepend(aviso);
 }
 
 async function abrirEmpresa() {
@@ -45,6 +62,7 @@ api('/api/sesion').then(async (s) => {
   em('abrir-empresa').hidden = false;
   if (s.invitado) return;          // el invitado solo mira: no se le pide configurar nada
   const e = await api('/api/empresa');
+  avisarPrimerosPagos(e);
   if (!e.configurada) {
     pintarEmpresa(e);
     em('empresa').showModal();

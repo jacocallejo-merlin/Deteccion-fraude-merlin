@@ -194,15 +194,19 @@ class Almacen:
 
     # ------------------------------------------------------------------ empresas (web/cuentas.py)
     def empresa(self, comercio_id):
-        return self.bd.fila(f'SELECT {", ".join(CAMPOS_EMPRESA)}, registrada, configurada FROM empresa '
+        return self.bd.fila(f'SELECT {", ".join(CAMPOS_EMPRESA)}, registrada, configurada, alta, tamano FROM empresa '
                             'WHERE comercio_id = ?', [comercio_id])
 
-    def guardar_empresa(self, comercio_id, datos, registrada, configurada):
-        self.bd.guardar('empresa', {'comercio_id': comercio_id, **{k: datos.get(k, '') for k in CAMPOS_EMPRESA},
-                                    'registrada': int(registrada), 'configurada': int(configurada)}, 'comercio_id')
+    def guardar_empresa(self, comercio_id, datos, registrada, configurada, alta=None, tamano=None):
+        """alta (AAAA-MM-DD) y tamano solo se dan al registrarse: si no se pasan, se dejan como estaban."""
+        fila = {'comercio_id': comercio_id, **{k: datos.get(k, '') for k in CAMPOS_EMPRESA},
+                'registrada': int(registrada), 'configurada': int(configurada)}
+        fila.update({k: v for k, v in (('alta', alta), ('tamano', tamano)) if v is not None})
+        self.bd.guardar('empresa', fila, 'comercio_id')
 
     def empresas_registradas(self):
-        return self.bd.filas(f'SELECT comercio_id, {", ".join(CAMPOS_EMPRESA)} FROM empresa WHERE registrada = 1')
+        return self.bd.filas(f'SELECT comercio_id, {", ".join(CAMPOS_EMPRESA)}, alta, tamano FROM empresa '
+                             'WHERE registrada = 1 ORDER BY comercio_id')
 
     def ultimo_comercio_registrado(self):
         f = self.bd.fila('SELECT max(comercio_id) AS m FROM empresa')

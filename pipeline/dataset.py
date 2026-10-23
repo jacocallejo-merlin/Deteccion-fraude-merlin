@@ -333,14 +333,18 @@ def elegir_dispositivo_nuevo(rng, libres):
 
 def generar_transacciones_normales(fab, rng, fecha_inicio, fecha_fin, clientes_ids, perfiles,
                                    favoritos, metodos_por_cliente, disp_por_cliente,
-                                   canales_por_comercio, canal_tipo, comercios_ids, todos_dispositivos):
+                                   canales_por_comercio, canal_tipo, comercios_ids, todos_dispositivos,
+                                   media_dia=None):
+    """media_dia: pagos al día de media (por defecto, dataset.transacciones_dia; generar_lote.py la cambia para
+    los comercios que se registran en la web)."""
+    media_dia = TRANSACCIONES_DIA_MEDIA if media_dia is None else media_dia
     pesos = np.array([perfiles[c]["actividad"] for c in clientes_ids])
     pesos = pesos / pesos.sum()
     n_dias = (fecha_fin - fecha_inicio).days
 
     for dia in range(n_dias):
         dia_inicio = fecha_inicio + timedelta(days=dia)
-        for _ in range(int(rng.poisson(TRANSACCIONES_DIA_MEDIA))):
+        for _ in range(int(rng.poisson(media_dia))):
             cid = int(rng.choice(clientes_ids, p=pesos))
             perfil = perfiles[cid]
             metodo_id = int(rng.choice(metodos_por_cliente[cid]))

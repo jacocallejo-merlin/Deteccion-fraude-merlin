@@ -17,7 +17,9 @@ import os
 import sqlite3
 import threading
 import time
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 ARCHIVO_LOCAL = Path(__file__).resolve().parent / 'cuentas.sqlite'
 
@@ -67,6 +69,11 @@ TABLAS = [
         web         TEXT NOT NULL DEFAULT '',
         registrada  INTEGER NOT NULL DEFAULT 0,  -- se registró desde la web (si no, viene de los datos de la entidad)
         configurada INTEGER NOT NULL DEFAULT 0)''',
+]
+# Columnas que se añadieron después: las tablas que ya existían las ganan al preparar (tabla, columna, definición)
+COLUMNAS_NUEVAS = [
+    ('empresa', 'alta', "TEXT NOT NULL DEFAULT ''"),     # día del alta (AAAA-MM-DD, Madrid): sus pagos, desde el siguiente
+    ('empresa', 'tamano', "TEXT NOT NULL DEFAULT ''"),   # pequeno, mediano o grande: cuántos pagos al día (config.yaml)
 ]
 
 
@@ -123,7 +130,20 @@ class BaseCuentas:
         if not self._lista:
             for sql in TABLAS:
                 self._ejecutar(sql)
+            for tabla, columna, definicion in COLUMNAS_NUEVAS:
+                if self.postgres:
+                    self._ejecutar(f'ALTER TABLE {tabla} ADD COLUMN IF NOT EXISTS {columna} {definicion}')
+                elif columna not in [f[1] for f in self._ejecutar(f'PRAGMA table_info({tabla})').fetchall()]:
+                    self._ejecutar(f'ALTER TABLE {tabla} ADD COLUMN {columna} {definicion}')   # SQLite: sin IF NOT EXISTS
+            # Las empresas que se registraron antes de que hubiera día de alta: dadas de alta hoy, como pequeñas
+            # (si no, el lote de cada noche nunca les generaría pagos)
+            hoy = datetime.now(ZoneInfo('Europe/Madrid')).date().isoformat()
+            self._ejecutar("UPDATE empresa SET alta = ?, tamano = 'pequeno' WHERE registrada = 1 AND alta = ''", [hoy])
             self._lista = True
+
+    def existe(self):
+        """¿Hay ya una base de datos de cuentas? (sin crearla: un SQLite que no existe, no)."""
+        return self.postgres or Path(self.url.removeprefix('sqlite:///')).exists()
 
     def ejecutar(self, sql, parametros=()):
         self.preparar()

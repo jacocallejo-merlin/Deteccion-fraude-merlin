@@ -3,11 +3,13 @@ Cuentas desde la web (se guardan con web/sesiones.py), como en cualquier servici
 
   - Contraseña olvidada: se escribe el correo, llega un código de 6 cifras (15 minutos, 5 intentos) y con
     él se pone una contraseña nueva. Se cierra la sesión en los demás equipos.
-  - Un comercio se registra él mismo: su empresa, su nombre, su correo y una contraseña. Le llega un código
-    para confirmar que el correo es suyo y entra. Se crea como comercio nuevo (tabla comercio, con un número
-    nuevo) y empieza de cero: verá sus pagos cuando la entidad empiece a enviarlos. Registrándose nunca se
-    puede quedar con un comercio que ya existe (vería sus pagos); a esos les da la cuenta el administrador.
-    La primera vez que entra configura su empresa (CIF, sector, ciudad, teléfono...).
+  - Un comercio se registra él mismo, en tres pasos: su nombre, su correo y una contraseña; los datos de su
+    empresa (nombre comercial, NIF/CIF, sector, país, ciudad, teléfono... y su tamaño); y el código que le llega
+    para confirmar que el correo es suyo. Entonces se crean a la vez la cuenta y la empresa, como comercio nuevo
+    (tabla comercio, con un número nuevo) y con su día de alta: desde el día siguiente, el lote de cada noche
+    (pipeline/generar_lote.py) le genera pagos según su tamaño, que pasan por el scoring como los demás.
+    Registrándose nunca se puede quedar con un comercio que ya existe (vería sus pagos); a esos les da la cuenta
+    el administrador, y configuran su empresa la primera vez que entran.
   - El administrador de la entidad da las cuentas de su equipo (y de los comercios que ya existen) en la
     pestaña Cuentas, con una contraseña provisional que la persona tiene que cambiar al entrar.
 
@@ -22,13 +24,16 @@ import json
 import os
 import re
 import time
+from datetime import date, datetime, timedelta
 from typing import Literal, Optional
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 import notificar
+from config import CONFIG
 from web.sesiones import (DOMINIO_INVITADO, cifrar, con_sesion, contrasena_provisional, contrasena_valida,
                           es_invitado, usuario_de)
 
@@ -36,9 +41,19 @@ CORREO = re.compile(r'^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$')
 PRIMER_REGISTRADO = 100_000           # los comercios que se registran, a partir de aquí (no chocan con los de la entidad)
 # Rutas sin sesión (las añade web/app.py a las públicas del middleware) y las solo de administradores
 PUBLICAS = {'/api/recuperar', '/api/recuperar/confirmar', '/api/registro', '/api/registro/confirmar',
-            '/api/invitado', '/api/invitado/comercios'}
+            '/api/registro/comprobar', '/api/registro/opciones', '/api/invitado', '/api/invitado/comercios'}
 DE_ADMINISTRADORES = ('/api/cuentas',)
 CAMPOS_EMPRESA = ['nombre', 'cif', 'categoria', 'pais', 'ciudad', 'direccion', 'telefono', 'web']
+# Cuántos pagos al día genera el simulador a un comercio registrado, según el tamaño que elige (config.yaml)
+PAGOS_DIA = CONFIG.get('comercios_registrados', {}).get('pagos_dia', {'pequeno': 15, 'mediano': 40, 'grande': 80})
+TAMANOS = {'pequeno': 'Pequeño', 'mediano': 'Mediano', 'grande': 'Grande'}
+# Los sectores del simulador: los que se proponen al registrarse si aún no hay datos en ClickHouse
+SECTORES = ['alimentación', 'automoción', 'belleza', 'bricolaje', 'deporte', 'electrónica', 'farmacia', 'hogar',
+            'joyería', 'juguetería', 'librería', 'mascotas', 'moda', 'ocio', 'restauración', 'viajes']
+
+
+def hoy_madrid():
+    return datetime.now(ZoneInfo('Europe/Madrid')).date()
 
 # ----------------------------------------------------------------------------- formularios
 class Correo(BaseModel):
@@ -52,19 +67,6 @@ class NuevaContrasena(BaseModel):
     recordar: bool = False
 
 
-class Registro(BaseModel):
-    empresa: str = Field(min_length=2, max_length=120)
-    nombre: str = Field(min_length=2, max_length=80)
-    email: str = Field(max_length=200)
-    contrasena: str = Field(max_length=200)
-
-
-class Confirmacion(BaseModel):
-    email: str = Field(max_length=200)
-    codigo: str = Field(max_length=10)
-    recordar: bool = False
-
-
 class Empresa(BaseModel):
     """Obligatorios: nombre, NIF/CIF, sector, país, ciudad y teléfono. Opcionales: dirección y web."""
     nombre: str = Field(max_length=120)
@@ -75,6 +77,25 @@ class Empresa(BaseModel):
     direccion: str = Field('', max_length=200)
     telefono: str = Field(max_length=30)
     web: str = Field('', max_length=200)
+
+
+class Cuenta(BaseModel):
+    """El primer paso del registro: quién es y con qué entra."""
+    nombre: str = Field(min_length=2, max_length=80)
+    email: str = Field(max_length=200)
+    contrasena: str = Field(max_length=200)
+
+
+class Registro(Cuenta):
+    """El registro entero: la cuenta, su empresa y su tamaño (cuántos pagos al día le llegarán)."""
+    empresa: Empresa
+    tamano: Literal['pequeno', 'mediano', 'grande'] = 'pequeno'
+
+
+class Confirmacion(BaseModel):
+    email: str = Field(max_length=200)
+    codigo: str = Field(max_length=10)
+    recordar: bool = False
 
 
 LETRAS_DNI = 'TRWAGMYFPDXBNJZSQVHLCKE'
@@ -247,29 +268,60 @@ def crear_router(almacen, nombre_comercio, cliente):
                           n.recordar)
 
     # ------------------------------------------------------------------ un comercio se registra
-    @router.post('/api/registro')
-    def registrar(r: Registro, request: Request, tareas: BackgroundTasks):
-        email = correo_valido(r.email)
-        contrasena_valida(r.contrasena)
+    def cuenta_valida(c):
+        """El correo (limpio) si la cuenta se puede crear. Lanza un 422 o un 409 que dice por qué no."""
+        email = correo_valido(c.email)
+        contrasena_valida(c.contrasena)
         time.sleep(0.3)
         if almacen().ficha(email) is not None:
             raise HTTPException(409, 'Ya hay una cuenta con ese correo. Si no recuerdas la contraseña, usa '
                                      '"¿Has olvidado tu contraseña?"')
-        sal, hash_ = cifrar(r.contrasena)            # hasta confirmar el correo, solo se guarda cifrada
-        datos = json.dumps({'empresa': r.empresa.strip(), 'nombre': r.nombre.strip(), 'sal': sal, 'hash': hash_})
+        return email
+
+    @router.get('/api/registro/opciones')
+    def opciones_registro():
+        """Para el paso de la empresa: los sectores que se proponen y los tamaños (con sus pagos al día)."""
+        try:
+            sectores = [s for (s,) in cliente().query("SELECT DISTINCT lower(trim(categoria_negocio)) FROM comercio "
+                                                      "WHERE categoria_negocio != '' ORDER BY 1").result_rows]
+        except Exception:
+            sectores = []
+        return {'sectores': sorted(set(sectores) | set(SECTORES)),
+                'tamanos': [{'clave': k, 'nombre': TAMANOS[k], 'pagos_dia': PAGOS_DIA.get(k, 0)} for k in TAMANOS]}
+
+    @router.post('/api/registro/comprobar')
+    def comprobar_cuenta(c: Cuenta):
+        """Paso 1: antes de pedir los datos de la empresa, que el correo y la contraseña valgan."""
+        return {'ok': True, 'email': cuenta_valida(c)}
+
+    @router.post('/api/registro')
+    def registrar(r: Registro, request: Request, tareas: BackgroundTasks):
+        """Paso 2: con la empresa ya rellenada, el código para confirmar el correo. Hasta confirmarlo no se crea
+        nada: la cuenta y la empresa esperan en el código (la contraseña, ya cifrada)."""
+        email = cuenta_valida(r)
+        empresa = validar_empresa(r.empresa)
+        sal, hash_ = cifrar(r.contrasena)
+        datos = json.dumps({'nombre': r.nombre.strip(), 'empresa': empresa, 'tamano': r.tamano,
+                            'sal': sal, 'hash': hash_})
         return {'ok': True, **mandar_codigo(request, tareas, email, 'registro', datos)}
 
     @router.post('/api/registro/confirmar')
     def confirmar_registro(c: Confirmacion, request: Request):
+        """Paso 3: el código. Se crean la empresa (dada de alta hoy) y la cuenta, y entra."""
         email = correo_valido(c.email)
         datos = json.loads(almacen().usar_codigo(email, 'registro', c.codigo))
         if almacen().ficha(email) is not None:
             raise HTTPException(409, 'Ya hay una cuenta con ese correo')
+        empresa = datos['empresa']
+        if isinstance(empresa, str):                 # un código pedido con la versión anterior (solo el nombre)
+            empresa = {'nombre': empresa}
         preparar_empresas()
         en_clickhouse = cliente().query('SELECT max(comercio_id) FROM comercio').result_rows[0][0] or 0
         comercio_id = max(PRIMER_REGISTRADO - 1, en_clickhouse, almacen().ultimo_comercio_registrado()) + 1
-        almacen().guardar_empresa(comercio_id, {'nombre': datos['empresa']}, registrada=True, configurada=False)
-        cliente().insert('comercio', [[comercio_id, datos['empresa'], '', '', '']],
+        almacen().guardar_empresa(comercio_id, empresa, registrada=True, configurada='cif' in empresa,
+                                  alta=hoy_madrid().isoformat(), tamano=datos.get('tamano', 'pequeno'))
+        cliente().insert('comercio', [[comercio_id, empresa['nombre'], empresa.get('categoria', ''),
+                                       empresa.get('pais', ''), empresa.get('ciudad', '')]],
                          column_names=['comercio_id', 'nombre', 'categoria_negocio', 'pais', 'ciudad'])
         almacen().guardar_usuario(email, datos['nombre'], 'comercio', comercio_id, None,
                                   cifrada=(datos['sal'], datos['hash']), revisada_por='registro')
@@ -285,7 +337,8 @@ def crear_router(almacen, nombre_comercio, cliente):
         # Un comercio que ya estaba en los datos de la entidad: lo que se sabe de él, sin configurar todavía
         base = list(cliente().query('''SELECT nombre, categoria_negocio AS categoria, pais, ciudad FROM comercio
                                        WHERE comercio_id = {c:UInt32}''', parameters={'c': comercio_id}).named_results())
-        return {**{k: '' for k in CAMPOS_EMPRESA}, **(base[0] if base else {}), 'registrada': 0, 'configurada': 0}
+        return {**{k: '' for k in CAMPOS_EMPRESA}, **(base[0] if base else {}), 'registrada': 0, 'configurada': 0,
+                'alta': '', 'tamano': ''}
 
     def solo_comercios(request):
         u = usuario_de(request)
@@ -301,8 +354,11 @@ def crear_router(almacen, nombre_comercio, cliente):
             "SELECT DISTINCT categoria_negocio FROM comercio WHERE categoria_negocio != '' ORDER BY 1").result_rows]
         pagos = cliente().query('SELECT count() FROM transacciones_enriquecidas WHERE comercio_id = {c:UInt32}',
                                 parameters={'c': u['comercio_id']}).result_rows[0][0]
+        # Un comercio registrado recibe pagos desde el día siguiente a su alta (el lote de cada noche)
+        primeros = str(date.fromisoformat(e['alta']) + timedelta(days=1)) if e.get('alta') else None
         return {**e, 'comercio_id': u['comercio_id'], 'configurada': bool(e['configurada']),
-                'registrada': bool(e['registrada']), 'sectores': sectores, 'pagos': pagos}
+                'registrada': bool(e['registrada']), 'sectores': sectores, 'pagos': pagos,
+                'primeros_pagos': primeros, 'pagos_dia': PAGOS_DIA.get(e.get('tamano') or '', 0)}
 
     @router.post('/api/empresa')
     def guardar_empresa(e: Empresa, request: Request):
