@@ -124,6 +124,18 @@ def test_un_comercio_solo_ve_lo_suyo(web_comercio, cuentas):
     assert web_comercio.get("/api/patrones", params={"comercio": 0}).json()["por_comercio"] == []
 
 
+def test_avisos_de_un_comercio_sin_los_otros(web_comercio, web, cuentas):
+    """Un aviso es de una tarjeta, que puede haber pagado en varios comercios: el comercio solo ve lo suyo."""
+    avisos = web_comercio.get("/api/avisos", params={"limite": 500}).json()["avisos"]
+    if not avisos:
+        pytest.skip("este comercio no tiene avisos")
+    otros = [c["nombre"] for c in web.get("/api/contexto").json()["comercios"] if c["id"] != cuentas["comercio_id"]]
+    for a in avisos:
+        assert "en tu comercio" in a["mensaje"], a["mensaje"]
+        assert not any(nombre in a["mensaje"] for nombre in otros), a["mensaje"]
+        assert a["transacciones"] >= 1
+
+
 def test_patrones_cuadran(web):
     """Los repartos suman el total, nunca hay más fraudes que pagos y la vista de un comercio no
     compara comercios."""

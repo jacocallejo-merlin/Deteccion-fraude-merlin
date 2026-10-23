@@ -347,13 +347,28 @@
       <label class="casilla"><input type="checkbox" id="aj-correo"> Enviármelos a mi correo, <b id="aj-email"></b></label>
       <p class="sub" id="aj-correo-estado"></p>
 
-      <label class="campo">Microsoft Teams (opcional)
-        <input id="aj-teams" type="url" autocomplete="off" placeholder="https://… (pega la dirección que te da Teams)">
-        <span class="sub" id="aj-teams-estado"></span>
-      </label>
-      <button type="button" class="enlace quitar-teams" id="aj-quitar-teams" hidden>Dejar de recibirlos en Teams</button>
-      <details class="ayuda-teams">
-        <summary>¿Cómo consigo la dirección de Teams?</summary>
+      <div class="campo" id="aj-ms" hidden>
+        <span>Microsoft Teams</span>
+        <div id="aj-ms-desconectado">
+          <button type="button" class="boton secundario" id="aj-ms-conectar">Conectar con Microsoft Teams</button>
+          <span class="sub">Entras con tu cuenta de Microsoft del trabajo, das permiso a Centinela y eliges en qué canal
+            de tus equipos quieres los avisos. Saldrán como mensajes tuyos en ese canal.</span>
+        </div>
+        <div id="aj-ms-conectado" hidden>
+          <span class="sub">Conectado como <b id="aj-ms-cuenta"></b>.</span>
+          <label class="campo">Canal donde publicar los avisos
+            <select id="aj-ms-canal"><option value="">Cargando tus equipos…</option></select>
+          </label>
+          <button type="button" class="enlace quitar-teams" id="aj-ms-desconectar">Desconectar Microsoft Teams</button>
+        </div>
+      </div>
+      <details class="ayuda-teams" id="aj-webhook">
+        <summary>Otra forma: avisos en tu chat de Teams con un flujo</summary>
+        <label class="campo">Dirección del flujo de Teams
+          <input id="aj-teams" type="url" autocomplete="off" placeholder="https://… (pega la dirección que te da Teams)">
+          <span class="sub" id="aj-teams-estado"></span>
+        </label>
+        <button type="button" class="enlace quitar-teams" id="aj-quitar-teams" hidden>Dejar de recibirlos por el flujo</button>
         <p>Los avisos te llegan a un chat privado de tu Teams. Entra en Teams con la misma cuenta de tu correo
           y abre la aplicación <b>Flujos de trabajo</b> (barra de la izquierda, «…» si no aparece) → <b>Crear</b> →
           plantilla <b>«Enviar alertas de webhook a un chat»</b>. En «Publicar en» elige <b>«Chatear con el bot de
@@ -380,7 +395,7 @@
   </footer>
   <script src="/static/app.js?v=22"></script>
   <script src="/static/patrones.js?v=1"></script>
-  <script src="/static/ajustes.js?v=3"></script>
+  <script src="/static/ajustes.js?v=4"></script>
   <script src="/static/cuentas.js?v=4"></script>
   <script src="/static/perfil.js?v=2"></script>
   <script src="/static/empresa.js?v=4"></script>

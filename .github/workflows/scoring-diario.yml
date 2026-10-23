@@ -48,6 +48,9 @@ jobs:
       # el correo de los avisos (pipeline/notificar.py), por la API de Brevo. Secretos BREVO_API_KEY y CORREO_REMITENTE
       BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
       CORREO_REMITENTE: ${{ secrets.CORREO_REMITENTE }}
+      # publicar los avisos en el canal de Teams que conectó cada usuario (web/microsoft.py). Secretos MS_CLIENTE_ID y MS_SECRETO
+      MS_CLIENTE_ID: ${{ secrets.MS_CLIENTE_ID }}
+      MS_SECRETO: ${{ secrets.MS_SECRETO }}
       # repositorio de la web publicada; se puede cambiar con la variable CENTINELA_WEB_REPO (usuario/repositorio)
       REPO_WEB: https://x-access-token:${{ secrets.CENTINELA_WEB_TOKEN }}@github.com/${{ vars.CENTINELA_WEB_REPO || 'jacocallejo-merlin/centinela-web' }}.git
 

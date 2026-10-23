@@ -58,7 +58,9 @@ NIVELES_AVISO = {'critico': 3, 'alto': 2, 'medio': 1}
 # Lo que cada usuario de la web elige en "Mis avisos" (tabla ajustes_usuario) y su valor si no ha tocado
 # nada: los avisos le llegan a su correo (el de su cuenta) y, si pone uno, a su Teams. "sistema" (el modelo
 # se desvía o falla el pipeline) solo es para la gente de la entidad
-AJUSTES_USUARIO = {'correo': '1', 'teams_webhook_url': '', 'avisos_fraude': '1', 'sistema': '1'}
+AJUSTES_USUARIO = {'correo': '1', 'teams_webhook_url': '', 'avisos_fraude': '1', 'sistema': '1',
+                   # Teams conectado con su cuenta de Microsoft (web/microsoft.py): el permiso cifrado y el canal
+                   'teams_refresh': '', 'teams_equipo_id': '', 'teams_canal_id': ''}
 
 
 def _entorno(nombre, por_defecto=None):
@@ -126,8 +128,12 @@ def canales():
 
 
 def canales_de(usuario):
-    """Los canales de un usuario de la web: su correo (si lo tiene activado y hay servidor) y su Teams."""
+    """Los canales de un usuario de la web: su correo (si lo tiene activado y hay servidor) y su Teams: el canal que
+    eligió al conectar su cuenta de Microsoft o, si pegó una, la dirección de un flujo (webhook)."""
     salida = {}
+    if usuario.get('teams_refresh') and usuario.get('teams_canal_id'):
+        salida['teams_graph'] = {'email': usuario['email'], 'refresh': usuario['teams_refresh'],
+                                 'equipo': usuario['teams_equipo_id'], 'canal': usuario['teams_canal_id']}
     if usuario.get('teams_webhook_url'):
         salida['teams'] = usuario['teams_webhook_url']
     correo = _correo_config([usuario['email']]) if usuario.get('correo') == '1' else None
@@ -190,7 +196,21 @@ def _correo(c, titulo, texto, nivel, lineas):
     return 'enviado'
 
 
-ENVIOS = {'teams': _teams, 'slack': _slack, 'correo': _correo}
+def _teams_conectado(c, titulo, texto, nivel, lineas):
+    """En el canal de Teams que eligió el usuario, con el permiso que dio al conectar su cuenta de Microsoft.
+    Microsoft renueva el permiso en cada uso: se guarda el nuevo para la próxima vez."""
+    sys.path.insert(0, str(RAIZ))
+    from web import microsoft
+    from web.bd_cuentas import BaseCuentas
+    tokens = microsoft.renovar(microsoft.descifrar(c['refresh']))
+    if tokens.get('refresh_token'):
+        BaseCuentas().guardar('ajustes_usuario', {'email': c['email'], 'clave': 'teams_refresh',
+                                                  'valor': microsoft.cifrar(tokens['refresh_token'])}, ['email', 'clave'])
+    microsoft.publicar(tokens['access_token'], c['equipo'], c['canal'], titulo, texto, lineas)
+    return 'publicado'
+
+
+ENVIOS = {'teams': _teams, 'teams_graph': _teams_conectado, 'slack': _slack, 'correo': _correo}
 
 
 def enviar(destinos, titulo, texto, nivel='info', lineas=(), quien=''):

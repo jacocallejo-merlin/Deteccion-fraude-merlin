@@ -5,6 +5,8 @@
 clickhouse-connect==1.8.0
 # La base de datos de cuentas (web/bd_cuentas.py) en PostgreSQL (Neon), con CUENTAS_URL
 psycopg[binary]==3.3.6
+# Cifrar el permiso de Microsoft Teams de cada usuario (web/microsoft.py)
+cryptography==50.0.2
 Faker==40.39.0
 joblib==1.6.0
 matplotlib==3.11.2

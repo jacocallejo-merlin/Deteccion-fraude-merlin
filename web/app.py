@@ -601,8 +601,31 @@ def avisos(comercio: int = Comercio, limite: int = Query(30, ge=1, le=500), solo
         {base} {'AND NOT ' + leido if solo_no_leidos else ''}
         ORDER BY av.fecha DESC, av.nivel = 'critico' DESC, av.importe DESC
         LIMIT {{limite:UInt32}}''', comercio=comercio, limite=limite, ahora=ahora)
+    if comercio and lista:
+        lista = solo_lo_suyo(lista, comercio)
     # hoy: la página lo compara en cada comprobación para saber si el pipeline ha puntuado un día nuevo
     return {'hoy': hoy, 'no_leidos': no_leidos['n'], 'criticos_no_leidos': no_leidos['criticos'], 'avisos': lista}
+
+
+def solo_lo_suyo(avisos, comercio):
+    """Un aviso es de una tarjeta y un día, y la tarjeta puede haber pagado en varios comercios. Para un comercio:
+    sus pagos y su importe, y el mensaje sin los nombres de los otros comercios ni lo que se pagó en ellos."""
+    suyos = {(f['metodo_id'], f['dia']): f for f in filas('''
+        SELECT metodo_id, toDate(timestamp) AS dia, count() AS n, toFloat64(sum(cantidad)) AS importe
+        FROM transacciones_enriquecidas
+        WHERE comercio_id = {c:UInt32} AND metodo_id IN {m:Array(UInt32)} AND toDate(timestamp) IN {d:Array(Date)}
+        GROUP BY metodo_id, dia''', c=comercio, m=sorted({a['metodo_id'] for a in avisos}),
+        d=sorted({a['dia'] for a in avisos}))}
+    salida = []
+    for a in avisos:
+        mio = suyos.get((a['metodo_id'], a['dia']), {'n': 0, 'importe': 0.0})
+        tarjeta, _, resto = a['mensaje'].partition(':')
+        motivo = resto.split('Motivo:', 1)[1].strip() if 'Motivo:' in resto else ''
+        n = mio['n']
+        mensaje = f'{tarjeta}: {n} pago{"s" if n != 1 else ""} sospechoso{"s" if n != 1 else ""} en tu comercio.'
+        salida.append({**a, 'transacciones': n, 'importe': mio['importe'],
+                       'mensaje': f'{mensaje} Motivo: {motivo}' if motivo else mensaje})
+    return salida
 
 
 class Leidos(BaseModel):
@@ -701,3 +724,7 @@ app.add_middleware(sesiones.ProtegerWeb, almacen=lambda: _almacen, rutas_admin=c
                    publicas={'/login', '/api/login', '/api/logout', '/api/salud'} | cuentas.PUBLICAS)
 app.include_router(sesiones.crear_router(lambda: _almacen, nombre_comercio))
 app.include_router(cuentas.crear_router(lambda: _almacen, nombre_comercio, cliente))
+
+# Mis avisos → Conectar con Microsoft Teams (web/teams.py y web/microsoft.py)
+from web import teams  # noqa: E402
+app.include_router(teams.crear_router(lambda: _almacen))
