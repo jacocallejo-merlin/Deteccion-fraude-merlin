@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "pipeline"))
 import notificar
 from vigilar_drift import psi
 
-VARIABLES = ["TEAMS_WEBHOOK_URL", "SLACK_WEBHOOK_URL", "SMTP_SERVIDOR", "CORREO_DESTINATARIOS"]
+VARIABLES = ["TEAMS_WEBHOOK_URL", "SLACK_WEBHOOK_URL", "SMTP_SERVIDOR", "CORREO_DESTINATARIOS", "BREVO_API_KEY"]
 
 
 @pytest.fixture
@@ -116,3 +116,23 @@ def test_limpiar_ficheros(tmp_path):
     quedan = sorted(p.name for p in tmp_path.glob("validacion_*.txt"))
     assert len(quedan) == 10 and quedan[0] == "validacion_20261005_1200.txt"
     assert (tmp_path / "otro.txt").exists()
+
+
+def test_correo_por_brevo(sin_canales, monkeypatch):
+    """Con BREVO_API_KEY, el correo va por la API de Brevo (HTTPS), que también funciona en Render."""
+    peticiones = []
+
+    class Respuesta:
+        status = 201
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(notificar.urllib.request, "urlopen", lambda p, timeout: peticiones.append(p) or Respuesta())
+    monkeypatch.setenv("BREVO_API_KEY", "xkeysib-prueba")
+    monkeypatch.setenv("CORREO_REMITENTE", "centinela@ejemplo.com")
+    assert notificar.a_correo("ana@banco.com", "Tu código", "Tu código es 123456") is True
+    (p,) = peticiones
+    cuerpo = __import__("json").loads(p.data)
+    assert p.full_url == "https://api.brevo.com/v3/smtp/email" and p.get_header("Api-key") == "xkeysib-prueba"
+    assert cuerpo["to"] == [{"email": "ana@banco.com"}] and cuerpo["sender"]["email"] == "centinela@ejemplo.com"
+    assert "123456" in cuerpo["textContent"]

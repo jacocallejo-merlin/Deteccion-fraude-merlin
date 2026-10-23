@@ -10,6 +10,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 # Las cuentas de los tests, en un SQLite temporal: nunca en la base de datos de cuentas de verdad (CUENTAS_URL del
 # .env, compartida por todos). Va antes de importar nada: load_dotenv no pisa lo que ya está puesto.
 os.environ['CUENTAS_URL'] = f'sqlite:///{Path(tempfile.mkdtemp(prefix="centinela_tests_")) / "cuentas.sqlite"}'
+# Y sin enviar correos de verdad aunque el .env tenga Brevo o un servidor SMTP (vacío = no configurado)
+for variable in ('BREVO_API_KEY', 'SMTP_SERVIDOR', 'TEAMS_WEBHOOK_URL', 'SLACK_WEBHOOK_URL'):
+    os.environ[variable] = ''
 
 
 @pytest.fixture(scope="session")

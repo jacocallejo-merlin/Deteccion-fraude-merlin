@@ -18,7 +18,9 @@ los avisos siguen en la web. El servidor de correo (SMTP_*) es del proveedor y s
     TEAMS_WEBHOOK_URL       Teams > canal > Flujos de trabajo > "Publicar en un canal cuando se
                             recibe una solicitud de webhook" (también vale un webhook entrante antiguo)
     SLACK_WEBHOOK_URL       Slack > Incoming Webhooks
-    SMTP_SERVIDOR, SMTP_PUERTO, SMTP_USUARIO, SMTP_PASSWORD, CORREO_REMITENTE,
+    BREVO_API_KEY, CORREO_REMITENTE   correo por la API de Brevo (https://www.brevo.com, gratis hasta 300 al día),
+                            por HTTPS: funciona también en Render, que en el plan gratis bloquea el SMTP
+    SMTP_SERVIDOR, SMTP_PUERTO, SMTP_USUARIO, SMTP_PASSWORD, CORREO_REMITENTE   o por SMTP (si no hay Brevo)
     CORREO_DESTINATARIOS    (separados por comas)
 
 Probar la configuración:   python pipeline/notificar.py --prueba
@@ -92,8 +94,12 @@ def usuarios():
 
 
 def _correo_config(destinatarios):
-    """El servidor de correo (del proveedor, en .env) para esos destinatarios; None si no hay servidor."""
+    """Cómo mandar el correo a esos destinatarios (lo pone el proveedor, en .env); None si no hay cómo.
+    Con BREVO_API_KEY, por la API de Brevo (HTTPS); si no, por el servidor SMTP de SMTP_SERVIDOR."""
     correo = _cfg.get('correo') or {}
+    if _entorno('BREVO_API_KEY') and destinatarios:
+        return {'brevo': _entorno('BREVO_API_KEY'), 'remitente': _entorno('CORREO_REMITENTE', ''),
+                'destinatarios': destinatarios}
     servidor = _entorno('SMTP_SERVIDOR', correo.get('servidor'))
     if not (servidor and destinatarios):
         return None
@@ -153,7 +159,23 @@ def _slack(url, titulo, texto, nivel, lineas):
     return _post_json(url, {'text': '\n'.join([f'*{titulo}*', texto, *(f'• {l}' for l in lineas)])})
 
 
+def _brevo(c, asunto, cuerpo):
+    """La API de Brevo: un POST por HTTPS (el remitente tiene que estar verificado en Brevo, en Senders)."""
+    if not c['remitente']:
+        raise ValueError('falta CORREO_REMITENTE (el correo verificado en Brevo como remitente)')
+    peticion = urllib.request.Request(
+        'https://api.brevo.com/v3/smtp/email',
+        data=json.dumps({'sender': {'name': 'Centinela', 'email': c['remitente']},
+                         'to': [{'email': d} for d in c['destinatarios']],
+                         'subject': asunto, 'textContent': cuerpo}).encode('utf-8'),
+        headers={'api-key': c['brevo'], 'Content-Type': 'application/json', 'Accept': 'application/json'})
+    with urllib.request.urlopen(peticion, timeout=15) as r:
+        return f'Brevo {r.status}'
+
+
 def _correo(c, titulo, texto, nivel, lineas):
+    if 'brevo' in c:
+        return _brevo(c, f'[Centinela] {titulo}', '\n'.join([texto, '', *(f'- {l}' for l in lineas)]))
     mensaje = EmailMessage()
     mensaje['Subject'] = f'[Antifraude MERLIN] {titulo}'
     mensaje['From'] = c['remitente']
