@@ -18,16 +18,17 @@ rutas: sin sesión, /api/... responde 401 y las páginas mandan a /login; a un c
 comercio que pida la página por el suyo (y se le quita el modo demostración) y en las revisiones el
 nombre de quien revisa sale de su cuenta. Así las rutas de web/app.py no tienen que saber nada de esto.
 
-Contraseñas con PBKDF2-SHA256 (biblioteca estándar) y sesiones en ClickHouse (tabla sesiones): cerrar
-sesión las invalida de verdad y la web de modelos, en otro puerto, puede comprobarlas (el navegador
-manda la misma cookie a los dos puertos de la misma máquina).
+Las cuentas y sesiones van en la base de datos de la aplicación (web/bd_cuentas.py: PostgreSQL en la nube con
+CUENTAS_URL, compartida por todos, o SQLite en local), no en ClickHouse, que es para el análisis. Contraseñas con
+PBKDF2-SHA256 (biblioteca estándar). Cerrar sesión la invalida de verdad, y la web de modelos, en otro puerto, puede
+comprobarla (el navegador manda la misma cookie a los dos puertos de la misma máquina).
 """
 import hashlib
 import hmac
 import json
 import secrets
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from pathlib import Path
 from typing import Optional
 from urllib.parse import parse_qsl, quote, urlencode
@@ -36,6 +37,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
+
+from web.bd_cuentas import BaseCuentas, ahora
 
 COOKIE = 'centinela_sesion'
 DURACION_RECORDAR = timedelta(days=30)       # "Mantener la sesión iniciada"
@@ -55,45 +58,10 @@ SIN_CAMBIAR_CONTRASENA = {'/api/sesion', '/api/logout', '/api/perfil/contrasena'
 # Las cuentas de invitado (para enseñar la web sin contraseñas, ver web/cuentas.py) solo pueden mirar
 DOMINIO_INVITADO = '@invitado.centinela'
 
-TABLAS = ['''
-    CREATE TABLE IF NOT EXISTS usuarios (
-        email       String,
-        nombre      String,
-        rol         LowCardinality(String),       -- administrador, analista o comercio
-        comercio_id UInt32,                       -- 0 para los de la entidad
-        sal         String,
-        hash        String,                       -- PBKDF2-SHA256 de la contraseña
-        activo      UInt8,                        -- puede entrar (estado = activa)
-        actualizado DateTime DEFAULT now()
-    ) ENGINE = ReplacingMergeTree(actualizado) ORDER BY email''', '''
-    CREATE TABLE IF NOT EXISTS sesiones (
-        token       String,
-        email       String,
-        caduca      DateTime,
-        cerrada     UInt8,
-        ts          DateTime64(3) DEFAULT now64(3)
-    ) ENGINE = ReplacingMergeTree(ts) ORDER BY token''', '''
-    CREATE TABLE IF NOT EXISTS codigos (
-        email       String,
-        proposito   LowCardinality(String),       -- recuperar (contraseña olvidada) o registro (comercio nuevo)
-        codigo_hash String,                       -- el código solo lo tiene quien recibe el correo
-        datos       String,                       -- registro: lo que se ha rellenado, hasta confirmar el correo
-        caduca      DateTime,
-        intentos    UInt8,
-        usado       UInt8,
-        ts          DateTime64(3) DEFAULT now64(3)
-    ) ENGINE = ReplacingMergeTree(ts) ORDER BY (email, proposito)''',
-    # Columnas que se añadieron después (las tablas de antes las ganan al arrancar)
-    '''ALTER TABLE usuarios
-        ADD COLUMN IF NOT EXISTS estado LowCardinality(String) DEFAULT if(activo, 'activa', 'desactivada'),
-        ADD COLUMN IF NOT EXISTS telefono String DEFAULT '',
-        ADD COLUMN IF NOT EXISTS nota String DEFAULT '',
-        ADD COLUMN IF NOT EXISTS creada DateTime DEFAULT now(),
-        ADD COLUMN IF NOT EXISTS revisada_por String DEFAULT '',
-        ADD COLUMN IF NOT EXISTS cambiar_contrasena UInt8 DEFAULT 0''']
-COLUMNAS = ['email', 'nombre', 'rol', 'comercio_id', 'sal', 'hash', 'activo', 'estado', 'telefono', 'nota', 'creada',
+COLUMNAS = ['email', 'nombre', 'rol', 'comercio_id', 'sal', 'hash', 'estado', 'telefono', 'nota', 'creada',
             'revisada_por', 'cambiar_contrasena']
-COLUMNAS_CODIGO = ['email', 'proposito', 'codigo_hash', 'datos', 'caduca', 'intentos', 'usado']
+SIN_CONTRASENA = [c for c in COLUMNAS if c not in ('sal', 'hash')]
+CAMPOS_EMPRESA = ['nombre', 'cif', 'categoria', 'pais', 'ciudad', 'direccion', 'telefono', 'web']
 
 
 # ----------------------------------------------------------------------------- contraseñas y códigos
@@ -122,18 +90,8 @@ def contrasena_provisional():
     return f'{texto[:5]}-{texto[5:]}'
 
 
-
 def huella_codigo(email, codigo):
     return hashlib.sha256(f'{email}:{codigo}'.encode()).hexdigest()
-
-
-def en_utc(fila, *columnas):
-    """ClickHouse devuelve las fechas en UTC sin decirlo: se marcan, para que al volver a guardarlas no se
-    tomen por la hora local (y se atrasen o caduquen antes de tiempo)."""
-    for c in columnas:
-        if isinstance(fila.get(c), datetime) and fila[c].tzinfo is None:
-            fila[c] = fila[c].replace(tzinfo=timezone.utc)
-    return fila
 
 
 def es_invitado(usuario):
@@ -144,29 +102,29 @@ def ve_todo(usuario):
     return usuario['rol'] in DE_LA_ENTIDAD
 
 
+def _con_activo(fila):
+    if fila is not None:
+        fila['activo'] = int(fila['estado'] == 'activa')
+    return fila
+
+
 # ----------------------------------------------------------------------------- almacén
 class Almacen:
-    """Usuarios, sesiones y códigos en ClickHouse. cliente: función que devuelve la conexión."""
+    """Cuentas, sesiones, códigos, Mis avisos y empresas: la base de datos de la aplicación (web/bd_cuentas.py,
+    PostgreSQL con CUENTAS_URL o SQLite en local). bd: una BaseCuentas (por defecto, la de CUENTAS_URL)."""
 
-    def __init__(self, cliente):
-        self.cliente = cliente
+    def __init__(self, bd=None):
+        self.bd = bd or BaseCuentas()
         self._cache = {}
-        self._tablas = False
 
     def preparar(self):
-        if not self._tablas:
-            for sql in TABLAS:
-                self.cliente().command(sql)
-            self._tablas = True
+        self.bd.preparar()
 
     # ------------------------------------------------------------------ cuentas
     def ficha(self, email):
         """La cuenta con ese correo en cualquier estado (con la contraseña cifrada), o None."""
-        self.preparar()
-        filas = self.cliente().query(f'SELECT {", ".join(COLUMNAS)} FROM usuarios FINAL WHERE email = {{e:String}}',
-                                     parameters={'e': email.strip().lower()}).named_results()
-        fila = next(iter(filas), None)
-        return en_utc(fila, 'creada') if fila else None
+        return _con_activo(self.bd.fila(f'SELECT {", ".join(COLUMNAS)} FROM usuarios WHERE email = ?',
+                                        [email.strip().lower()]))
 
     def usuario(self, email):
         """La cuenta si puede entrar (activa), o None."""
@@ -175,14 +133,12 @@ class Almacen:
 
     def cuentas(self):
         """Todas las cuentas, sin contraseñas: primero las de la entidad y luego las de comercios."""
-        self.preparar()
-        return list(self.cliente().query(f'''
-            SELECT {", ".join(c for c in COLUMNAS if c not in ('sal', 'hash'))} FROM usuarios FINAL
-            ORDER BY rol = 'comercio', estado != 'activa', creada DESC''').named_results())
+        return [_con_activo(f) for f in self.bd.filas(
+            f"SELECT {', '.join(SIN_CONTRASENA)} FROM usuarios "
+            "ORDER BY rol = 'comercio', estado != 'activa', creada DESC")]
 
     def _escribir(self, fila):
-        fila['activo'] = int(fila['estado'] == 'activa')
-        self.cliente().insert('usuarios', [[fila[c] for c in COLUMNAS]], column_names=COLUMNAS)
+        self.bd.guardar('usuarios', {c: fila[c] for c in COLUMNAS}, 'email')
         self._cache.clear()                       # un cambio se nota al momento en este proceso
 
     def guardar_usuario(self, email, nombre, rol, comercio_id, contrasena, activo=True, provisional=False,
@@ -194,7 +150,7 @@ class Almacen:
             raise ValueError(f'rol desconocido: {rol} ({", ".join(ROLES)})')
         if rol == 'comercio' and not comercio_id:
             raise ValueError('un usuario de comercio necesita su comercio_id')
-        antes = self.ficha(email) or {'telefono': '', 'nota': '', 'revisada_por': '', 'creada': datetime.now()}
+        antes = self.ficha(email) or {'telefono': '', 'nota': '', 'revisada_por': '', 'creada': ahora()}
         sal, hash_ = cifrada or cifrar(contrasena)
         self._escribir({**antes, **extra, 'email': email.strip().lower(), 'nombre': nombre, 'rol': rol,
                         'comercio_id': int(comercio_id or 0) if rol == 'comercio' else 0, 'sal': sal, 'hash': hash_,
@@ -208,7 +164,7 @@ class Almacen:
         if u is None:
             return None
         self._escribir({**u, 'estado': estado, 'revisada_por': revisada_por or u['revisada_por']})
-        return {**u, 'estado': estado}
+        return _con_activo({**u, 'estado': estado})
 
     def cambiar_datos(self, email, **datos):
         """Nombre o teléfono (desde Mi perfil), sin tocar la contraseña ni el estado."""
@@ -220,70 +176,93 @@ class Almacen:
         sal, hash_ = cifrar(contrasena)
         self._escribir({**u, 'sal': sal, 'hash': hash_, 'cambiar_contrasena': int(provisional)})
 
+    def borrar_usuarios(self, terminados_en):
+        """Para los tests: borra las cuentas (y lo suyo) de un dominio de prueba."""
+        patron = f'%{terminados_en}'
+        for tabla in ('usuarios', 'sesiones', 'codigos', 'ajustes_usuario'):
+            self.bd.ejecutar(f'DELETE FROM {tabla} WHERE email LIKE ?', [patron])
+        self._cache.clear()
+
+    # ------------------------------------------------------------------ Mis avisos (web/ajustes.py)
+    def ajustes(self, email):
+        return {f['clave']: f['valor'] for f in self.bd.filas(
+            'SELECT clave, valor FROM ajustes_usuario WHERE email = ?', [email])}
+
+    def guardar_ajustes(self, email, cambios):
+        for clave, valor in cambios.items():
+            self.bd.guardar('ajustes_usuario', {'email': email, 'clave': clave, 'valor': valor}, ['email', 'clave'])
+
+    # ------------------------------------------------------------------ empresas (web/cuentas.py)
+    def empresa(self, comercio_id):
+        return self.bd.fila(f'SELECT {", ".join(CAMPOS_EMPRESA)}, registrada, configurada FROM empresa '
+                            'WHERE comercio_id = ?', [comercio_id])
+
+    def guardar_empresa(self, comercio_id, datos, registrada, configurada):
+        self.bd.guardar('empresa', {'comercio_id': comercio_id, **{k: datos.get(k, '') for k in CAMPOS_EMPRESA},
+                                    'registrada': int(registrada), 'configurada': int(configurada)}, 'comercio_id')
+
+    def empresas_registradas(self):
+        return self.bd.filas(f'SELECT comercio_id, {", ".join(CAMPOS_EMPRESA)} FROM empresa WHERE registrada = 1')
+
+    def ultimo_comercio_registrado(self):
+        f = self.bd.fila('SELECT max(comercio_id) AS m FROM empresa')
+        return (f or {}).get('m') or 0
+
+    def borrar_empresas(self, comercio_ids):
+        for c in comercio_ids:
+            self.bd.ejecutar('DELETE FROM empresa WHERE comercio_id = ?', [c])
+
     # ------------------------------------------------------------------ códigos de 6 cifras
     def nuevo_codigo(self, email, proposito, datos=''):
         """Un código para ese correo (el anterior del mismo propósito deja de valer). Devuelve el código."""
-        self.preparar()
         email = email.strip().lower()
         codigo = f'{secrets.randbelow(10 ** 6):06d}'
-        self._codigo({'email': email, 'proposito': proposito, 'codigo_hash': huella_codigo(email, codigo),
-                      'datos': datos, 'caduca': datetime.now() + DURACION_CODIGO, 'intentos': 0, 'usado': 0})
+        self.bd.guardar('codigos', {'email': email, 'proposito': proposito, 'codigo_hash': huella_codigo(email, codigo),
+                                    'datos': datos, 'caduca': ahora() + int(DURACION_CODIGO.total_seconds()),
+                                    'intentos': 0, 'usado': 0}, ['email', 'proposito'])
         return codigo
-
-    def _codigo(self, fila):
-        self.cliente().insert('codigos', [[fila[c] for c in COLUMNAS_CODIGO]], column_names=COLUMNAS_CODIGO)
 
     def usar_codigo(self, email, proposito, codigo):
         """Comprueba el código y lo gasta. Devuelve sus datos, o lanza un 422 que dice por qué no vale."""
-        self.preparar()
         email = email.strip().lower()
-        filas = list(self.cliente().query(f'''
-            SELECT {", ".join(COLUMNAS_CODIGO)}, caduca > now() AS vigente FROM codigos FINAL
-            WHERE email = {{e:String}} AND proposito = {{p:String}}''',
-            parameters={'e': email, 'p': proposito}).named_results())
-        c = en_utc(filas[0], 'caduca') if filas else None
+        c = self.bd.fila('SELECT codigo_hash, datos, caduca, intentos, usado FROM codigos '
+                         'WHERE email = ? AND proposito = ?', [email, proposito])
         if c is None or c['usado']:
             raise HTTPException(422, 'Pide un código nuevo')
-        if not c.pop('vigente'):
+        if c['caduca'] <= ahora():
             raise HTTPException(422, 'El código ha caducado (dura 15 minutos): pide uno nuevo')
         if c['intentos'] >= INTENTOS_CODIGO:
             raise HTTPException(422, 'Demasiados intentos: pide un código nuevo')
         if not hmac.compare_digest(huella_codigo(email, codigo.strip()), c['codigo_hash']):
-            self._codigo({**c, 'intentos': c['intentos'] + 1})
+            self.bd.ejecutar('UPDATE codigos SET intentos = intentos + 1 WHERE email = ? AND proposito = ?',
+                             [email, proposito])
             quedan = INTENTOS_CODIGO - c['intentos'] - 1
             raise HTTPException(422, f'El código no es correcto (te quedan {quedan} intento{"s" if quedan != 1 else ""})')
-        self._codigo({**c, 'usado': 1})
+        self.bd.ejecutar('UPDATE codigos SET usado = 1 WHERE email = ? AND proposito = ?', [email, proposito])
         return c['datos']
 
     # ------------------------------------------------------------------ sesiones
     def abrir_sesion(self, email, duracion):
-        self.preparar()
         token = secrets.token_urlsafe(32)
-        self.cliente().insert('sesiones', [[token, email, datetime.now() + duracion, 0]],
-                              column_names=['token', 'email', 'caduca', 'cerrada'])
+        self.bd.guardar('sesiones', {'token': token, 'email': email,
+                                     'caduca': ahora() + int(duracion.total_seconds()), 'cerrada': 0}, 'token')
         return token
 
     def cerrar_sesion(self, token):
         self._cache.pop(token, None)
-        self.preparar()
-        self.cliente().insert('sesiones', [[token, '', datetime.now(), 1]],
-                              column_names=['token', 'email', 'caduca', 'cerrada'])
+        self.bd.ejecutar('UPDATE sesiones SET cerrada = 1 WHERE token = ?', [token])
 
     def sesiones_abiertas(self, email):
         """Los tokens de las sesiones de esa cuenta que siguen valiendo (en cualquier equipo)."""
-        self.preparar()
-        return [t for (t,) in self.cliente().query('''
-            SELECT token FROM sesiones FINAL WHERE email = {e:String} AND cerrada = 0 AND caduca > now()''',
-            parameters={'e': email}).result_rows]
+        return [f['token'] for f in self.bd.filas(
+            'SELECT token FROM sesiones WHERE email = ? AND cerrada = 0 AND caduca > ?', [email, ahora()])]
 
     def cerrar_otras(self, email, menos=None):
         """Cierra todas las sesiones de esa cuenta menos la de este equipo. Devuelve cuántas ha cerrado."""
         otras = [t for t in self.sesiones_abiertas(email) if t != menos]
-        if otras:
-            self.cliente().insert('sesiones', [[t, '', datetime.now(), 1] for t in otras],
-                                  column_names=['token', 'email', 'caduca', 'cerrada'])
-            for t in otras:
-                self._cache.pop(t, None)
+        for t in otras:
+            self.bd.ejecutar('UPDATE sesiones SET cerrada = 1 WHERE token = ?', [t])
+            self._cache.pop(t, None)
         return len(otras)
 
     def de_token(self, token):
@@ -294,16 +273,13 @@ class Almacen:
         if guardado and time.monotonic() - guardado[1] < CACHE_SEGUNDOS:
             return guardado[0]
         try:
-            self.preparar()
-            filas = list(self.cliente().query('''
+            usuario = self.bd.fila('''
                 SELECT u.email AS email, u.nombre AS nombre, u.rol AS rol, u.comercio_id AS comercio_id,
                        u.cambiar_contrasena AS cambiar_contrasena
-                FROM (SELECT * FROM sesiones FINAL WHERE token = {t:String}) AS s
-                INNER JOIN (SELECT * FROM usuarios FINAL WHERE activo) AS u ON u.email = s.email
-                WHERE s.cerrada = 0 AND s.caduca > now()''', parameters={'t': token}).named_results())
+                FROM sesiones AS s INNER JOIN usuarios AS u ON u.email = s.email
+                WHERE s.token = ? AND s.cerrada = 0 AND s.caduca > ? AND u.estado = 'activa\'''', [token, ahora()])
         except Exception:
             return None
-        usuario = filas[0] if filas else None
         self._cache[token] = (usuario, time.monotonic())
         return usuario
 

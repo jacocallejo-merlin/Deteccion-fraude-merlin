@@ -21,7 +21,7 @@ CONTRASENA = "prueba-de-tests-123"
 def cuentas(clickhouse):
     """Una cuenta de cada tipo (el comercio, el primero), solo para los tests."""
     from web.sesiones import Almacen
-    almacen = Almacen(lambda: clickhouse)
+    almacen = Almacen()               # el SQLite temporal de los tests (conftest.py)
     comercio = clickhouse.query("SELECT min(comercio_id) FROM comercio").result_rows[0][0]
     emails = {"administrador": "admin@tests.centinela", "analista": "analista@tests.centinela",
               "comercio": "comercio@tests.centinela"}

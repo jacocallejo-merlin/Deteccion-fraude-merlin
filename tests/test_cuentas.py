@@ -13,19 +13,17 @@ CONTRASENA = "prueba-de-tests-123"
 
 
 def borrar_cuentas_de_prueba(clickhouse):
-    """Para que no se queden en la pestaña Cuentas (también las de test_web.py), ni sus comercios registrados."""
-    if clickhouse.command("EXISTS TABLE usuarios"):
-        registrados = [c for (c,) in clickhouse.query(
-            "SELECT comercio_id FROM usuarios FINAL WHERE endsWith(email, '@tests.centinela') "
-            "AND revisada_por = 'registro'").result_rows]
-        if registrados:
-            for tabla in ["comercio", "empresa"]:
-                clickhouse.command(f"ALTER TABLE {tabla} DELETE WHERE comercio_id IN {{c:Array(UInt32)}} "
-                                   "SETTINGS mutations_sync = 1", parameters={"c": registrados})
-    for tabla in ["usuarios", "codigos", "ajustes_usuario"]:
-        if clickhouse.command(f"EXISTS TABLE {tabla}"):
-            clickhouse.command(f"ALTER TABLE {tabla} DELETE WHERE endsWith(email, '@tests.centinela') "
-                               "SETTINGS mutations_sync = 1")
+    """Las cuentas de prueba van en un SQLite temporal (conftest.py), pero los comercios que se registran en los
+    tests sí tienen su fila en la tabla comercio de ClickHouse: se quitan para no dejarla con empresas de prueba."""
+    from web.sesiones import Almacen
+    almacen = Almacen()
+    registrados = [c["comercio_id"] for c in almacen.cuentas()
+                   if c["email"].endswith("@tests.centinela") and c["revisada_por"] == "registro"]
+    if registrados:
+        clickhouse.command("ALTER TABLE comercio DELETE WHERE comercio_id IN {c:Array(UInt32)} "
+                           "SETTINGS mutations_sync = 1", parameters={"c": registrados})
+        almacen.borrar_empresas(registrados)
+    almacen.borrar_usuarios("@tests.centinela")
 
 
 @pytest.fixture

@@ -793,6 +793,15 @@ Sin servidor de correo (`SMTP_*`) los códigos no pueden llegar: abriendo la web
 (`localhost`) se enseñan en pantalla para poder probarla; publicada, solo salen en el registro del
 servidor. Las contraseñas solo se guardan cifradas (PBKDF2) y los códigos, como huella (SHA-256).
 
+**Dónde se guardan las cuentas.** No en ClickHouse, que es para el análisis, sino en una **base de datos de
+la aplicación** (`web/bd_cuentas.py`): cuentas, sesiones, códigos, Mis avisos y los datos de las empresas. Es una
+**PostgreSQL en la nube (Neon, gratis)** compartida por todos: la web de cada uno, la publicada en Render y el
+scoring de cada noche (para saber a quién avisar) usan la misma, así que una cuenta creada o una contraseña
+cambiada en cualquiera de ellas vale en todas y no se pierde. Se configura con `CUENTAS_URL` en `.env`, en las
+variables de entorno de Render y en el secreto `CUENTAS_URL` de GitHub Actions. Sin ella, la web usa un archivo
+local (`web/cuentas.sqlite`, fuera de Git) solo para ese ordenador; los tests usan siempre uno temporal. Para
+pasar las cuentas que guardaban las versiones anteriores en ClickHouse: `python -m web.usuarios migrar`.
+
 ```powershell
 venv\Scripts\python.exe -m web.usuarios crear jefa@banco.com "Ana López" administrador   # al instalar
 venv\Scripts\python.exe -m web.usuarios demo        # para probar: un administrador, un analista y un comercio

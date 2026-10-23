@@ -3,6 +3,8 @@
 # los .joblib de scikit-learn solo se cargan de forma fiable con la misma versión que los guardó.
 # torch se instala aparte en los Dockerfile (versión solo CPU, también 2.14.1).
 clickhouse-connect==1.8.0
+# La base de datos de cuentas (web/bd_cuentas.py) en PostgreSQL (Neon), con CUENTAS_URL
+psycopg[binary]==3.3.6
 Faker==40.39.0
 joblib==1.6.0
 matplotlib==3.11.2

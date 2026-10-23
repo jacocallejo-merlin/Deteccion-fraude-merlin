@@ -9,7 +9,7 @@ Lo usan:
 A quién:
   - Los canales del servidor (.env en local, el Secret "notificaciones" en Kubernetes), que reciben todo.
     Las URL y contraseñas NO van en config.yaml (se subiría a Git).
-  - Cada usuario de la web (tabla usuarios, ver web/sesiones.py), según lo que elija en "Mis avisos"
+  - Cada usuario de la web (base de datos de cuentas, ver web/bd_cuentas.py), según lo que elija en "Mis avisos"
     (tabla ajustes_usuario): por defecto, a su correo; si pone uno, también a su Teams. Un comercio solo
     recibe los avisos de sus pagos; los del sistema (drift, fallos del pipeline) solo los de la entidad (administradores y analistas).
 Lo que no está configurado no se envía, y si un envío falla se avisa por pantalla pero no se para nada:
@@ -64,19 +64,6 @@ def _entorno(nombre, por_defecto=None):
     return valor or por_defecto
 
 
-def _clickhouse():
-    import logging
-    import clickhouse_connect
-    logging.getLogger('clickhouse_connect').setLevel(logging.CRITICAL)   # sin base de datos no es un error
-    ch = _config.get('clickhouse') or {}
-    return clickhouse_connect.get_client(
-        host=_entorno('CLICKHOUSE_HOST', ch.get('host', 'localhost')),
-        port=int(_entorno('CLICKHOUSE_PORT', ch.get('port', 8123))),
-        username=_entorno('CLICKHOUSE_USER', ch.get('user', 'default')),
-        password=_entorno('CLICKHOUSE_PASSWORD', ''),
-        database=_entorno('CLICKHOUSE_DATABASE', ch.get('database')), connect_timeout=5)
-
-
 def ajustes_de(rol, guardados):
     """Los ajustes de un usuario: lo que guardó en la web sobre los valores por defecto."""
     ajustes = {**AJUSTES_USUARIO, **{k: v for k, v in guardados.items() if k in AJUSTES_USUARIO}}
@@ -86,20 +73,20 @@ def ajustes_de(rol, guardados):
 
 
 def usuarios():
-    """Los usuarios activos de la web con sus ajustes de avisos: [{email, rol, comercio_id, correo, ...}].
-    Sin base de datos o sin usuarios, []: nunca impide avisar a los canales del servidor."""
+    """Los usuarios activos de la web con sus ajustes de avisos: [{email, rol, comercio_id, correo, ...}], de la
+    base de datos de cuentas (web/bd_cuentas.py: CUENTAS_URL o SQLite en local). Sin ella o sin usuarios, []:
+    nunca impide avisar a los canales del servidor."""
     try:
-        cliente = _clickhouse()
-        if not cliente.command('EXISTS TABLE usuarios'):
-            return []
+        sys.path.insert(0, str(RAIZ))
+        from web.bd_cuentas import BaseCuentas
+        bd = BaseCuentas()
         guardados = {}
-        if cliente.command('EXISTS TABLE ajustes_usuario'):
-            for email, clave, valor in cliente.query(
-                    'SELECT email, clave, valor FROM ajustes_usuario FINAL').result_rows:
-                guardados.setdefault(email, {})[clave] = valor
-        return [{'email': email, 'rol': rol, 'comercio_id': comercio_id, **ajustes_de(rol, guardados.get(email, {}))}
-                for email, rol, comercio_id in cliente.query(
-                    'SELECT email, rol, comercio_id FROM usuarios FINAL WHERE activo').result_rows]
+        for f in bd.filas('SELECT email, clave, valor FROM ajustes_usuario'):
+            guardados.setdefault(f['email'], {})[f['clave']] = f['valor']
+        return [{'email': u['email'], 'rol': u['rol'], 'comercio_id': u['comercio_id'],
+                 **ajustes_de(u['rol'], guardados.get(u['email'], {}))}
+                for u in bd.filas("SELECT email, rol, comercio_id FROM usuarios WHERE estado = 'activa'")
+                if not u['email'].endswith('@invitado.centinela')]     # los invitados no reciben avisos
     except Exception:
         return []
 

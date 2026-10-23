@@ -13,8 +13,10 @@ Cuentas desde la web (se guardan con web/sesiones.py), como en cualquier servici
 
 Sin servidor de correo (SMTP_* en .env), los códigos no pueden llegar: si la web se usa en local
 (localhost), se enseñan en pantalla para poder probarla; publicada, solo salen en el registro del servidor.
-Los comercios registrados se guardan también en la tabla empresa, que el pipeline no toca: si se rehacen
-los datos desde cero (main.py --desde-cero), la web los vuelve a poner en la tabla comercio.
+Los datos de cada empresa (CIF, teléfono...) van en la base de datos de la aplicación (tabla empresa,
+web/bd_cuentas.py), que se guarda de verdad. En ClickHouse solo está su fila de la tabla comercio, que es la que
+se cruza con los pagos: si falta (se rehicieron los datos, o la web publicada acaba de arrancar), la web la vuelve
+a poner.
 """
 import json
 import os
@@ -37,23 +39,6 @@ PUBLICAS = {'/api/recuperar', '/api/recuperar/confirmar', '/api/registro', '/api
             '/api/invitado', '/api/invitado/comercios'}
 DE_ADMINISTRADORES = ('/api/cuentas',)
 CAMPOS_EMPRESA = ['nombre', 'cif', 'categoria', 'pais', 'ciudad', 'direccion', 'telefono', 'web']
-
-TABLA_EMPRESA = '''
-    CREATE TABLE IF NOT EXISTS empresa (
-        comercio_id  UInt32,
-        nombre       String,
-        cif          String,
-        categoria    LowCardinality(String),
-        pais         LowCardinality(String),
-        ciudad       String,
-        direccion    String,
-        telefono     String,
-        web          String,
-        registrada   UInt8,                     -- se registró desde la web (si no, viene de los datos de la entidad)
-        configurada  UInt8,                     -- ya ha rellenado "Configura tu empresa"
-        actualizado  DateTime DEFAULT now()
-    ) ENGINE = ReplacingMergeTree(actualizado) ORDER BY comercio_id'''
-
 
 # ----------------------------------------------------------------------------- formularios
 class Correo(BaseModel):
@@ -172,19 +157,22 @@ def en_local(request):
 
 
 def crear_router(almacen, nombre_comercio, cliente):
-    """almacen: función que devuelve el Almacen. nombre_comercio(id): su nombre, o None si no existe.
-    cliente: la conexión a ClickHouse (para las tablas comercio y empresa)."""
+    """almacen: función que devuelve el Almacen (la base de datos de la aplicación). nombre_comercio(id): su
+    nombre, o None si no existe. cliente: la conexión a ClickHouse (para la tabla comercio)."""
     router = APIRouter()
     preparada = []
 
     def preparar_empresas():
-        """La tabla empresa y, si se han rehecho los datos, los comercios registrados de vuelta en comercio."""
+        """Los comercios registrados, de vuelta en la tabla comercio de ClickHouse si les falta su fila."""
         if not preparada:
-            cliente().command(TABLA_EMPRESA)
-            cliente().command('''
-                INSERT INTO comercio (comercio_id, nombre, categoria_negocio, pais, ciudad)
-                SELECT comercio_id, nombre, categoria, pais, ciudad FROM empresa FINAL
-                WHERE registrada AND comercio_id NOT IN (SELECT comercio_id FROM comercio)''')
+            registradas = almacen().empresas_registradas()
+            if registradas:
+                ya = {c for (c,) in cliente().query('SELECT comercio_id FROM comercio').result_rows}
+                faltan = [[e['comercio_id'], e['nombre'], e['categoria'], e['pais'], e['ciudad']]
+                          for e in registradas if e['comercio_id'] not in ya]
+                if faltan:
+                    cliente().insert('comercio', faltan,
+                                     column_names=['comercio_id', 'nombre', 'categoria_negocio', 'pais', 'ciudad'])
             preparada.append(True)
 
     def mandar_codigo(request, tareas, email, proposito, datos=''):
@@ -278,10 +266,9 @@ def crear_router(almacen, nombre_comercio, cliente):
         if almacen().ficha(email) is not None:
             raise HTTPException(409, 'Ya hay una cuenta con ese correo')
         preparar_empresas()
-        comercio_id = max(PRIMER_REGISTRADO - 1, *[n or 0 for (n,) in cliente().query(
-            'SELECT max(comercio_id) FROM comercio UNION ALL SELECT max(comercio_id) FROM empresa').result_rows]) + 1
-        cliente().insert('empresa', [[comercio_id, datos['empresa'], '', '', '', '', '', '', '', 1, 0]],
-                         column_names=['comercio_id', *CAMPOS_EMPRESA, 'registrada', 'configurada'])
+        en_clickhouse = cliente().query('SELECT max(comercio_id) FROM comercio').result_rows[0][0] or 0
+        comercio_id = max(PRIMER_REGISTRADO - 1, en_clickhouse, almacen().ultimo_comercio_registrado()) + 1
+        almacen().guardar_empresa(comercio_id, {'nombre': datos['empresa']}, registrada=True, configurada=False)
         cliente().insert('comercio', [[comercio_id, datos['empresa'], '', '', '']],
                          column_names=['comercio_id', 'nombre', 'categoria_negocio', 'pais', 'ciudad'])
         almacen().guardar_usuario(email, datos['nombre'], 'comercio', comercio_id, None,
@@ -292,11 +279,9 @@ def crear_router(almacen, nombre_comercio, cliente):
     # ------------------------------------------------------------------ Configura tu empresa (comercios)
     def mi_empresa(comercio_id):
         preparar_empresas()
-        filas = list(cliente().query(f'''
-            SELECT {", ".join(CAMPOS_EMPRESA)}, registrada, configurada FROM empresa FINAL
-            WHERE comercio_id = {{c:UInt32}}''', parameters={'c': comercio_id}).named_results())
-        if filas:
-            return filas[0]
+        guardada = almacen().empresa(comercio_id)
+        if guardada:
+            return guardada
         # Un comercio que ya estaba en los datos de la entidad: lo que se sabe de él, sin configurar todavía
         base = list(cliente().query('''SELECT nombre, categoria_negocio AS categoria, pais, ciudad FROM comercio
                                        WHERE comercio_id = {c:UInt32}''', parameters={'c': comercio_id}).named_results())
@@ -324,8 +309,7 @@ def crear_router(almacen, nombre_comercio, cliente):
         u = solo_comercios(request)
         antes = mi_empresa(u['comercio_id'])
         valores = validar_empresa(e)
-        cliente().insert('empresa', [[u['comercio_id'], *valores.values(), antes['registrada'], 1]],
-                         column_names=['comercio_id', *CAMPOS_EMPRESA, 'registrada', 'configurada'])
+        almacen().guardar_empresa(u['comercio_id'], valores, registrada=antes['registrada'], configurada=True)
         # El nombre, el sector y la ciudad, también donde los leen las webs y el pipeline
         cliente().command('''ALTER TABLE comercio UPDATE nombre = {n:String}, categoria_negocio = {s:String},
                                  pais = {p:String}, ciudad = {ci:String} WHERE comercio_id = {c:UInt32}

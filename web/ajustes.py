@@ -1,8 +1,8 @@
 """
 Mis avisos: cada usuario de la web elige dónde recibe los avisos de los casos graves, además de en la
 web. Por defecto le llegan a su correo (el de su cuenta); si quiere, también a su Teams (su propio chat o
-un canal). Se guardan en la tabla ajustes_usuario de ClickHouse y pipeline/notificar.py los lee en cada
-envío. Un comercio solo recibe los avisos de sus pagos; los del sistema (drift, fallos) son de la entidad.
+un canal). Se guardan en la base de datos de la aplicación (tabla ajustes_usuario, web/bd_cuentas.py) y
+pipeline/notificar.py los lee en cada envío. Un comercio solo recibe los avisos de sus pagos; los del sistema (drift, fallos) son de la entidad.
 
 Lo que no se configura aquí es del proveedor del servicio: el servidor de correo y su contraseña siguen
 en .env / el Secret de Kubernetes. Las rutas piden sesión (web/sesiones.py): cada uno ve y cambia lo suyo.
@@ -17,16 +17,6 @@ from pydantic import BaseModel
 import notificar
 from web.sesiones import usuario_de
 
-CREAR_TABLA = '''
-    CREATE TABLE IF NOT EXISTS ajustes_usuario (
-        email       String,
-        clave       LowCardinality(String),
-        valor       String,
-        actualizado DateTime DEFAULT now()
-    ) ENGINE = ReplacingMergeTree(actualizado)
-    ORDER BY (email, clave)'''
-
-
 class Ajustes(BaseModel):
     """Solo se cambia lo que viene (None = se deja como está). Una dirección de Teams vacía lo desactiva."""
     correo: Optional[bool] = None
@@ -40,15 +30,12 @@ def oculta(url):
     return f'…{url[-6:]}' if url else ''
 
 
-def crear_router(cliente):
-    """cliente: la función de web/app.py que devuelve la conexión a ClickHouse."""
+def crear_router(almacen):
+    """almacen: función que devuelve el Almacen de web/sesiones.py (la base de datos de la aplicación)."""
     router = APIRouter()
 
     def mis_ajustes(u):
-        cliente().command(CREAR_TABLA)
-        guardados = dict(cliente().query('SELECT clave, valor FROM ajustes_usuario FINAL WHERE email = {e:String}',
-                                         parameters={'e': u['email']}).result_rows)
-        return {**u, **notificar.ajustes_de(u['rol'], guardados)}
+        return {**u, **notificar.ajustes_de(u['rol'], almacen().ajustes(u['email']))}
 
     @router.get('/api/ajustes')
     def leer(request: Request):
@@ -66,19 +53,16 @@ def crear_router(cliente):
     @router.post('/api/ajustes')
     def guardar(a: Ajustes, request: Request):
         u = usuario_de(request)
-        filas = []
+        cambios = {}
         if a.teams_webhook_url is not None:
             url = a.teams_webhook_url.strip()
             if url and not url.startswith('https://'):
                 raise HTTPException(422, 'La dirección de Teams tiene que empezar por https://')
-            filas.append(['teams_webhook_url', url])
+            cambios['teams_webhook_url'] = url
         for clave in ('correo', 'avisos_fraude') + (('sistema',) if u['rol'] != 'comercio' else ()):
             if getattr(a, clave) is not None:
-                filas.append([clave, '1' if getattr(a, clave) else '0'])
-        if filas:
-            cliente().command(CREAR_TABLA)
-            cliente().insert('ajustes_usuario', [[u['email'], *f] for f in filas],
-                             column_names=['email', 'clave', 'valor'])
+                cambios[clave] = '1' if getattr(a, clave) else '0'
+        almacen().guardar_ajustes(u['email'], cambios)
         return leer(request)
 
     @router.post('/api/ajustes/prueba')

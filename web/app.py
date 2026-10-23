@@ -683,13 +683,13 @@ def patrones(comercio: int = Comercio, dias: int = Dias):
 # ---------------------------------------------------------------------------------- ajustes
 # Mis avisos: dónde recibe cada usuario los avisos (su correo, su Teams), desde la web (web/ajustes.py)
 from web.ajustes import crear_router  # noqa: E402
-app.include_router(crear_router(cliente))
+app.include_router(crear_router(lambda: _almacen))
 
 # ---------------------------------------------------------------------------- inicio de sesión
 # Sin sesión no se ve nada; un comercio solo ve lo suyo (web/sesiones.py, cuentas con web/usuarios.py)
 # El administrador de la entidad da las cuentas: a su equipo y a sus comercios (web/cuentas.py)
 from web import cuentas, sesiones  # noqa: E402
-_almacen = sesiones.Almacen(cliente)
+_almacen = sesiones.Almacen()     # cuentas: web/bd_cuentas.py (CUENTAS_URL)
 
 
 def nombre_comercio(comercio_id):

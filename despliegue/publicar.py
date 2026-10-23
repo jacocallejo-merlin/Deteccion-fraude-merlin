@@ -33,24 +33,25 @@ SALIDA = RAIZ / 'despliegue' / '_contenedor'
 # Lo que necesitan las webs, relativo a la raíz del proyecto
 CODIGO = ['config.py', 'config.yaml', 'pipeline/generar_avisos.py', 'pipeline/notificar.py',
           'web', 'web_modelos/app.py', 'web_modelos/static']
-# Nunca salen del PC: los ajustes de avisos (web/ajustes.py) guardan el enlace de Teams/Slack y los correos, y
-# las sesiones abiertas y los códigos de 6 cifras darían acceso a una cuenta
-PRIVADAS = {'ajustes', 'ajustes_usuario', 'sesiones', 'codigos'}
+# Nunca salen del PC: los ajustes de avisos guardan enlaces de Teams y correos, y las cuentas, sesiones y códigos
+# darían acceso (las versiones anteriores las guardaban en ClickHouse; ahora van en web/bd_cuentas.py)
+PRIVADAS = {'ajustes', 'ajustes_usuario', 'sesiones', 'codigos', 'usuarios', 'empresa', 'invitaciones',
+            'instalacion'}
 # Las tablas que consultan las webs (web/app.py y generar_avisos.py) y las que leen sus vistas. Las de entrenamiento
 # (anomaly_scores, evento, sesion...) no se suben: no hacen falta y no cabrían en la memoria del plan gratuito.
 TABLAS = {'alerta', 'analista', 'aviso', 'aviso_leido', 'cliente', 'comercio', 'features_transaccion',
           'feedback_analistas', 'metodo_pago', 'patron', 'revision_web', 'riesgo_transaccion', 'transaccion',
-          'transacciones_enriquecidas',
-          # Las cuentas de la web (web/sesiones.py), para entrar en la publicada con los mismos correos y contraseñas
-          # que en este PC (las contraseñas van cifradas), y los datos de los comercios registrados (web/cuentas.py)
-          'usuarios', 'empresa'}
+          'transacciones_enriquecidas'}
+# Las cuentas no van en esta copia: la web publicada usa la base de datos de cuentas compartida (CUENTAS_URL en
+# las variables de entorno de Render, ver web/bd_cuentas.py), donde también se guarda lo que se cambia en ella
 
 
 def copiar(relativa):
     origen, destino = RAIZ / relativa, SALIDA / relativa
     destino.parent.mkdir(parents=True, exist_ok=True)
     if origen.is_dir():
-        shutil.copytree(origen, destino, ignore=shutil.ignore_patterns('__pycache__'))
+        # sin la base de datos de cuentas local (web/cuentas.sqlite): la publicada usa la de CUENTAS_URL
+        shutil.copytree(origen, destino, ignore=shutil.ignore_patterns('__pycache__', '*.sqlite*'))
     else:
         shutil.copy2(origen, destino)
 

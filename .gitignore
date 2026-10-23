@@ -1,6 +1,8 @@
 .venv/
 venv/
 .env
+# La base de datos de cuentas local (web/bd_cuentas.py, sin CUENTAS_URL): cuentas y contraseñas cifradas
+web/cuentas.sqlite*
 .pytest_cache/
 # README exportado a HTML (Quarto/VS Code): se genera desde README.md
 README.html

@@ -7,6 +7,7 @@ pestaña Cuentas y los comercios se registran solos (web/cuentas.py). Desde la r
     python -m web.usuarios crear ana@x.com "Ana" analista --definitiva  # sin cambio obligatorio (web publicada)
     python -m web.usuarios demo                  # una cuenta de cada tipo para probar (enseña las contraseñas)
     python -m web.usuarios listar
+    python -m web.usuarios migrar                 # una vez: copia las cuentas que había en ClickHouse a CUENTAS_URL
     python -m web.usuarios contrasena jefa@banco.com      # una contraseña provisional nueva
     python -m web.usuarios desactivar jefa@banco.com
 
@@ -15,6 +16,7 @@ vez, la web pide cambiarla. Las contraseñas solo se guardan cifradas.
 """
 import argparse
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import clickhouse_connect
@@ -35,6 +37,46 @@ def cliente():
     return _cliente
 
 
+def epoca(fecha):
+    """ClickHouse devuelve las fechas en UTC sin decirlo."""
+    if isinstance(fecha, datetime):
+        return int(fecha.replace(tzinfo=timezone.utc).timestamp()) if fecha.tzinfo is None else int(fecha.timestamp())
+    return int(fecha or 0)
+
+
+def migrar(almacen):
+    """Las cuentas que guardaban las versiones anteriores en ClickHouse (tablas usuarios, ajustes_usuario y empresa),
+    a la base de datos de cuentas. No pisa las que ya estén allí con el mismo correo (o empresa)."""
+    ch = cliente()
+    print(f'De ClickHouse ({DATABASE}) a {almacen.bd}')
+    hechas = {'cuentas': 0, 'ajustes': 0, 'empresas': 0}
+    if ch.command('EXISTS TABLE usuarios'):
+        columnas = {c for (c, *_) in ch.query('DESCRIBE usuarios').result_rows}
+        for u in ch.query('SELECT * FROM usuarios FINAL').named_results():
+            if almacen.ficha(u['email']) is not None or u['email'].endswith('@invitado.centinela'):
+                continue
+            almacen._escribir({
+                'email': u['email'], 'nombre': u['nombre'], 'rol': u['rol'], 'comercio_id': u['comercio_id'],
+                'sal': u['sal'], 'hash': u['hash'],
+                'estado': u.get('estado') or ('activa' if u['activo'] else 'desactivada'),
+                'telefono': u.get('telefono', ''), 'nota': u.get('nota', ''),
+                'creada': epoca(u.get('creada') or u.get('actualizado')), 'revisada_por': u.get('revisada_por', ''),
+                'cambiar_contrasena': u.get('cambiar_contrasena', 0) if 'cambiar_contrasena' in columnas else 0})
+            hechas['cuentas'] += 1
+    if ch.command('EXISTS TABLE ajustes_usuario'):
+        for email, clave, valor in ch.query('SELECT email, clave, valor FROM ajustes_usuario FINAL').result_rows:
+            if clave not in almacen.ajustes(email):
+                almacen.guardar_ajustes(email, {clave: valor})
+                hechas['ajustes'] += 1
+    if ch.command('EXISTS TABLE empresa'):
+        for e in ch.query('SELECT * FROM empresa FINAL').named_results():
+            if almacen.empresa(e['comercio_id']) is None:
+                almacen.guardar_empresa(e['comercio_id'], e, registrada=e['registrada'], configurada=e['configurada'])
+                hechas['empresas'] += 1
+    print(f'Copiadas: {hechas["cuentas"]} cuentas, {hechas["ajustes"]} ajustes de Mis avisos y '
+          f'{hechas["empresas"]} empresas. Las de ClickHouse se pueden dejar: la web ya no las usa.')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ordenes = parser.add_subparsers(dest='orden', required=True)
@@ -47,10 +89,12 @@ def main():
                        help='sin cambio obligatorio al entrar (para la web publicada, que no guarda lo que se cambia en ella)')
     ordenes.add_parser('demo', help='admin@, analista@ y comercio@centinela.demo, con contraseñas ya definitivas')
     ordenes.add_parser('listar', help='las cuentas y su estado')
+    ordenes.add_parser('migrar', help='copia las cuentas, Mis avisos y empresas que había en ClickHouse '
+                                      '(versiones anteriores) a la base de datos de cuentas')
     for orden, ayuda in [('contrasena', 'le da una contraseña provisional nueva'), ('desactivar', 'quita el acceso')]:
         ordenes.add_parser(orden, help=ayuda).add_argument('email')
     args = parser.parse_args()
-    almacen = Almacen(cliente)
+    almacen = Almacen()           # la base de datos de cuentas (CUENTAS_URL o SQLite en local)
     almacen.preparar()
 
     if args.orden == 'crear':
@@ -76,6 +120,8 @@ def main():
             contrasena = contrasena_provisional()
             almacen.guardar_usuario(email, nombre, rol, comercio, contrasena, revisada_por='demo')
             print(f'{rol:13} {email:26} contrasena: {contrasena}' + (f'   (comercio {comercio})' if comercio else ''))
+    elif args.orden == 'migrar':
+        migrar(almacen)
     elif args.orden == 'listar':
         filas = almacen.cuentas()
         for c in filas:

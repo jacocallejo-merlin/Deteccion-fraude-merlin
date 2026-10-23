@@ -42,6 +42,9 @@ jobs:
       CLICKHOUSE_HOST: localhost
       CLICKHOUSE_PASSWORD: password
       PYTHONIOENCODING: utf-8
+      # la base de datos de cuentas compartida (web/bd_cuentas.py): a quién mandar los avisos de cada noche.
+      # Secreto CUENTAS_URL; sin él, los avisos solo van a los canales del servidor
+      CUENTAS_URL: ${{ secrets.CUENTAS_URL }}
       # repositorio de la web publicada; se puede cambiar con la variable CENTINELA_WEB_REPO (usuario/repositorio)
       REPO_WEB: https://x-access-token:${{ secrets.CENTINELA_WEB_TOKEN }}@github.com/${{ vars.CENTINELA_WEB_REPO || 'jacocallejo-merlin/centinela-web' }}.git
 
