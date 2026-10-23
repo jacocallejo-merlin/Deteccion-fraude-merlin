@@ -36,7 +36,6 @@ PYTHON = os.environ.get('PYTHON_PROYECTO', 'python')
 # ¿El DAG de scoring genera un lote de transacciones nuevas antes de puntuar?
 # True para la demo (si no, no habría nada nuevo que puntuar).
 GENERAR_LOTE = True
-DIAS_POR_LOTE = 1   # el DAG corre a diario: cada ejecución añade un día de transacciones
 
 def avisar_fallo(context):
     """Cuando una tarea falla (después de su reintento), aviso por Teams/Slack/correo con
@@ -192,7 +191,8 @@ with DAG(
     validacion = paso('validacion', 'validacion_reproducibilidad_consistencia.py')
 
     if GENERAR_LOTE:
-        lote = paso('generar_lote', 'generar_lote.py', f'--dias {DIAS_POR_LOTE}')
+        # Sin --dias: los días que falten hasta hoy (uno cada noche, ninguno si ya se lanzó hoy, nunca futuros)
+        lote = paso('generar_lote', 'generar_lote.py')
         lote >> carga
 
     features >> [puntuar_clasicos, puntuar_ae]
