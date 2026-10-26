@@ -16,11 +16,20 @@ from config import CONFIG, HOST, PORT, USER, PASSWORD, DATABASE
 #  - smurfing: el primer pago de cada serie no tiene otro igual en las 24 h anteriores y no saltaba;
 #    se detecta también porque el importe es muy superior al gasto habitual del cliente.
 # Criterio para adoptarlos: que al menos 1 de cada 5 alertas nuevas fuera fraude en ese periodo.
+# Revisadas después (medir_sistema.py), también solo con el periodo de entrenamiento:
+#  - card_testing: la regla original (>= 2 pagos de la tarjeta en 10 min) no veía el primer pago de cada
+#    ráfaga, que aún no tiene pagos previos. Todos son de menos de 5 € y casi siempre llegan desde un
+#    dispositivo nuevo o con VPN: así caza 50 de 53 (antes 39) con 0,9 falsas alarmas al día (antes 2,7).
+#  - cash_out_multicomercio (nueva): el fraude que ningún modelo había visto (solo aparece en el examen).
+#    No se puede ajustar con sus casos, así que el umbral se eligió con los pagos legítimos del
+#    entrenamiento: >= 3 comercios distintos del cliente en 3 h e importe >= 1,5 veces el habitual da
+#    0,2 falsas alarmas al día (con >= 3 comercios solos serían 1,2 al día).
 PLANTILLAS = {
     'pico_gasto':         (1, 0.60, '(z_importe_cliente > {z_minimo} AND ratio_importe_habitual >= {ratio_minimo}) '
                                     'OR (es_madrugada = 1 AND z_importe_cliente > {z_madrugada_minimo} '
                                     'AND ratio_importe_habitual >= {ratio_madrugada_minimo})'),
-    'card_testing':       (2, 0.80, 'n_tarjeta_10min >= {pagos_10min_minimo} AND importe < {importe_maximo}'),
+    'card_testing':       (2, 0.80, 'importe < {importe_maximo} AND (dispositivo_nuevo = 1 OR proxy_vpn = 1 '
+                                    'OR n_tarjeta_10min >= {pagos_10min_minimo})'),
     'smurfing':           (3, 0.75, 'importe >= {importe_minimo} AND importe < 1000 '
                                     'AND (n_previos_umbral_24h >= {previos_24h_minimo} '
                                     'OR ratio_importe_habitual >= {ratio_minimo})'),
@@ -32,6 +41,15 @@ PLANTILLAS = {
     'bot':                (8, 0.70, 'min_seg_entre_eventos <= {seg_entre_eventos_maximo} '
                                     'AND n_eventos_sesion >= {eventos_minimo}'),
     'bust_out':           (9, 0.90, 'pct_limite_credito >= {pct_limite_minimo}'),
+    'cash_out_multicomercio': (10, 0.85, 'n_comercios_cliente_3h >= {comercios_minimo} '
+                                         'AND ratio_importe_habitual >= {ratio_minimo}'),
+}
+
+# Patrones que se añadieron después de generar el dataset (dataset.py los crea en una base de datos nueva):
+# en una que ya existe se dan de alta al generar las alertas
+PATRONES_NUEVOS = {
+    10: ('Cash-out multicomercio', 'Vaciar la tarjeta comprando en muchas tiendas en poco tiempo',
+         '>= 3 comercios distintos del cliente en 3 h e importe >= 1,5 veces su habitual'),
 }
 
 # Umbrales con los que se diseñaron las reglas (Hito 3, a mano). Los que se usan están en
@@ -48,6 +66,7 @@ UMBRALES_INICIALES = {
     'devolucion_abusiva': {'activa': True, 'devoluciones_30d_minimo': 2},
     'bot':                {'activa': True, 'seg_entre_eventos_maximo': 3, 'eventos_minimo': 4},
     'bust_out':           {'activa': True, 'pct_limite_minimo': 0.85},
+    'cash_out_multicomercio': {'activa': True, 'comercios_minimo': 3, 'ratio_minimo': 1.5},
 }
 
 
@@ -76,7 +95,15 @@ def sql_base(importe_minimo_smurfing):
 SQL_BASE = sql_base(UMBRALES['smurfing']['importe_minimo'])
 
 
+def asegurar_patrones(client):
+    existentes = {p for (p,) in client.query('SELECT patron_id FROM patron').result_rows}
+    faltan = [[pid, *textos] for pid, textos in PATRONES_NUEVOS.items() if pid not in existentes]
+    if faltan:
+        client.insert('patron', faltan, column_names=['patron_id', 'nombre', 'descripcion', 'condicion'])
+
+
 def generar_alertas(client):
+    asegurar_patrones(client)
     client.command("ALTER TABLE alerta DELETE WHERE origen = 'regla' SETTINGS mutations_sync = 2")
     siguiente_id = client.query('SELECT ifNull(max(alerta_id), 0) + 1 FROM alerta').result_rows[0][0]
  

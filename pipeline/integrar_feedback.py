@@ -122,8 +122,20 @@ def integrar(client, corte):
     return df
 
 
+def recuperar_revisiones_web(client):
+    """Lo revisado en la web (también en la web publicada) está en la base de cuentas (web/revisiones.py): se pone
+    en revision_web lo que falte, para que entre en el recalibrado. Sin base de cuentas, no hace nada."""
+    try:
+        from web.revisiones import sincronizar
+        from web.sesiones import Almacen
+    except ImportError:          # sin las dependencias de la web (fastapi): solo lo que ya está en revision_web
+        return 0
+    return sincronizar(Almacen(), client)
+
+
 def main():
     client = conectar()
+    recuperar_revisiones_web(client)
     integrar(client, reloj(client))
 
 

@@ -96,6 +96,7 @@ def crear_router(almacen):
             perfil = microsoft.yo(tokens['access_token'])
         except Exception as e:
             return a_la_web(teams='error', motivo=str(e)[:300])
+        almacen().registrar(u['email'], 'conectar_teams', perfil.get('mail') or perfil.get('userPrincipalName', ''))
         almacen().guardar_ajustes(u['email'], {
             'teams_refresh': microsoft.cifrar(tokens['refresh_token']),
             'teams_cuenta': perfil.get('mail') or perfil.get('userPrincipalName') or perfil.get('displayName', ''),
@@ -116,6 +117,7 @@ def crear_router(almacen):
         token = acceso(u)
         if not any(x['equipo_id'] == c.equipo_id and x['canal_id'] == c.canal_id for x in microsoft.canales(token)):
             raise HTTPException(422, 'Ese canal no es de ninguno de tus equipos')
+        almacen().registrar(u['email'], 'canal_teams', f'{c.equipo} > {c.canal}')
         almacen().guardar_ajustes(u['email'], {'teams_equipo_id': c.equipo_id, 'teams_canal_id': c.canal_id,
                                                'teams_equipo': c.equipo, 'teams_canal': c.canal})
         return estado(request)
@@ -124,6 +126,7 @@ def crear_router(almacen):
     def desconectar(request: Request):
         u = usuario_de(request)
         almacen().guardar_ajustes(u['email'], {clave: '' for clave in CLAVES})
+        almacen().registrar(u['email'], 'desconectar_teams')
         return JSONResponse({'conectado': False})
 
     return router

@@ -63,6 +63,8 @@ def crear_router(almacen):
             if getattr(a, clave) is not None:
                 cambios[clave] = '1' if getattr(a, clave) else '0'
         almacen().guardar_ajustes(u['email'], cambios)
+        if cambios:   # la dirección de Teams es un secreto: solo qué se ha cambiado
+            almacen().registrar(u['email'], 'mis_avisos', ', '.join(cambios))
         return leer(request)
 
     @router.post('/api/ajustes/prueba')

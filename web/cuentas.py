@@ -28,7 +28,7 @@ from datetime import date, datetime, timedelta
 from typing import Literal, Optional
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException, Request
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
@@ -242,6 +242,7 @@ def crear_router(almacen, nombre_comercio, cliente):
         if almacen().usuario(email) is None:
             almacen().guardar_usuario(email, nombre, i.rol, i.comercio_id, contrasena_provisional() * 3,
                                       revisada_por='invitado')
+        almacen().registrar(email, 'entrar_invitado', nombre)
         return con_sesion(JSONResponse({'rol': i.rol, 'invitado': True}), request, almacen(), email, False)
 
     # ------------------------------------------------------------------ contraseña olvidada
@@ -251,6 +252,7 @@ def crear_router(almacen, nombre_comercio, cliente):
         email = c.email.strip().lower()
         time.sleep(0.3)
         if CORREO.match(email) and almacen().usuario(email) is not None:
+            almacen().registrar(email, 'pedir_codigo', 'contraseña olvidada')
             return {'ok': True, **mandar_codigo(request, tareas, email, 'recuperar')}
         return {'ok': True}
 
@@ -263,6 +265,7 @@ def crear_router(almacen, nombre_comercio, cliente):
             raise HTTPException(403, 'Esta cuenta está desactivada. Contacta con el administrador de tu entidad.')
         almacen().cambiar_contrasena(email, n.contrasena)
         almacen().cerrar_otras(email)                # quien conociera la antigua, fuera
+        almacen().registrar(email, 'contrasena_recuperada', 'con el código del correo')
         u = almacen().usuario(email)
         return con_sesion(JSONResponse({'nombre': u['nombre'], 'rol': u['rol']}), request, almacen(), email,
                           n.recordar)
@@ -325,6 +328,7 @@ def crear_router(almacen, nombre_comercio, cliente):
                          column_names=['comercio_id', 'nombre', 'categoria_negocio', 'pais', 'ciudad'])
         almacen().guardar_usuario(email, datos['nombre'], 'comercio', comercio_id, None,
                                   cifrada=(datos['sal'], datos['hash']), revisada_por='registro')
+        almacen().registrar(email, 'registro_comercio', f'{empresa["nombre"]} (comercio {comercio_id})')
         return con_sesion(JSONResponse({'nombre': datos['nombre'], 'rol': 'comercio'}), request, almacen(), email,
                           c.recordar)
 
@@ -366,6 +370,7 @@ def crear_router(almacen, nombre_comercio, cliente):
         antes = mi_empresa(u['comercio_id'])
         valores = validar_empresa(e)
         almacen().guardar_empresa(u['comercio_id'], valores, registrada=antes['registrada'], configurada=True)
+        almacen().registrar(u['email'], 'datos_empresa', f'{valores["nombre"]} (comercio {u["comercio_id"]})')
         # El nombre, el sector y la ciudad, también donde los leen las webs y el pipeline
         cliente().command('''ALTER TABLE comercio UPDATE nombre = {n:String}, categoria_negocio = {s:String},
                                  pais = {p:String}, ciudad = {ci:String} WHERE comercio_id = {c:UInt32}
@@ -387,6 +392,13 @@ def crear_router(almacen, nombre_comercio, cliente):
             filas.append({**c, 'comercio': nombres.get(c['comercio_id'])})
         return {'cuentas': filas}
 
+    @router.get('/api/cuentas/actividad')
+    def actividad(limite: int = Query(200, ge=1, le=2000), email: str = Query('', max_length=200)):
+        """Quién hizo qué y cuándo (lo más reciente primero), de todos o de una persona."""
+        nombres = {c['email']: c['nombre'] for c in almacen().cuentas()}
+        return {'actividad': [{**f, 'nombre': nombres.get(f['email'], '')}
+                              for f in almacen().actividad(limite, email or None)]}
+
     @router.post('/api/cuentas/crear')
     def crear(n: NuevaCuenta, request: Request):
         yo = usuario_de(request)
@@ -404,6 +416,7 @@ def crear_router(almacen, nombre_comercio, cliente):
         contrasena = contrasena_valida(n.contrasena) if n.contrasena else contrasena_provisional()
         almacen().guardar_usuario(email, nombre, n.rol, n.comercio_id, contrasena, provisional=True,
                                   revisada_por=yo['email'])
+        almacen().registrar(yo['email'], 'crear_cuenta', f'{email} ({n.rol})')
         return {'email': email, 'contrasena_provisional': contrasena}
 
     @router.post('/api/cuentas/estado')
@@ -415,6 +428,7 @@ def crear_router(almacen, nombre_comercio, cliente):
         u = almacen().ficha(email)
         if u is None:
             raise HTTPException(404, 'No existe esa cuenta')
+        almacen().registrar(yo['email'], d.accion, email)
         if d.accion == 'contrasena_provisional':
             contrasena = contrasena_provisional()
             almacen().cambiar_contrasena(email, contrasena, provisional=True)

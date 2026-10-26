@@ -37,7 +37,38 @@ async function cargarCuentas() {
   ct('t-cuentas').innerHTML = `<table>
     <thead><tr><th>Persona</th><th>Ve</th><th>Estado</th><th></th></tr></thead>
     <tbody>${d.cuentas.map(filaCuenta).join('')}</tbody></table>`;
+  const elegida = ct('act-persona').value;
+  ct('act-persona').innerHTML = '<option value="">Todas las personas</option>' + d.cuentas.map((c) =>
+    `<option value="${esc(c.email)}"${c.email === elegida ? ' selected' : ''}>${esc(c.nombre)} (${esc(c.email)})</option>`).join('');
+  await cargarActividad();
 }
+
+// ------------------------------------------------------------------ registro de actividad
+const ACCION_TEXTO = {
+  entrar: 'Ha entrado', entrar_fallido: 'Intento de entrada fallido', salir: 'Ha cerrado sesión',
+  entrar_invitado: 'Ha entrado como invitado', cambiar_contrasena: 'Ha cambiado su contraseña',
+  pedir_codigo: 'Ha pedido un código', contrasena_recuperada: 'Ha recuperado su contraseña',
+  cambiar_perfil: 'Ha cambiado su perfil', cerrar_otras_sesiones: 'Ha cerrado sus otras sesiones',
+  registro_comercio: 'Se ha registrado como comercio', datos_empresa: 'Ha cambiado los datos de su empresa',
+  crear_cuenta: 'Ha creado una cuenta', desactivar: 'Ha desactivado una cuenta', reactivar: 'Ha reactivado una cuenta',
+  contrasena_provisional: 'Ha dado una contraseña provisional', revision: 'Ha revisado un caso',
+  mis_avisos: 'Ha cambiado Mis avisos', conectar_teams: 'Ha conectado Microsoft Teams',
+  canal_teams: 'Ha elegido el canal de Teams', desconectar_teams: 'Ha desconectado Microsoft Teams',
+};
+const cuando = (ts) => new Date(ts * 1000).toLocaleString('es-ES', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+async function cargarActividad() {
+  const persona = ct('act-persona').value;
+  const d = await api('/api/cuentas/actividad', persona ? { email: persona, limite: 200 } : { limite: 200 });
+  ct('t-actividad').innerHTML = d.actividad.length ? `<table>
+    <thead><tr><th>Cuándo</th><th>Quién</th><th>Qué</th><th>Detalle</th></tr></thead>
+    <tbody>${d.actividad.map((a) => `<tr class="${a.accion === 'entrar_fallido' ? 'apagada' : ''}">
+      <td>${cuando(a.ts)}</td><td><b>${esc(a.nombre || a.email)}</b><div class="sub">${esc(a.email)}</div></td>
+      <td>${ACCION_TEXTO[a.accion] || esc(a.accion)}</td><td class="sub">${esc(a.detalle)}</td></tr>`).join('')}</tbody></table>`
+    : '<p class="sub">Todavía no hay actividad apuntada.</p>';
+}
+
+ct('act-persona').addEventListener('change', () => cargarActividad().catch((e) => window.alert(e.message)));
 
 CARGADORES.cuentas = cargarCuentas;
 CONTENEDOR_ERROR.cuentas = 't-cuentas';

@@ -75,13 +75,16 @@ suciedad:
 # si el importe es muy superior al habitual (ratio_minimo).
 reglas:
   pico_gasto:         {activa: true, z_minimo: 3.5, ratio_minimo: 6, z_madrugada_minimo: 2.5, ratio_madrugada_minimo: 4}
-  card_testing:       {activa: true, pagos_10min_minimo: 3, importe_maximo: 5}
+  # card_testing: desde que la regla mira también el dispositivo nuevo y la VPN (reglas_alerta.py), la
+  # ráfaga solo hace falta para lo demás: con 4 pagos en 10 min, 0,9 falsas alarmas al día y 50 de 53 casos
+  card_testing:       {activa: true, pagos_10min_minimo: 4, importe_maximo: 5}
   smurfing:           {activa: true, importe_minimo: 850, previos_24h_minimo: 1, ratio_minimo: 10}
   account_takeover:   {activa: true, intentos_login_minimo: 6}
   ip_sospechosa:      {activa: true}
   dispositivo_nuevo:  {activa: true, ratio_minimo: 4}
   devolucion_abusiva: {activa: false, devoluciones_30d_minimo: 2}
   bot:                {activa: true, seg_entre_eventos_maximo: 1, eventos_minimo: 6}
+  cash_out_multicomercio: {activa: true, comercios_minimo: 3, ratio_minimo: 1.5}   # nueva (reglas_alerta.py)
   bust_out:           {activa: true, pct_limite_minimo: 0.85}
 
 # preparacion_datos_ml.py
@@ -147,9 +150,17 @@ busqueda_autoencoder:
 # Hito 6: feedback de analistas (simulado) y recalibración de las alertas
 # simular_analistas.py, integrar_feedback.py, recalibrar_modelo.py y medir_feedback.py
 feedback:
-  modelo_base: kmeans          # detector base del circuito de alertas y del Hito 6 (el autoencoder
-                               # mejorado queda prácticamente empatado, pero no se cambia la base)
+  modelo_base: kmeans          # detector principal (drift y nombres por defecto). Se mantiene para no
+                               # romper configuraciones antiguas; los detectores del Hito 6 son los de abajo
+  # Detectores cuyos percentiles entran en el recalibrador. Con varios, el HistGradientBoosting aprende
+  # a ponderarlos: no hay que elegir uno. Para añadir el modelo que esté probando un compañero, basta
+  # con poner aquí su nombre si guarda <nombre>.joblib y <nombre>_referencia.joblib (y lo entiende
+  # modelos_nosupervisados.puntuar). El autoencoder se puntúa solo con sus artefactos.
+  detectores: [kmeans, autoencoder]
   presupuesto: 0.01            # parte de las transacciones de cada día que revisan los analistas (~7 al día)
+  exploracion: 0.15            # de esas revisiones, la parte (al menos 1) que va a lo que los detectores solos
+                               # ven más raro y el recalibrador dejó fuera: así no "olvida" ningún tipo de
+                               # fraude (simular_analistas.py). 0 = todo lo que pone arriba el recalibrador
   retraso_revision_horas: [2, 48]   # tras cerrar el día, el veredicto llega entre 2 h y 2 días después
   p_error:                     # probabilidad de que el analista se equivoque de veredicto
     junior: 0.08

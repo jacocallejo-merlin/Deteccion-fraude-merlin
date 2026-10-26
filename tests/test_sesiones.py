@@ -14,7 +14,7 @@ from web import sesiones
 class AlmacenSimulado:
     """Lo mismo que sesiones.Almacen, en memoria."""
     def __init__(self):
-        self.usuarios, self.sesiones = {}, {}
+        self.usuarios, self.sesiones, self.actividad = {}, {}, []
 
     def guardar_usuario(self, email, nombre, rol, comercio_id, contrasena, activo=True, provisional=False):
         sal, hash_ = sesiones.cifrar(contrasena)
@@ -25,6 +25,9 @@ class AlmacenSimulado:
 
     def ficha(self, email):
         return self.usuarios.get(email.strip().lower())
+
+    def registrar(self, email, accion, detalle=""):
+        self.actividad.append((email, accion))
 
     def usuario(self, email):
         u = self.ficha(email)
@@ -104,6 +107,15 @@ def test_entrar_y_salir(almacen):
     c.post("/api/logout")
     assert c.get("/api/eco").status_code == 401
     assert almacen.sesiones == {}                                    # la sesión ya no vale aunque se copie la cookie
+
+
+def test_entrar_queda_apuntado(almacen):
+    c = TestClient(app_de_prueba(almacen))
+    entrar(c, "ana@banco.com", "mala")
+    entrar(c, "ana@banco.com", "secreta-1")
+    c.post("/api/logout")
+    assert almacen.actividad == [("ana@banco.com", "entrar_fallido"), ("ana@banco.com", "entrar"),
+                                 ("ana@banco.com", "salir")]
 
 
 def test_mantener_la_sesion(almacen):

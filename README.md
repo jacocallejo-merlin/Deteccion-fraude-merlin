@@ -12,19 +12,20 @@ cómo ejecutarlo.
 - **Qué hace:** da una nota de sospecha a cada pago y ordena las alertas para que el equipo revise
   solo el 1 % más sospechoso (unas 6-7 al día), en vez de revisar los ~650 pagos diarios.
 - **Cómo:** cuatro detectores no supervisados (Isolation Forest, KMeans, DBSCAN y One-Class SVM) y
-  un autoencoder semi-supervisado (se entrena solo con pagos legítimos); KMeans es el detector base y
-  un modelo supervisado recalibra el orden cada semana con lo que confirman el banco y los analistas.
+  un autoencoder semi-supervisado (se entrena solo con pagos legítimos); KMeans y el autoencoder
+  alimentan un modelo supervisado que recalibra el orden cada semana con lo que confirman el banco y
+  los analistas.
 - **Datos:** unos 117.000 pagos sintéticos en 180 días (116.547 tras limpiar), 2.000 clientes,
   30 comercios, 616 pagos fraudulentos (0,53 %) y 10 tipos de fraude, incluido uno que el sistema no
   ha visto nunca.
 - **Resultado principal (test: 29.174 pagos, 201 fraudes):** el autoencoder mejorado y KMeans quedan
   prácticamente empatados: PR-AUC 0,415 y 0,408 (los dos rondan 0,41; unas 60 veces el azar). Los dos
   encuentran el 42 % del fraude revisando el 1 % (el umbral de validación marca un 1,1 % real en
-  test) y de cada 100 alertas unas 27 son fraude. KMeans sigue siendo el detector base del sistema
-  por explicabilidad y continuidad del Hito 6.
+  test) y de cada 100 alertas unas 27 son fraude. El Hito 6 combina los dos y aprende a ponderarlos.
 - **Aprendizaje (Hito 6):** en los mismos días y con la misma carga de revisión, el modelo
   recalibrado con los fraudes que confirma el banco encuentra 98 fraudes frente a 70 de KMeans
-  (+40 %).
+  (+40 %). Esa medición es con KMeans como único detector; el ensemble con autoencoder está
+  pendiente de recalcular.
 - **Límite principal:** el fraude que imita a un cliente normal (`cash_out_multicomercio`) apenas
   se detecta: 0 % en el detector no supervisado y 16 % en la cola tras el ajuste del Hito 6.
 
@@ -274,11 +275,14 @@ para ver cuál funciona mejor.
 | **One-Class SVM** | Dibuja una frontera alrededor de la mayoría de los pagos. Lo que cae fuera es raro. |
 | **Autoencoder** (red neuronal) | Aprende a "copiar" pagos normales: los comprime y los vuelve a reconstruir. Si un pago no lo sabe reconstruir bien, es que no se parece a lo normal. La nota es lo mal que lo copia. |
 
-**¿Cuál se usa?** **KMeans** como detector base: es el que alimenta las alertas y el Hito 6, y es
-más fácil de explicar. En la comparación pura de PR-AUC, el **autoencoder mejorado** queda
-ligeramente por delante (0,415 frente a 0,408 en test; 0,148 frente a 0,133 en validación), pero la
-diferencia es pequeña: en test los intervalos se solapan y en validación el bootstrap los da por
-empatados. No se cambió la base para no romper la comparación histórica.
+**¿Cuál se usa?** **KMeans y el autoencoder**, juntos. KMeans sigue siendo el detector de referencia
+para el drift y para comparar con la serie histórica, pero el Hito 6 ya no obliga a elegir uno:
+recibe las notas de los dos y aprende a ponderarlas (`feedback.detectores`). Antes de la primera
+recalibración, el orden es la media de ambos percentiles. En la comparación pura de PR-AUC, el
+**autoencoder mejorado** queda ligeramente por delante (0,415 frente a 0,408 en test; 0,148 frente a
+0,133 en validación), pero la diferencia es pequeña: en test los intervalos se solapan y en
+validación el bootstrap los da por empatados. Por eso tiene sentido sumar los dos en vez de
+descartar uno.
 Los cuatro clásicos se probaron con 37 combinaciones de hiperparámetros y se quedó la mejor de cada
 uno; el autoencoder se ajustó en una búsqueda aparte (`buscar_autoencoder.py`, 36 combinaciones) y
 luego se entrenó la configuración ganadora.
@@ -329,10 +333,10 @@ Hay **dos fuentes** para saber qué era fraude, y se juntan (`integrar_feedback.
 Si las dos fuentes no coinciden, manda el banco.
 
 **Cada semana** (`recalibrar_modelo.py`) se entrena un segundo modelo, ahora sí **supervisado**
-(aprende de ejemplos con respuesta). Recibe la nota de KMeans y las 36 variables (más alguna extra
-del Hito 6), y aprende *"las alertas con estas características solían ser fraude; estas otras,
-falsas alarmas"*. A partir de ese momento las alertas se ordenan con él. KMeans no desaparece: su
-nota es una de las cosas que mira el nuevo modelo.
+(aprende de ejemplos con respuesta). Recibe los percentiles de KMeans y del autoencoder, y las 36
+variables (más alguna extra del Hito 6), y aprende *"las alertas con estas características solían
+ser fraude; estas otras, falsas alarmas"*. A partir de ese momento las alertas se ordenan con él.
+Ninguno de los dos detectores desaparece: sus notas son dos de las cosas que mira el nuevo modelo.
 
 Por último, `medir_feedback.py` comprueba semana a semana si las alertas mejoran.
 
@@ -476,8 +480,9 @@ sube su presencia en la cola del 9 % al 16 %, pero sigue siendo el tipo que peor
 
 ### Lo que mejora al aprender (Hito 6)
 
-> El Hito 6 se midió con KMeans como detector base. El autoencoder mejorado no se usó para rehacer
-> esa parte: cambiarlo obligaría a recalibrar y volver a medir todo el circuito.
+> Las cifras de abajo se midieron con KMeans como único detector. El código ya combina KMeans y
+> autoencoder (y admite más detectores en `feedback.detectores`), pero hay que volver a ejecutar la
+> simulación para actualizar los números.
 
 Comparando **los mismos días con el mismo trabajo** (el 1 % de los pagos: unas 6-7 alertas al día):
 
@@ -546,8 +551,8 @@ Contarlas da credibilidad. Son estas:
   intervalo es amplio (0,32–0,53) y la diferencia con KMeans (0,408) no es significativa. Además,
   la mejor época es muy temprana (5 de 25): si se entrena más, la red reconstruye también los
   fraudes y el ranking empeora. Hay que vigilarlo al cambiar de datos.
-- **El Hito 6 no se rehízo con el autoencoder.** Las cifras de aprendizaje semanal usan KMeans como
-  detector base; cambiar la base obligaría a recalibrar y repetir las comparaciones.
+- **El Hito 6 se midió con KMeans; el ensemble es nuevo.** Las cifras de aprendizaje semanal todavía
+  no incluyen al autoencoder: hay que recalibrar y repetir las comparaciones para saber si mejora.
 - **Casi 3 de cada 4 alertas son falsas alarmas.** Es normal en fraude, pero hay margen de mejora.
 - **Los fraudes "de una sola cosa"** (pico de gasto, IP sospechosa, devoluciones) se escapan al
   detector. Necesitan reglas.
@@ -566,13 +571,14 @@ Porque al empezar no hay ejemplos: el banco tarda semanas en confirmar el fraude
 nuevo no tiene ejemplos nunca. Por eso se empieza con un detector de rarezas y, cuando ya hay
 fraudes confirmados, se añade el modelo supervisado (Hito 6). Se usan los dos.
 
-**¿Por qué KMeans y no la red neuronal (autoencoder), que es más moderna?**
-Porque KMeans es el detector base del sistema y el Hito 6 está construido sobre él; además es más
-fácil de explicar: *"este pago no se parece a ninguno de los perfiles normales"*. En la comparación
-pura, el autoencoder mejorado queda un poco por delante (0,415 frente a 0,408 en test; 0,148 frente a
-0,133 en validación), pero el bootstrap no los separa con solo 26 fraudes. No se cambió la base
-porque la diferencia no es concluyente y obligaría a rehacer la recalibración y las comparaciones
-históricas. Es una mejora real del Hito 4, no un cambio de modelo en producción.
+**¿Por qué KMeans y también la red neuronal (autoencoder)?**
+Porque no hace falta elegir uno: el Hito 6 recibe las notas de los dos y aprende a ponderarlas
+(`feedback.detectores`). KMeans es más fácil de explicar y sigue siendo la referencia para el drift;
+el autoencoder añade una señal distinta, la de lo mal que reconstruye cada pago. En la comparación
+pura, el autoencoder queda un poco por delante (0,415 frente a 0,408 en test; 0,148 frente a 0,133 en
+validación), pero el bootstrap no los separa con solo 26 fraudes. Por eso se usan los dos: si uno
+falla en un tipo de fraude, el otro puede compensarlo. Las cifras del Hito 6 todavía son las de
+KMeans solo; hay que recalcularlas con el ensemble.
 
 **¿Por qué solo el 1 %?**
 Es lo que da tiempo a revisar a un equipo pequeño (unos 7 pagos al día). Se puede cambiar en

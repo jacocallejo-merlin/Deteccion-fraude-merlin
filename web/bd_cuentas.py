@@ -69,6 +69,33 @@ TABLAS = [
         web         TEXT NOT NULL DEFAULT '',
         registrada  INTEGER NOT NULL DEFAULT 0,  -- se registró desde la web (si no, viene de los datos de la entidad)
         configurada INTEGER NOT NULL DEFAULT 0)''',
+    # Quién hizo qué y cuándo (entrar, cuentas, contraseñas, revisiones, Teams...): lo ve el administrador
+    '''CREATE TABLE IF NOT EXISTS registro (
+        ts      BIGINT NOT NULL,
+        email   TEXT NOT NULL,
+        accion  TEXT NOT NULL,
+        detalle TEXT NOT NULL DEFAULT '')''',
+    'CREATE INDEX IF NOT EXISTS registro_ts ON registro (ts)',
+    # Los avisos que cada persona ha marcado como leídos (aviso_id: el de la tabla aviso de ClickHouse, como texto
+    # porque no cabe en un BIGINT con signo)
+    '''CREATE TABLE IF NOT EXISTS avisos_leidos (
+        email    TEXT NOT NULL,
+        aviso_id TEXT NOT NULL,
+        leido    BIGINT NOT NULL,
+        PRIMARY KEY (email, aviso_id))''',
+    # Los veredictos que se dan en la web, también aquí: la tabla revision_web de ClickHouse se pierde si se
+    # vuelve a cargar (la web publicada lo hace al arrancar) y de aquí se recupera (web/revisiones.py)
+    '''CREATE TABLE IF NOT EXISTS revisiones (
+        transaccion_id BIGINT NOT NULL,
+        veredicto      TEXT NOT NULL,
+        comentario     TEXT NOT NULL DEFAULT '',
+        usuario        TEXT NOT NULL,
+        email          TEXT NOT NULL DEFAULT '',
+        comercio       INTEGER NOT NULL DEFAULT 0,
+        fecha_revision TEXT NOT NULL,              -- la hora de los datos (AAAA-MM-DD HH:MM:SS), como en revision_web
+        fecha_real     BIGINT NOT NULL,            -- cuándo se hizo de verdad
+        datos          TEXT NOT NULL DEFAULT '',   -- en qué datos se hizo (web/revisiones.huella)
+        PRIMARY KEY (transaccion_id, fecha_real))''',
 ]
 # Columnas que se añadieron después: las tablas que ya existían las ganan al preparar (tabla, columna, definición)
 COLUMNAS_NUEVAS = [

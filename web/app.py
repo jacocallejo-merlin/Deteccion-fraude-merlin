@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Literal
 
 import clickhouse_connect
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -106,6 +106,10 @@ def preparar_tablas():
     cliente().command('''
         CREATE TABLE IF NOT EXISTS aviso_leido (aviso_id UInt64, comercio UInt32, leido DateTime DEFAULT now())
         ENGINE = MergeTree ORDER BY (aviso_id, comercio)''')
+    # Lo revisado en la web y guardado también en la base de cuentas, de vuelta en revision_web si falta (la web
+    # publicada recarga ClickHouse al arrancar): web/revisiones.py
+    from web import revisiones
+    revisiones.sincronizar(_almacen, cliente())
 
 
 _preparadas = False
@@ -472,8 +476,9 @@ class Revision(BaseModel):
 
 
 @app.post('/api/revisiones')
-def revisar(r: Revision):
-    """Guarda el veredicto de una persona. El recalibrado semanal lo usa como feedback."""
+def revisar(r: Revision, request: Request):
+    """Guarda el veredicto de una persona. El recalibrado semanal lo usa como feedback. Se guarda también en la
+    base de cuentas (web/revisiones.py), para que no se pierda, y queda en el registro de actividad."""
     _, ahora, _ = reloj()
     existentes = {f['transaccion_id'] for f in filas(   # un comercio solo puede opinar de sus pagos
         'SELECT transaccion_id FROM transacciones_enriquecidas WHERE transaccion_id IN {ids:Array(UInt32)} '
@@ -481,14 +486,15 @@ def revisar(r: Revision):
     faltan = set(r.transaccion_ids) - existentes
     if faltan:
         raise HTTPException(404, f'No existen estas transacciones (o no son de este comercio): {sorted(faltan)[:10]}')
+    from web import revisiones
+    email = sesiones.usuario_de(request)['email']
     try:
-        cliente().insert('revision_web',
-                         [[t, r.veredicto, r.comentario.strip(), r.usuario.strip(), r.comercio, ahora]
-                          for t in r.transaccion_ids],
-                         column_names=['transaccion_id', 'veredicto', 'comentario', 'usuario', 'comercio',
-                                       'fecha_revision'])
+        revisiones.guardar(_almacen, cliente(), [[t, r.veredicto, r.comentario.strip(), r.usuario.strip(), r.comercio,
+                                                 ahora] for t in r.transaccion_ids], email)
     except Exception as e:
         raise HTTPException(503, f'No se ha podido guardar la revisión: {str(e)[:200]}')
+    _almacen.registrar(email, 'revision', f'{r.veredicto}: {len(r.transaccion_ids)} pago(s) '
+                                          f'{", ".join(map(str, r.transaccion_ids[:10]))}')
     _probabilidades.clear()
     return {'guardadas': len(r.transaccion_ids), 'veredicto': r.veredicto}
 
@@ -580,27 +586,28 @@ def transacciones(comercio: int = Comercio, q: str = Query('', max_length=60), l
 
 # ----------------------------------------------------------------------------------- avisos
 @app.get('/api/avisos')
-def avisos(comercio: int = Comercio, limite: int = Query(30, ge=1, le=500), solo_no_leidos: bool = False):
+def avisos(request: Request, comercio: int = Comercio, limite: int = Query(30, ge=1, le=500),
+           solo_no_leidos: bool = False):
     """Avisos de casos graves (los crea generar_avisos.py tras cada scoring).
 
-    Los de hace más de una semana se dan por archivados: cuentan como leídos."""
+    Leído o no es de cada persona (lo que marcó, en la base de cuentas). Los de hace más de una semana se dan
+    por archivados: cuentan como leídos."""
     hoy, ahora, _ = reloj()
-    leido = "(l.leido = 1 OR av.fecha < {ahora:DateTime} - INTERVAL 7 DAY)"
+    leidos = sorted(int(i) for i in _almacen.avisos_leidos(sesiones.usuario_de(request)['email']))
+    leido = "(has({leidos:Array(UInt64)}, av.aviso_id) OR av.fecha < {ahora:DateTime} - INTERVAL 7 DAY)"
     condicion = '({comercio:UInt32} = 0 OR has(av.comercios, {comercio:UInt32}))'
     base = f'''
         FROM aviso AS av FINAL
-        LEFT JOIN (SELECT DISTINCT aviso_id, 1 AS leido FROM aviso_leido WHERE comercio = {{comercio:UInt32}}) AS l
-               ON l.aviso_id = av.aviso_id
         WHERE {condicion}'''
     no_leidos = filas(f'SELECT count() AS n, countIf(av.nivel = \'critico\') AS criticos {base} AND NOT {leido}',
-                      comercio=comercio, ahora=ahora)[0]
+                      comercio=comercio, ahora=ahora, leidos=leidos)[0]
     lista = filas(f'''
         SELECT toString(av.aviso_id) AS aviso_id, av.fecha AS fecha, av.dia AS dia, av.metodo_id AS metodo_id,
                av.nivel AS nivel, av.transacciones AS transacciones, av.importe AS importe, av.mensaje AS mensaje,
                {leido} AS leido
         {base} {'AND NOT ' + leido if solo_no_leidos else ''}
         ORDER BY av.fecha DESC, av.nivel = 'critico' DESC, av.importe DESC
-        LIMIT {{limite:UInt32}}''', comercio=comercio, limite=limite, ahora=ahora)
+        LIMIT {{limite:UInt32}}''', comercio=comercio, limite=limite, ahora=ahora, leidos=leidos)
     if comercio and lista:
         lista = solo_lo_suyo(lista, comercio)
     # hoy: la página lo compara en cada comprobación para saber si el pipeline ha puntuado un día nuevo
@@ -635,7 +642,8 @@ class Leidos(BaseModel):
 
 
 @app.post('/api/avisos/leidos')
-def marcar_leidos(l: Leidos):
+def marcar_leidos(l: Leidos, request: Request):
+    """Marca avisos como leídos para quien lo pide (cada analista y cada comercio, los suyos)."""
     reloj()
     if l.todos:
         ids = [int(f['id']) for f in filas(
@@ -646,7 +654,7 @@ def marcar_leidos(l: Leidos):
         except ValueError:
             raise HTTPException(422, 'aviso_ids tienen que ser números')
     if ids:
-        cliente().insert('aviso_leido', [[i, l.comercio] for i in ids], column_names=['aviso_id', 'comercio'])
+        _almacen.marcar_leidos(sesiones.usuario_de(request)['email'], ids)
     return {'marcados': len(ids)}
 
 

@@ -180,9 +180,12 @@ def _calcular():
     ruta = RESULTADOS / 'feedback_semanal.csv'
     if ruta.exists():
         sem = pd.read_csv(ruta)
+        # "precision_detector" es la media de los detectores; "precision_kmeans" es el nombre
+        # que usaban las ejecuciones anteriores al ensemble (se sigue leyendo su CSV).
+        columna = 'precision_detector' if 'precision_detector' in sem else 'precision_kmeans'
         semanas = [{'semana': int(s['semana']), 'desde': s['desde'], 'completa': int(s['dias']) == 7,
                     'aprendiendo': round(float(s['precision']) * 100, 1),
-                    'sin_aprender': round(float(s['precision_kmeans']) * 100, 1)}
+                    'sin_aprender': round(float(s[columna]) * 100, 1)}
                    for _, s in sem.iterrows()]
 
     return {

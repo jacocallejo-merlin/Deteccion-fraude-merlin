@@ -183,6 +183,39 @@ class Almacen:
             self.bd.ejecutar(f'DELETE FROM {tabla} WHERE email LIKE ?', [patron])
         self._cache.clear()
 
+    # ------------------------------------------------------------------ registro de actividad
+    def registrar(self, email, accion, detalle=''):
+        """Apunta quién hizo qué. Nunca hace fallar lo que se estaba haciendo: si no se puede, se avisa y sigue."""
+        try:
+            self.bd.ejecutar('INSERT INTO registro (ts, email, accion, detalle) VALUES (?, ?, ?, ?)',
+                             [ahora(), (email or '').strip().lower(), accion, str(detalle)[:500]])
+        except Exception as e:
+            print(f'Registro de actividad: no se ha podido apuntar {accion} de {email} ({str(e)[:120]})')
+
+    def actividad(self, limite=200, email=None):
+        """Lo último que ha pasado (lo más reciente primero), de todos o de una persona."""
+        if email:
+            return self.bd.filas('SELECT ts, email, accion, detalle FROM registro WHERE email = ? '
+                                 'ORDER BY ts DESC LIMIT ?', [email.strip().lower(), int(limite)])
+        return self.bd.filas('SELECT ts, email, accion, detalle FROM registro ORDER BY ts DESC LIMIT ?', [int(limite)])
+
+    # ------------------------------------------------------------------ avisos leídos (de cada persona)
+    def avisos_leidos(self, email):
+        return {f['aviso_id'] for f in self.bd.filas('SELECT aviso_id FROM avisos_leidos WHERE email = ?', [email])}
+
+    def marcar_leidos(self, email, aviso_ids):
+        for aviso_id in aviso_ids:
+            self.bd.guardar('avisos_leidos', {'email': email, 'aviso_id': str(aviso_id), 'leido': ahora()},
+                            ['email', 'aviso_id'])
+
+    # ------------------------------------------------------------------ revisiones de la web (web/revisiones.py)
+    def guardar_revision(self, fila):
+        self.bd.guardar('revisiones', fila, ['transaccion_id', 'fecha_real'])
+
+    def revisiones(self):
+        return self.bd.filas('SELECT transaccion_id, veredicto, comentario, usuario, email, comercio, fecha_revision, '
+                             'fecha_real, datos FROM revisiones ORDER BY fecha_real')
+
     # ------------------------------------------------------------------ Mis avisos (web/ajustes.py)
     def ajustes(self, email):
         return {f['clave']: f['valor'] for f in self.bd.filas(
@@ -426,10 +459,13 @@ def crear_router(almacen, nombre_comercio=lambda comercio_id: None):
         except Exception as e:
             raise HTTPException(503, f'No se puede comprobar la cuenta: ¿está ClickHouse levantado? ({str(e)[:120]})')
         if u is None or not comprobar(a.contrasena, u['sal'], u['hash']):
+            almacen().registrar(a.email, 'entrar_fallido', 'correo o contraseña incorrectos')
             time.sleep(0.5)                          # frena a quien prueba contraseñas
             raise HTTPException(401, 'Correo o contraseña incorrectos')
         if not u['activo']:                      # solo se dice si la contraseña es la buena
+            almacen().registrar(u['email'], 'entrar_fallido', 'cuenta desactivada')
             raise HTTPException(403, 'Esta cuenta está desactivada. Contacta con el administrador de tu entidad.')
+        almacen().registrar(u['email'], 'entrar', 'mantener la sesión' if a.recordar else '')
         return con_sesion(JSONResponse({'nombre': u['nombre'], 'rol': u['rol'],
                                         'cambiar_contrasena': bool(u['cambiar_contrasena'])}),
                           request, almacen(), u['email'], a.recordar)
@@ -438,7 +474,10 @@ def crear_router(almacen, nombre_comercio=lambda comercio_id: None):
     def salir(request: Request):
         token = request.cookies.get(COOKIE)
         if token:
+            u = almacen().de_token(token)
             almacen().cerrar_sesion(token)
+            if u:
+                almacen().registrar(u['email'], 'salir')
         r = JSONResponse({'ok': True})
         r.delete_cookie(COOKIE, path='/')
         return r
@@ -463,6 +502,7 @@ def crear_router(almacen, nombre_comercio=lambda comercio_id: None):
         cambios = {k: v.strip() for k, v in p.model_dump().items() if v is not None}
         if cambios:
             almacen().cambiar_datos(usuario_de(request)['email'], **cambios)
+            almacen().registrar(usuario_de(request)['email'], 'cambiar_perfil', ', '.join(cambios))
         return perfil(request)
 
     @router.post('/api/perfil/contrasena')
@@ -477,12 +517,17 @@ def crear_router(almacen, nombre_comercio=lambda comercio_id: None):
         contrasena_valida(c.nueva)
         if c.nueva == c.actual:
             raise HTTPException(422, 'La contraseña nueva tiene que ser distinta de la actual')
+        provisional = bool(f['cambiar_contrasena'])
         almacen().cambiar_contrasena(email, c.nueva)
+        almacen().registrar(email, 'cambiar_contrasena', 'la provisional' if provisional else '')
         return {'cerradas': almacen().cerrar_otras(email, request.cookies.get(COOKIE))}
 
     @router.post('/api/perfil/cerrar-otras')
     def cerrar_otras(request: Request):
         """Cerrar la sesión en todos los demás equipos (por ejemplo, si se dejó abierta en otro ordenador)."""
-        return {'cerradas': almacen().cerrar_otras(usuario_de(request)['email'], request.cookies.get(COOKIE))}
+        email = usuario_de(request)['email']
+        cerradas = almacen().cerrar_otras(email, request.cookies.get(COOKIE))
+        almacen().registrar(email, 'cerrar_otras_sesiones', f'{cerradas} sesiones')
+        return {'cerradas': cerradas}
 
     return router

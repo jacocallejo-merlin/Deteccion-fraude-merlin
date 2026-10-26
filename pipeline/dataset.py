@@ -145,7 +145,7 @@ def generar_patrones(fab):
         ("Pico de gasto anómalo", "Cantidad muy por encima de la media histórica del cliente",
          "z_importe_cliente > 3 y importe >= 4 veces su importe habitual"),
         ("Card testing", "Ráfaga de importes muy bajos en poco tiempo con el mismo método de pago",
-         ">= 2 pagos previos de la tarjeta en 10 min e importe < 5 €"),
+         "importe < 5 € y (dispositivo nuevo, proxy/VPN o >= 4 pagos previos de la tarjeta en 10 min)"),
         ("Estructuración (smurfing)", "Varios pagos repetidos justo por debajo de un umbral redondo",
          "importe entre 850 € y 999 € y >= 1 pago previo de la tarjeta en ese rango en 24 h"),
         ("Account takeover", "Intentos de login fallidos, cambio de dato y compra en la misma sesión",
@@ -160,6 +160,9 @@ def generar_patrones(fab):
          ">= 4 eventos en la sesión y <= 3 s entre eventos"),
         ("Bust-out", "Historial de compras pequeñas seguido de un cargo cercano al límite",
          "importe >= 85 % del límite de crédito"),
+        # el 10, igual que en reglas_alerta.PATRONES_NUEVOS (que lo da de alta en bases de datos ya creadas)
+        ("Cash-out multicomercio", "Vaciar la tarjeta comprando en muchas tiendas en poco tiempo",
+         ">= 3 comercios distintos del cliente en 3 h e importe >= 1,5 veces su habitual"),
     ]
 
     for nombre, descripcion, condicion in patrones:

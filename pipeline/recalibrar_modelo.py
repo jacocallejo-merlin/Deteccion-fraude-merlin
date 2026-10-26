@@ -1,14 +1,20 @@
 """
 Recalibra el orden de las alertas con lo que ya se sabe que es fraude (Hito 6, human-in-the-loop).
 
-El detector elegido (KMeans) no usa etiquetas: marca lo raro, no lo que es fraude. Cada semana se
-entrena encima un clasificador (HistGradientBoosting) con las etiquetas conocidas hasta ese momento
-(tabla etiquetas_conocidas, ver integrar_feedback.py): contracargos confirmados por el banco y
-veredictos de los analistas. Entra el score del detector y las mismas variables que los modelos.
-Las transacciones revisadas por un analista pesan más (feedback.peso_revisadas): son justo las que
-el detector pone arriba, así que enseñan qué alertas fueron falsas alarmas.
+Los detectores (feedback.detectores: KMeans y autoencoder por defecto) no usan etiquetas: marcan lo
+raro, no lo que es fraude. Cada semana se entrena encima un clasificador (HistGradientBoosting) con
+las etiquetas conocidas hasta ese momento (tabla etiquetas_conocidas, ver integrar_feedback.py):
+contracargos confirmados por el banco y veredictos de los analistas. Entran los percentiles de todos
+los detectores y las mismas variables que los modelos: así el clasificador aprende a qué detector
+hacer más caso para cada tipo de pago, en vez de obligar a elegir uno solo. Las transacciones
+revisadas por un analista pesan más (feedback.peso_revisadas): son justo las que los detectores ponen
+arriba, así que enseñan qué alertas fueron falsas alarmas.
 
-Solo se recalibra si toca (cada feedback.reentrenar_cada_dias, o si el detector se ha reentrenado).
+Para añadir otro detector (por ejemplo, el que esté probando un compañero), basta con incluirlo en
+feedback.detectores si deja <nombre>.joblib y <nombre>_referencia.joblib y modelos_nosupervisados.puntuar
+sabe puntuarlo. El autoencoder se puntúa con sus propios artefactos.
+
+Solo se recalibra si toca (cada feedback.reentrenar_cada_dias, o si algún detector se ha reentrenado).
 --forzar recalibra siempre. Guarda modelos/recalibrador.joblib y una copia en historico/.
 """
 import argparse
@@ -32,7 +38,12 @@ from preparacion_datos_ml import DIAS_CALENTAMIENTO, preparar_features
 from modelos_nosupervisados import percentil, puntuar
 
 _cfg = CONFIG['feedback']
-MODELO_BASE = _cfg['modelo_base']
+MODELO_BASE = _cfg.get('modelo_base', 'kmeans')
+# Varios detectores a la vez: el recalibrador aprende a ponderarlos. Si no se configura la lista,
+# se mantiene el comportamiento antiguo (un único modelo_base).
+DETECTORES = list(dict.fromkeys(_cfg.get('detectores') or [MODELO_BASE]))
+COLUMNAS_DETECTORES = [f'pct_{nombre}' for nombre in DETECTORES]
+NOMBRE_SIN_RECALIBRAR = DETECTORES[0] if len(DETECTORES) == 1 else '+'.join(DETECTORES)
 REENTRENAR_CADA = timedelta(days=_cfg['reentrenar_cada_dias'])
 PESO_REVISADAS = _cfg['peso_revisadas']
 # Parámetros del HistGradientBoosting (feedback.modelo en config.yaml); por defecto, los originales
@@ -55,18 +66,37 @@ def uno(client, sql, **parametros):
     return client.query(sql, parameters=parametros).result_rows[0][0]
 
 
-def run_id_base():
-    """run_id del entrenamiento del detector: si cambia, el recalibrador ya no vale."""
-    with open(CARPETA_MODELOS / 'resumen_entrenamiento.json', encoding='utf-8') as fh:
-        return json.load(fh)[MODELO_BASE]['run_id']
+def run_id_detector(nombre):
+    """run_id del entrenamiento de un detector: si cambia, el recalibrador ya no vale.
+    Los clásicos lo guardan en resumen_entrenamiento.json y el autoencoder (y cualquier modelo que
+    siga esa convención) en <nombre>_resumen.json."""
+    propio = CARPETA_MODELOS / f'{nombre}_resumen.json'
+    if propio.exists():
+        with open(propio, encoding='utf-8') as fh:
+            datos = json.load(fh)
+        if datos.get('run_id'):
+            return datos['run_id']
+    ruta = CARPETA_MODELOS / 'resumen_entrenamiento.json'
+    if ruta.exists():
+        with open(ruta, encoding='utf-8') as fh:
+            datos = json.load(fh)
+        if nombre in datos and datos[nombre].get('run_id'):
+            return datos[nombre]['run_id']
+    raise SystemExit(f'Falta el run_id de "{nombre}": entrena ese detector antes de recalibrar '
+                     f'(se busca modelos/{nombre}_resumen.json o su entrada en resumen_entrenamiento.json)')
+
+
+def run_ids_base():
+    """run_id de todos los detectores: si cambia alguno, el recalibrador ya no vale."""
+    return {nombre: run_id_detector(nombre) for nombre in DETECTORES}
 
 
 def reloj(client):
-    """'Ahora' de la simulación: el final del último día puntuado por el detector."""
+    """'Ahora' de la simulación: el final del último día puntuado por el primer detector."""
     ultimo = uno(client, '''
         SELECT max(toDate(timestamp)) FROM features_transaccion
         WHERE transaccion_id IN (SELECT transaccion_id FROM anomaly_scores WHERE model = {m:String})
-    ''', m=MODELO_BASE)
+    ''', m=DETECTORES[0])
     return datetime.combine(ultimo + timedelta(days=1), datetime.min.time())
 
 
@@ -99,24 +129,54 @@ def variables_quitadas_en(corte):
     return VARIABLES_QUITADAS if corte >= fecha_decision() else []
 
 
+def cargar_referencia(nombre):
+    return joblib.load(CARPETA_MODELOS / f'{nombre}_referencia.joblib')
+
+
+def puntuar_detector(nombre, X):
+    """Score de un detector para la matriz X ya preparada y escalada.
+    Los clásicos usan modelos_nosupervisados.puntuar; el autoencoder, su red y su error de
+    reconstrucción. Se importa torch solo si hace falta, para que el resto siga funcionando sin él."""
+    if nombre == 'autoencoder':
+        import torch
+        from entrenar_autoencoder import Autoencoder, error_reconstruccion
+        guardado = torch.load(CARPETA_MODELOS / 'autoencoder.pt', weights_only=False)
+        detector = Autoencoder(guardado['n_entrada'], guardado['capas'], guardado['cuello'],
+                               activacion=guardado.get('activacion', 'tanh'),
+                               dropout=guardado.get('dropout', 0.0),
+                               batchnorm=guardado.get('batchnorm', False))
+        detector.load_state_dict(guardado['estado'])
+        detector.eval()
+        return error_reconstruccion(detector, X[guardado['columnas']])
+    detector = joblib.load(CARPETA_MODELOS / f'{nombre}.joblib')
+    s, _ = puntuar(nombre, detector, X.to_numpy())
+    return s
+
+
 def matriz(df, extra=None, quitar=()):
-    """Variables de los modelos + percentil del detector (0-1, 1 = más raro que todo el ajuste)
+    """Variables de los modelos + percentil de cada detector (0-1, 1 = más raro que todo el ajuste)
     + las variables extra (por defecto las de feedback.variables_extra) - las de quitar."""
     escalador = joblib.load(CARPETA_DATOS / 'escalador.joblib')
-    detector = joblib.load(CARPETA_MODELOS / f'{MODELO_BASE}.joblib')
-    referencia = joblib.load(CARPETA_MODELOS / f'{MODELO_BASE}_referencia.joblib')
     with contextlib.redirect_stdout(io.StringIO()):     # sus mensajes se repetirían cada día
         X, info = preparar_features(df, escalador)
-    s, _ = puntuar(MODELO_BASE, detector, X.to_numpy())
-    X[f'pct_{MODELO_BASE}'] = percentil(s, referencia)
+    for nombre in DETECTORES:
+        X[f'pct_{nombre}'] = percentil(puntuar_detector(nombre, X), cargar_referencia(nombre))
     for variable in VARIABLES_EXTRA if extra is None else extra:
         X[variable] = df[variable].to_numpy(dtype=float)
     return X.drop(columns=list(quitar)), info
 
 
+def score_sin_recalibrar(X):
+    """Score de respaldo cuando todavía no hay recalibrador: media de los percentiles de los
+    detectores. Con uno solo es exactamente su percentil, como antes."""
+    columnas = [c for c in COLUMNAS_DETECTORES if c in X.columns]
+    return X[columnas].mean(axis=1).to_numpy()
+
+
 def cargar_recalibrador():
-    """El recalibrador guardado, o None si no hay, es de un detector anterior o usa otras
-    variables que las de config.yaml (entonces toca recalibrar)."""
+    """El recalibrador guardado, o None si no hay, es de otro detector o usa otras variables que
+    las de config.yaml (entonces toca recalibrar). Los recalibradores antiguos (un solo detector y
+    run_id_base escalar) siguen valiendo mientras la lista de detectores sea la misma."""
     if not RUTA_RECALIBRADOR.exists():
         return None
     try:
@@ -124,7 +184,11 @@ def cargar_recalibrador():
     except Exception as e:   # p. ej. guardado con otra versión de scikit-learn: no se puede usar, se rehace
         print(f'No se puede leer {RUTA_RECALIBRADOR.name} ({type(e).__name__}: {e}): se recalibra de nuevo')
         return None
-    if (recal['run_id_base'] != run_id_base()
+    if 'detectores' in recal:
+        obsoleto = recal['detectores'] != DETECTORES or recal.get('run_ids_base') != run_ids_base()
+    else:
+        obsoleto = DETECTORES != [MODELO_BASE] or recal['run_id_base'] != run_id_detector(MODELO_BASE)
+    if (obsoleto
             or recal.get('variables_extra', []) != variables_extra_en(recal['corte'])
             or recal.get('variables_quitadas', []) != variables_quitadas_en(recal['corte'])):
         return None
@@ -132,13 +196,15 @@ def cargar_recalibrador():
 
 
 def puntuar_alertas(df):
-    """Score con el que se ordenan las alertas: el recalibrador si lo hay, si no el detector.
-    Devuelve (score, nombre del modelo usado, info)."""
+    """Score con el que se ordenan las alertas: el recalibrador si lo hay, si no la media de los
+    percentiles de los detectores. Devuelve (score, nombre del modelo usado, info)."""
     recal = cargar_recalibrador()
     X, info = matriz(df, extra=recal['variables_extra'] if recal else [],
                      quitar=recal['variables_quitadas'] if recal else [])
+    # Lo que ven los detectores solos (sin recalibrar): lo usa el presupuesto de exploración de la cola
+    info = info.assign(score_detectores=score_sin_recalibrar(X))
     if recal is None:
-        return X[f'pct_{MODELO_BASE}'].to_numpy(), MODELO_BASE, info
+        return score_sin_recalibrar(X), NOMBRE_SIN_RECALIBRAR, info
     return recal['modelo'].predict_proba(X)[:, 1], f'recalibrado_{recal["corte"]:%Y%m%d}', info
 
 
@@ -179,10 +245,13 @@ def recalibrar(client, corte):
                                 'FROM etiquetas_conocidas')
     X, y, revisada = datos_entrenamiento(client, corte, etiquetas)
     if y.sum() == 0:
-        print(f'Recalibración {corte:%Y-%m-%d}: todavía no hay fraudes conocidos, se sigue con {MODELO_BASE}')
+        print(f'Recalibración {corte:%Y-%m-%d}: todavía no hay fraudes conocidos, se sigue con '
+              f'{NOMBRE_SIN_RECALIBRAR}')
         return None
     modelo = entrenar(X, y, np.where(revisada, PESO_REVISADAS, 1.0))
-    recal = {'modelo': modelo, 'corte': corte, 'run_id_base': run_id_base(),
+    ids_base = run_ids_base()
+    recal = {'modelo': modelo, 'corte': corte, 'detectores': DETECTORES,
+             'run_ids_base': ids_base, 'run_id_base': ids_base.get(MODELO_BASE),
              'variables': list(X.columns), 'variables_extra': variables_extra_en(corte),
              'variables_quitadas': variables_quitadas_en(corte), 'filas': len(X),
              'fraudes_conocidos': int(y.sum()), 'revisadas': int(revisada.sum())}
@@ -194,7 +263,7 @@ def recalibrar(client, corte):
     guardar(RUTA_RECALIBRADOR, run_id)
     print(f'Recalibración con datos hasta {corte:%Y-%m-%d}: {len(X):,} transacciones, '
           f'{int(y.sum())} fraudes conocidos, {int(revisada.sum())} revisadas por analistas '
-          f'(peso {PESO_REVISADAS}) -> {RUTA_RECALIBRADOR.name}')
+          f'(peso {PESO_REVISADAS}), detectores {", ".join(DETECTORES)} -> {RUTA_RECALIBRADOR.name}')
     return recal
 
 
@@ -210,7 +279,7 @@ def main():
         recalibrar(client, corte)
     else:
         recal = cargar_recalibrador()
-        desde = f'el recalibrado del {recal["corte"]:%Y-%m-%d}' if recal else MODELO_BASE
+        desde = f'el recalibrado del {recal["corte"]:%Y-%m-%d}' if recal else NOMBRE_SIN_RECALIBRAR
         print(f'No toca recalibrar a {corte:%Y-%m-%d} (cada {REENTRENAR_CADA.days} días): se sigue con {desde}')
 
 

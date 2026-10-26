@@ -39,8 +39,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import CARPETA_RESULTADOS, CONFIG
 from integrar_feedback import etiquetas_conocidas_a
 from preparacion_datos_ml import DIAS_CALENTAMIENTO
-from recalibrar_modelo import (MODELO_BASE, PESO_REVISADAS, conectar, entrenar, fecha_decision, inicio_test,
-                               matriz)
+from recalibrar_modelo import (COLUMNAS_DETECTORES, PESO_REVISADAS, conectar, entrenar, fecha_decision,
+                               inicio_test, matriz)
 from reglas_alerta import PLANTILLAS, UMBRALES, UMBRALES_INICIALES
 
 _cfg = CONFIG['ajuste']
@@ -53,7 +53,6 @@ CANDIDATAS = _cfg['variables_candidatas']
 CONFIANZA_MINIMA = _cfg['confianza_minima']
 N_REMUESTREOS = 200
 PRESUPUESTO = CONFIG['feedback']['presupuesto']
-COLUMNA_BASE = f'pct_{MODELO_BASE}'
 SEMILLA = CONFIG['semilla']
 
 # Valores que se prueban de cada umbral (los iniciales se añaden siempre)
@@ -61,6 +60,7 @@ REJILLAS = {
     'pico_gasto':         {'z_minimo': [2, 2.5, 3, 3.5, 4, 5], 'ratio_minimo': [2, 3, 4, 5, 6, 8],
                            'z_madrugada_minimo': [2, 2.5, 3], 'ratio_madrugada_minimo': [3, 4, 5]},
     'card_testing':       {'pagos_10min_minimo': [1, 2, 3, 4, 5], 'importe_maximo': [2, 5, 10, 20]},
+    'cash_out_multicomercio': {'comercios_minimo': [2, 3, 4], 'ratio_minimo': [1, 1.5, 2, 3]},
     'smurfing':           {'importe_minimo': [700, 800, 850, 900, 950], 'previos_24h_minimo': [1, 2, 3],
                            'ratio_minimo': [5, 10, 15, 20]},
     'account_takeover':   {'intentos_login_minimo': [2, 3, 4, 5, 6]},
@@ -183,8 +183,10 @@ def ajustar_umbral_cola(client, decision):
     conocidos en la fecha de decisión (solo alertas ordenadas por el recalibrado)."""
     fb = client.query_df('''
         SELECT puntuacion, veredicto FROM feedback_analistas
-        WHERE fecha_alerta < {dia:Date} AND fecha_revision <= {corte:DateTime} AND modelo != {m:String}
-    ''', parameters={'dia': decision.date(), 'corte': decision, 'm': MODELO_BASE})
+        WHERE fecha_alerta < {dia:Date} AND fecha_revision <= {corte:DateTime}
+          AND startsWith(modelo, 'recalibrado_')
+          AND NOT endsWith(modelo, '_exploracion')   -- las de exploración entran con puntuación baja a propósito
+    ''', parameters={'dia': decision.date(), 'corte': decision})
     if fb.empty:
         return 0.0, None, 'no hay veredictos de alertas recalibradas antes de la fecha de decisión'
     fraude = (fb['veredicto'] == 'fraude').to_numpy()
@@ -251,7 +253,7 @@ def ajustar_variables(client, X, info, decision):
     imp = permutation_importance(modelo, X.loc[val, base], y[val], scoring='average_precision',
                                  n_repeats=5, random_state=SEMILLA)
     importancia = pd.Series(imp.importances_mean, index=base).sort_values(ascending=False)
-    sin_aporte = [c for c in importancia.index[importancia <= 0] if c != COLUMNA_BASE]
+    sin_aporte = [c for c in importancia.index[importancia <= 0] if c not in COLUMNAS_DETECTORES]
     ap_sin, _, s_sin = pr_auc([c for c in base if c not in sin_aporte]) if sin_aporte else (ap_base, None, s_base)
     # Con pocas decenas de fraudes, +0,02 de PR-AUC puede ser suerte: solo se quitan si la mejora se
     # mantiene al remuestrear la validación
