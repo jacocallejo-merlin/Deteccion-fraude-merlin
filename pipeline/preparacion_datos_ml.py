@@ -179,6 +179,24 @@ def guardar(X_train, X_test, info_train, info_test, escalador):
     print(f'\nGuardado en la carpeta "{CARPETA_SALIDA}/": X_train, X_test, info_train, info_test y escalador')
 
 
+def guardar_extra_comercios(df):
+    """Guarda n_comercios_cliente_3h para el modelo supervisado HGB + GMM.
+
+    Es una variable de features_transaccion que no entra en las 36 variables de los modelos
+    no supervisados. Se guarda por transaccion_id para alinearla con X_train/X_test sin
+    volver a consultar ClickHouse.
+    """
+    columnas = ['transaccion_id', 'n_comercios_cliente_3h']
+    faltan = [c for c in columnas if c not in df.columns]
+    if faltan:
+        raise ValueError(f'Faltan columnas para el modelo supervisado: {faltan}')
+    os.makedirs(CARPETA_SALIDA, exist_ok=True)
+    extra = df[columnas].drop_duplicates('transaccion_id').reset_index(drop=True)
+    extra.to_parquet(os.path.join(CARPETA_SALIDA, 'extra_comercios.parquet'))
+    print(f'Guardado en la carpeta "{CARPETA_SALIDA}/": extra_comercios.parquet '
+          f'({len(extra):,} transacciones)')
+
+
 DIAS_CALENTAMIENTO = CONFIG['preparacion']['dias_calentamiento']
 
 def quitar_calentamiento(df):
@@ -192,6 +210,7 @@ def quitar_calentamiento(df):
 def main():
     df = cargar_datos()
     df = quitar_calentamiento(df)
+    guardar_extra_comercios(df)
     X, info = seleccionar_variables(df)
     X = transformar(X)
     X_train, X_test, info_train, info_test = dividir(X, info)

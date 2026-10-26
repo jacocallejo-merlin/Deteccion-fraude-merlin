@@ -139,7 +139,7 @@ def main():
     tabla['IC95_inf'] = inf
     tabla['IC95_sup'] = sup
     
-    tabla.insert(1, 'ganador', np.where(tabla['detector'] == mejor, '★', ''))
+    tabla.insert(1, 'ganador', np.where(tabla['detector'] == mejor, '<--', ''))
     
     seccion('COMPARATIVA FINAL  (elegido por PR-AUC de validación, medido en test)')
     cols = ['detector', 'ganador', 'PR-AUC_val', 'PR-AUC', 'IC95_inf', 'IC95_sup', 'ROC-AUC']

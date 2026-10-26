@@ -2,12 +2,13 @@ import argparse
 import subprocess
 import sys
 import time
+from datetime import date, timedelta
 from pathlib import Path
 
 CARPETA = Path(__file__).resolve().parent
 sys.path.insert(0, str(CARPETA))
 
-from config import DATABASE, HOST, PASSWORD, PORT, USER  
+from config import CONFIG, DATABASE, HOST, PASSWORD, PORT, USER  
 
 PASOS = [
     ('pipeline/crear_tablas.py',                      'Crea la base de datos y las tablas vacías'),
@@ -111,6 +112,37 @@ def dias_del_scoring(cliente):
     return max(0, (ultima.date() - FECHA_FIN.date()).days + 1)
 
 
+def comprobar_vigencia_datos(cliente):
+    """Avisa si la base se generó con otro `dataset.fecha_fin`.
+
+    El pipeline reutiliza la base y salta dataset.py, así que una base antigua puede acabar
+    mucho antes de `ajuste.fecha_decision`. Sin este aviso el fallo aparece tarde, en
+    ajustar_umbrales.py, con un error que no explica la causa.
+    """
+    if not cliente.command(f'EXISTS TABLE {DATABASE}.transaccion'):
+        return
+    ultimo = cliente.command(f'SELECT max(toDate(timestamp)) FROM {DATABASE}.transaccion')
+    if not ultimo:
+        return
+    if isinstance(ultimo, str):
+        ultimo = date.fromisoformat(ultimo[:10])
+    elif not isinstance(ultimo, date):
+        ultimo = ultimo.date()
+    fin = date.fromisoformat(str(CONFIG['dataset']['fecha_fin']))
+    esperado = fin - timedelta(days=1)      # dataset.fecha_fin es exclusivo
+    if ultimo < esperado:
+        decision = CONFIG['ajuste'].get('fecha_decision')
+        sys.exit(
+            f'La base de datos acaba el {ultimo:%d/%m/%Y}, pero config.yaml pide datos hasta el '
+            f'{esperado:%d/%m/%Y}.\n'
+            'Se generó con otro dataset.fecha_fin y, si se reutiliza, los pasos de feedback y ajuste '
+            'no tendrán datos hasta la fecha de decisión'
+            + (f' ({decision}).\n' if decision else '.\n')
+            + 'Regenera la base con:  python main.py --desde-cero\n'
+            'O ajusta dataset.fecha_fin y ajuste.fecha_decision a las fechas de esta base.'
+        )
+
+
 def preparar_base_de_datos(borrar):
     """Comprueba la conexión y, si borrar=True (--desde-cero), borra la base de datos.
     Devuelve True si quedan transacciones cargadas."""
@@ -189,6 +221,9 @@ def main():
         if dias_reconstruir:
             print(f'El scoring diario había añadido {dias_reconstruir} día/s: se reconstruyen tras el dataset.')
     hay_datos = preparar_base_de_datos(args.desde_cero)
+    if hay_datos and not args.scoring:
+        # Si no se regenera, la base tiene que cubrir el dataset que pide config.yaml.
+        comprobar_vigencia_datos(conectar())
     pasos = elegir_pasos(args, hay_datos, dias_reconstruir)
 
     print('=' * 78)

@@ -135,6 +135,29 @@ autoencoder:
   eval_cada: 1                 # cada cuántas épocas se mide la PR-AUC de validación
   semillas_estabilidad: [1, 2] # semillas EXTRA para comprobar estabilidad (~15 s cada una; [] = no)
 
+# entrenar_modelo_supervisado.py (HGB + GMM). Se ejecuta a mano: NO está en main.py.
+# Usa las etiquetas de fraude confirmadas y una señal de rareza del GMM. La variable
+# n_comercios_cliente_3h se guarda en datos_ml/extra_comercios.parquet y NO entra en las
+# 36 variables de los modelos no supervisados.
+modelo_supervisado:
+  variables_extra: [n_comercios_cliente_3h]
+  gmm:
+    n_components: 6
+    covariance_type: tied
+    reg_covar: 0.003
+    max_iter: 500
+    n_init: 1
+  hgb:
+    learning_rate: 0.12
+    max_iter: 900
+    max_leaf_nodes: 7
+    min_samples_leaf: 10
+    l2_regularization: 10.0
+    max_features: 0.8
+    class_weight: null
+  semillas_estabilidad: [0, 1, 2, 3, 4] # semillas EXTRA (se suma la global) para comprobar estabilidad
+  combinaciones_probadas: 1    # búsqueda offline; aquí solo se entrena la configuración elegida
+
 # buscar_autoencoder.py (NO lo lanza main.py): combinaciones a probar en el futuro.
 # Usa epocas, batch, paciencia y seleccion de la sección "autoencoder". Con la parada por PR-AUC
 # cada combinación tarda ~15-30 s. Al terminar imprime la mejor para copiarla arriba.
