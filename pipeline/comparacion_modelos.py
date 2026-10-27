@@ -13,12 +13,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from config import CARPETA_MODELOS, CARPETA_RESULTADOS
 # Carga, métricas y bootstrap son las MISMAS funciones que usa la evaluación de los clásicos,
 # así los números de esta comparativa coinciden con los de resultados/comparativa_test.csv
-from evaluar_modelos_nosupervisados import (N_BOOTSTRAP, PRESUPUESTO_PCT, ap_bootstrap,
+from evaluar_modelos_nosupervisados import (N_BOOTSTRAP, PRESUPUESTO_PCT, SUPERVISADOS, ap_bootstrap,
                                             bootstrap_eleccion, cargar,
                                             evaluar_detector, recall_por_tipo)
 
-NOMBRES = {'iforest': 'Isolation Forest', 'kmeans': 'KMeans',
-           'ocsvm': 'One-Class SVM', 'dbscan': 'DBSCAN', 'autoencoder': 'Autoencoder'}
+NOMBRES = {'iforest': 'Isolation Forest', 'kmeans': 'KMeans', 'ocsvm': 'One-Class SVM', 'dbscan': 'DBSCAN',
+           'gmm': 'GMM', 'autoencoder': 'Autoencoder', 'hgb_gmm': 'HGB + GMM (supervisado)'}
 
 pd.set_option('display.width', 160)
 
@@ -53,11 +53,11 @@ def lineas_autoencoder(f, eleccion, mejor):
                  f"{ae['PR-AUC']:.3f} frente a {iso['PR-AUC']:.3f}; revisando el {PRESUPUESTO_PCT:g} % "
                  f"encuentra el {ae['pres_recall_%']:.0f} % del fraude frente al {iso['pres_recall_%']:.0f} %.")
 
-    otros = f.drop(index='autoencoder')
+    otros = f.drop(index=['autoencoder', *[s for s in SUPERVISADOS if s in f.index]])
     mejores = [NOMBRES.get(d, d) for d in otros.index if otros.loc[d, 'PR-AUC'] > ae['PR-AUC']]
     peores = [NOMBRES.get(d, d) for d in otros.index if otros.loc[d, 'PR-AUC'] <= ae['PR-AUC']]
     if not mejores:
-        L.append("- En test el Autoencoder es el que mejor PR-AUC obtiene de todos los modelos.")
+        L.append("- En test el Autoencoder es el que mejor PR-AUC obtiene de los modelos no supervisados.")
     else:
         L.append(f"- En test queda por debajo de {', '.join(mejores)}"
                  + (f" y por encima de {', '.join(peores)}." if peores else "."))
@@ -73,13 +73,12 @@ def lineas_autoencoder(f, eleccion, mejor):
     return L
 
 
-def generar_markdown(tabla, eleccion, por_tipo):
+def generar_markdown(tabla, eleccion, por_tipo, mejor):
     f = tabla.set_index('detector')
-    mejor = f.index[0]
-    
+
     L = ["# Comparativa Final (Deep Learning vs Clásicos)\n"]
     L.append(f"Tras entrenar la arquitectura de Autoencoder, se evaluó su rendimiento contra "
-             f"los baselines Isolation Forest, KMeans, One-Class SVM y DBSCAN.\n")
+             f"los baselines Isolation Forest, KMeans, One-Class SVM, DBSCAN y GMM.\n")
 
     L.append(f"- **El mejor modelo es `{mejor}`**: elegido por su PR-AUC en validación "
              f"({f.loc[mejor, 'PR-AUC_val']:.3f}) y medido en test ({f.loc[mejor, 'PR-AUC']:.3f}).")
@@ -91,7 +90,12 @@ def generar_markdown(tabla, eleccion, por_tipo):
         L.append("- Ojo: el Autoencoder es semi-supervisado (se entrena solo con transacciones "
                  "legítimas, así que usa la etiqueta para elegir sus datos de entrenamiento). "
                  "Los clásicos no usan etiquetas para entrenar: no es del todo igualdad de condiciones.")
-        
+    for s in [s for s in SUPERVISADOS if s in f.index]:
+        L.append(f"- {NOMBRES.get(s, s)} aprende con los fraudes confirmados al final del train: PR-AUC "
+                 f"{f.loc[s, 'PR-AUC']:.3f} en test y, al {PRESUPUESTO_PCT:g} %, el {f.loc[s, 'pres_recall_%']:.0f} % "
+                 f"del fraude. Sale en la tabla como referencia de lo que aportan las etiquetas, pero no compite: "
+                 f"el ganador se elige entre los no supervisados.")
+
     L.append("\n## Análisis Estadístico (Bootstrap en Validación)")
     empatan = eleccion.loc[eleccion['veredicto'] == 'empate', 'detector'].tolist()
     if empatan:
@@ -130,24 +134,27 @@ def main():
     filas = [evaluar_detector(n, d, datos) for n, d in detectores.items()]
     # Se ordena (y se elige) por VALIDACIÓN; el test solo mide
     tabla = pd.DataFrame(filas).sort_values('PR-AUC_val', ascending=False).reset_index(drop=True)
-    mejor = tabla.loc[0, 'detector']
-    
+    # El ganador, entre los que no ven etiquetas (los supervisados salen como referencia)
+    compiten = tabla[~tabla['detector'].isin(SUPERVISADOS)].reset_index(drop=True)
+    mejor = compiten.loc[0, 'detector']
+
     # Calcular IC95 de Test para todos
     aps = ap_bootstrap(datos['y_test'], [detectores[n]['test'] for n in tabla['detector']],
                             N_BOOTSTRAP, datos['grupo_test'])
     inf, sup = np.percentile(aps, [2.5, 97.5], axis=0)
     tabla['IC95_inf'] = inf
     tabla['IC95_sup'] = sup
-    
+
     tabla.insert(1, 'ganador', np.where(tabla['detector'] == mejor, '<--', ''))
-    
-    seccion('COMPARATIVA FINAL  (elegido por PR-AUC de validación, medido en test)')
-    cols = ['detector', 'ganador', 'PR-AUC_val', 'PR-AUC', 'IC95_inf', 'IC95_sup', 'ROC-AUC']
+    tabla.insert(2, 'tipo', np.where(tabla['detector'].isin(SUPERVISADOS), 'supervisado', 'no supervisado'))
+
+    seccion('COMPARATIVA FINAL  (elegido por PR-AUC de validación entre los no supervisados, medido en test)')
+    cols = ['detector', 'ganador', 'tipo', 'PR-AUC_val', 'PR-AUC', 'IC95_inf', 'IC95_sup', 'ROC-AUC']
     print(tabla[cols].round(3).to_string(index=False))
-    
+
     seccion('¿EL GANADOR GANA DE VERDAD?  (bootstrap pareado en validación)')
-    # Todos contra el ganador (la evaluación de los clásicos solo compara los 3 primeros)
-    eleccion = bootstrap_eleccion(tabla, detectores, datos, N_BOOTSTRAP, n_top=len(tabla))
+    # Todos los que compiten contra el ganador (la evaluación de los clásicos solo compara los 3 primeros)
+    eleccion = bootstrap_eleccion(compiten, detectores, datos, N_BOOTSTRAP, n_top=len(compiten))
     print(eleccion.round(4).to_string(index=False))
     
     seccion(f'RECALL % POR TIPO DE FRAUDE (presupuesto {PRESUPUESTO_PCT:g} %)')
@@ -157,7 +164,7 @@ def main():
 
     grafico_pr(detectores, datos, CARPETA_RESULTADOS)
     
-    lineas = generar_markdown(tabla, eleccion, por_tipo)
+    lineas = generar_markdown(tabla, eleccion, por_tipo, mejor)
     ruta_md = os.path.join(CARPETA_RESULTADOS, 'conclusiones_hito4.md')
     with open(ruta_md, 'w', encoding='utf-8') as fh:
         fh.write('\n'.join(lineas) + '\n')

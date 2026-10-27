@@ -17,17 +17,19 @@ const estado = { datos: null, vista: vistaInicial, modelo: new URLSearchParams(l
 // Una cifra que sale dos veces es una sola variable: todo lo que se repite en la pantalla se calcula aquí
 function derivar(d) {
   const elegido = d.modelos.find((m) => m.elegido) || d.modelos[0];
-  const empatados = d.modelos.filter((m) => m !== elegido && m.encontrados === elegido.encontrados);
+  // Los que compiten al elegir: los no supervisados. El supervisado (aprende de fraudes confirmados) es la referencia
+  const compiten = d.modelos.filter((m) => !m.supervisado);
+  const empatados = compiten.filter((m) => m !== elegido && m.encontrados === elegido.encontrados);
   const acierto = (m) => (m.encontrados / m.avisos) * 100;                 // de cada 100 avisos, cuántos son fraude
   const semanas = d.semanas.filter((s) => s.completa);
   const aprendiendo = semanas.filter((s) => s.semana >= 2);               // la semana 1 aún no ha aprendido nada
   const media = (k) => aprendiendo.reduce((t, s) => t + s[k], 0) / Math.max(1, aprendiendo.length);
   const mejora = aprendiendo.length ? Math.round((media('aprendiendo') / media('sin_aprender') - 1) * 100) : null;
   const versiones = d.proceso.versiones_clasicos + d.proceso.versiones_red;
-  const puestoValidacion = [...d.modelos].sort((a, b) => b.nota_validacion - a.nota_validacion).indexOf(elegido) + 1;
+  const puestoValidacion = [...compiten].sort((a, b) => b.nota_validacion - a.nota_validacion).indexOf(elegido) + 1;
   console.assert(d.modelos.every((m) => m.encontrados <= d.fraudes), 'ningún modelo encuentra más fraudes de los que hay');
   console.assert(versiones === d.proceso.versiones_clasicos + d.proceso.versiones_red, 'versiones = clásicas + red');
-  return { elegido, empatados, acierto, semanas, aprendiendo, mejora, versiones, puestoValidacion };
+  return { elegido, compiten, empatados, acierto, semanas, aprendiendo, mejora, versiones, puestoValidacion };
 }
 
 // ------------------------------------------------------------------------------ título, sello y cifras del proceso
@@ -103,7 +105,7 @@ function pintarPrincipal(d, x) {
       ? `<b>${num(m.encontrados)}</b><small>de ${num(d.fraudes)}</small>`
       : `<b>${num(Math.round(x.acierto(m)))}</b><small>de cada 100</small>`;
     return `<div class="fila-modelo" data-modelo="${m.clave}" role="button" tabindex="0" aria-label="Ver la ficha de ${esc(m.nombre)}">
-      <div class="texto"><div class="nombre"><span translate="no">${esc(m.nombre)}</span>${m.elegido ? '<span class="usado">El que usamos</span>' : ''}</div>
+      <div class="texto"><div class="nombre"><span translate="no">${esc(m.nombre)}</span>${m.elegido ? '<span class="usado">El que usamos</span>' : ''}${m.supervisado ? '<span class="supervisado" title="Aprende de los fraudes ya confirmados: no compite con los demás, que no ven ninguno">Con etiquetas</span>' : ''}</div>
         <p class="idea">${esc(m.idea)}</p><span class="ver">Ver ficha</span></div>
       <div class="marcas" role="img" aria-label="${esc(m.nombre)}: ${fraude ? `encuentra ${m.encontrados} de ${d.fraudes} fraudes` : `${Math.round(x.acierto(m))} de cada 100 avisos son fraude`}">${marcas(total, llenas, m.elegido, ancho)}</div>
       <div class="valor">${valor}</div>
@@ -115,8 +117,8 @@ function pintarPrincipal(d, x) {
 function pintarRazones(d, x) {
   const e = x.elegido;
   const razones = [
-    ['Encuentra más fraude', x.empatados.length ? `Empata con ${x.empatados.map((m) => m.nombre).join(' y ')}` : 'El que más de los cinco', `${num(e.encontrados)} de ${num(d.fraudes)}`],
-    ['Mejor en la prueba previa', 'Antes del examen, para elegir', `${x.puestoValidacion}.º de ${d.modelos.length}`],
+    ['Encuentra más fraude', x.empatados.length ? `Empata con ${x.empatados.map((m) => m.nombre).join(' y ')}` : `El que más de los ${num(x.compiten.length)} sin etiquetas`, `${num(e.encontrados)} de ${num(d.fraudes)}`],
+    ['Mejor en la prueba previa', 'Antes del examen, para elegir', `${x.puestoValidacion}.º de ${x.compiten.length}`],
     ['Frente a avisar al azar', 'Con los mismos avisos', `×${num(Math.round(e.veces_azar))}`],
   ];
   const grupos = d.proceso.parametros?.[e.clave]?.k;
@@ -128,7 +130,7 @@ function pintarRazones(d, x) {
 // ------------------------------------------------------------------------------ qué fraude ve cada uno
 function pintarMatriz(d) {
   const tipos = [...d.tipos.filter((t) => !t.nuevo), ...d.tipos.filter((t) => t.nuevo)];   // el fraude nuevo, al final
-  const corto = { kmeans: 'K-Means', ocsvm: 'SVM', dbscan: 'DBSCAN', iforest: 'I. Forest', autoencoder: 'Autoenc.' };
+  const corto = { kmeans: 'K-Means', ocsvm: 'SVM', dbscan: 'DBSCAN', iforest: 'I. Forest', gmm: 'GMM', autoencoder: 'Autoenc.', hgb_gmm: 'HGB+GMM' };
   const cab = `<thead><tr><th>Tipo de fraude</th>${d.modelos.map((m) =>
     `<th class="n${m.elegido ? ' elegido' : ''}" title="${esc(m.nombre)}">${esc(corto[m.clave] || m.nombre)}</th>`).join('')}</tr></thead>`;
   const filas = tipos.map((t) => `<tr>
@@ -214,6 +216,19 @@ const DIBUJOS = {
     return lineas + capas.flatMap(([x, ys], c) => ys.map((y, i) => (c === 2 && i === 2
       ? raro(x, y) : `<circle cx="${x}" cy="${y}" r="6" fill="${c === 1 ? TINTA : PUNTO}"/>`))).join('');
   },
+  // Nubes de distinta forma (elipses inclinadas) y un pago lejos de todas: improbable para la mezcla
+  gmm: () => [[66, 52, 52, 28, -18], [134, 84, 44, 22, 24]].map(([x, y, rx, ry, giro], i) =>
+    [rx, rx * 0.55].map((r, k) => `<ellipse cx="${x}" cy="${y}" rx="${r}" ry="${(ry * r) / rx}" transform="rotate(${giro} ${x} ${y})" fill="none" stroke="${TINTA}" stroke-width="${k ? 1 : 1.3}" stroke-dasharray="${k ? '2 3' : '0'}" opacity="${k ? 0.6 : 1}"/>`).join('')
+    + pintarPuntos(puntos(x, y, 12, ry * 1.1, i + 21))).join('') + raro(182, 22),
+  // Un árbol de preguntas que ha aprendido de fraudes confirmados (en rojo): el pago nuevo cae en la hoja del fraude
+  hgb_gmm: () => {
+    const nodo = (x, y) => `<rect x="${x - 9}" y="${y - 7}" width="18" height="14" rx="3" fill="none" stroke="${TINTA}" stroke-width="1.3"/>`;
+    const rama = (x1, y1, x2, y2) => `<line x1="${x1}" y1="${y1 + 7}" x2="${x2}" y2="${y2 - 7}" stroke="${TINTA}" stroke-width="1.1"/>`;
+    return rama(100, 18, 56, 58) + rama(100, 18, 144, 58) + rama(144, 58, 120, 98) + rama(144, 58, 170, 98)
+      + nodo(100, 18) + nodo(56, 58) + nodo(144, 58)
+      + pintarPuntos([[44, 98], [56, 102], [68, 96], [112, 104]]) + raro(170, 102)
+      + `<circle cx="182" cy="96" r="3.2" fill="${RARO}" opacity="0.55"/><circle cx="160" cy="108" r="3.2" fill="${RARO}" opacity="0.55"/>`;
+  },
 };
 
 // Los parámetros con los que se quedó cada modelo, dichos en palabras
@@ -225,6 +240,10 @@ const PARAMETROS = {
   iforest: (p) => [['Árboles de preguntas', num(p.n_estimators)], ['Pagos que mira cada árbol', num(p.max_samples)]],
   autoencoder: (p) => [['Números a los que resume cada pago', num(p.cuello)], ['Rondas de entrenamiento', num(p.rondas)],
     ['Capas de la red', String(p.arquitectura || '').replaceAll('->', '→')]],
+  gmm: (p) => [['Nubes de pagos normales', num(p.n_components)],
+    ['Forma de las nubes', { full: 'Libre, cada una la suya', tied: 'La misma para todas', diag: 'Alineada con las variables', spherical: 'Redonda' }[p.covariance_type] || p.covariance_type]],
+  hgb_gmm: (p) => [['Nubes del GMM', num(p.n_components)], ['Árboles de preguntas', num(p.max_iter)],
+    ['Respuestas de cada árbol', num(p.max_leaf_nodes)]],
 };
 
 const GRANDES = { lado: 8, alto: 18, hueco: 3 };
@@ -235,8 +254,9 @@ function pintarModelo(d, x, m, animar) {
   const dif = m.encontrados - e.encontrados;
   const frente = m === e ? `Es el modelo que usamos en Centinela.`
     : dif === 0 ? `Encuentra los mismos fraudes que ${e.nombre}, el que usamos.`
-      : `Encuentra ${num(Math.abs(dif))} fraudes ${dif < 0 ? 'menos' : 'más'} que ${e.nombre}, el que usamos.`;
-  const puesto = [...d.modelos].sort((a, b) => b.nota_validacion - a.nota_validacion).indexOf(m) + 1;
+      : `Encuentra ${num(Math.abs(dif))} fraudes ${dif < 0 ? 'menos' : 'más'} que ${e.nombre}, el que usamos${m.supervisado ? ', que no ve ningún fraude al aprender' : ''}.`;
+  // La prueba previa (validación) solo ordena a los que compiten; el supervisado no entra
+  const puesto = m.supervisado ? null : x.compiten.slice().sort((a, b) => b.nota_validacion - a.nota_validacion).indexOf(m) + 1;
   const tipos = d.tipos.map((t) => ({ ...t, v: t.encontrado[m.clave] ?? 0 })).sort((a, b) => b.v - a.v);
   const mejores = tipos.filter((t) => t.v >= 70).map((t) => t.nombre.toLowerCase());
   const ciegos = tipos.filter((t) => t.v === 0).length;
@@ -249,7 +269,7 @@ function pintarModelo(d, x, m, animar) {
     <section class="panel principal ficha${m.elegido ? ' elegido' : ''}" aria-labelledby="t-ficha">
       <header>
         <div><h2 id="t-ficha" translate="no">${esc(m.nombre)}</h2><p class="meta">Familia: ${esc(m.familia)}</p></div>
-        ${m.elegido ? '<span class="pill pos">El que usamos</span>' : ''}
+        ${m.elegido ? '<span class="pill pos">El que usamos</span>' : ''}${m.supervisado ? '<span class="pill">Con etiquetas: no compite</span>' : ''}
       </header>
       <div class="ficha-explica">
         <div>
@@ -264,7 +284,7 @@ function pintarModelo(d, x, m, animar) {
         <div class="kpi"><div class="kpi-label">Fraudes encontrados</div><div class="kpi-value">${num(m.encontrados)} <small>de ${num(total)}</small></div></div>
         <div class="kpi"><div class="kpi-label">Avisos que aciertan</div><div class="kpi-value">${num(acierto)} <small>de cada 100</small></div></div>
         <div class="kpi"><div class="kpi-label">Frente al azar</div><div class="kpi-value">×${num(Math.round(m.veces_azar))}</div></div>
-        <div class="kpi"><div class="kpi-label">Prueba previa</div><div class="kpi-value">${puesto}.º <small>de ${d.modelos.length}</small></div></div>
+        <div class="kpi"><div class="kpi-label">Prueba previa</div><div class="kpi-value">${puesto ? `${puesto}.º <small>de ${x.compiten.length}</small>` : '<small>No compite</small>'}</div></div>
       </div>
       <div class="ficha-marcas">
         <h3>Los ${num(total)} fraudes del examen</h3>

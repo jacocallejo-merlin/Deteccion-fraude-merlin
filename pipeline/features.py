@@ -124,7 +124,7 @@ SELECT
     -- Se descartan a propósito: moneda y tipo_operacion (siempre 'EUR' y 'compra': constantes),
     -- y categoria_negocio, comercio_pais, dispositivo_tipo y sistema_operativo (en el dataset no
     -- dependen del fraude; en one-hot añadirían ~30 columnas de ruido que diluyen las distancias
-    -- de KMeans, OCSVM, DBSCAN y el autoencoder)
+    -- de KMeans, OCSVM, DBSCAN, el GMM y el autoencoder)
     toUInt8(te.sesion_id IS NOT NULL)                         AS es_online,
     CAST(ifNull(te.canal_tipo = 'app', 0), 'UInt8')                            AS canal_app,
     CAST(ifNull(te.canal_tipo = 'web', 0), 'UInt8')                            AS canal_web,

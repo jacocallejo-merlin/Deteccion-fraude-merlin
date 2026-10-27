@@ -103,6 +103,10 @@ main.columna { padding: 32px 0 48px; }
 .fila-modelo .nombre { font-weight: 500; font-size: 15px; line-height: 20px; }
 .fila-modelo .nombre .usado { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; margin-left: 6px;
   border-radius: 4px; background: #dcf2ec; color: #075443; font-size: 12px; font-weight: 500; vertical-align: 1px; }
+/* El supervisado: aprende de fraudes confirmados y no compite; separado de los demás por una línea más marcada */
+.fila-modelo .nombre .supervisado { display: inline-flex; align-items: center; height: 20px; padding: 0 7px; margin-left: 6px;
+  border-radius: 4px; background: var(--raised); color: var(--muted); font-size: 12px; font-weight: 500; vertical-align: 1px; }
+.fila-modelo:has(.supervisado) { border-top: 1px dashed var(--control); }
 .fila-modelo .idea { margin-top: 2px; color: var(--muted); font-size: 12.5px; line-height: 17px; }
 .fila-modelo .marcas svg { display: block; max-width: 100%; }   /* cada marca a su tamaño: nunca se estiran */
 .fila-modelo .valor { text-align: right; font-variant-numeric: tabular-nums; }
@@ -243,7 +247,7 @@ main.columna { padding: 32px 0 48px; }
 }
 @media print { .pestanas-modelos { display: none; } }
 
-/* Frente a los demás: los cinco modelos, el de la ficha resaltado; cada fila abre su ficha */
+/* Frente a los demás: todos los modelos, el de la ficha resaltado; cada fila abre su ficha */
 .ficha-frente { margin-top: 18px; }
 .frente { display: grid; gap: 2px; }
 .frente button { display: grid; grid-template-columns: 140px minmax(0, 1fr) 40px; align-items: center; gap: 12px; width: 100%;

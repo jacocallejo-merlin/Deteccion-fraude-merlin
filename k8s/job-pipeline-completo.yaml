@@ -1,4 +1,4 @@
-# Pipeline completo: con la base de datos vacía genera el dataset; después entrena los 5 modelos,
+# Pipeline completo: con la base de datos vacía genera el dataset; después entrena los 7 modelos,
 # puntúa, evalúa y valida (python main.py, que no borra nada). Es la primera ejecución tras
 # "kubectl apply -k k8s/".
 # Con generateName cada "kubectl create -f" crea un Job nuevo (no usar apply).

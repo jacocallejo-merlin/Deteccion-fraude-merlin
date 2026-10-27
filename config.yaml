@@ -99,6 +99,7 @@ modelos:
   ocsvm_max_filas: 10000       # OCSVM es muy lento con más filas
   dbscan_max_filas: 10000      # DBSCAN también se entrena con una muestra
   kmeans_n_init: 10
+  gmm_max_iter: 500            # iteraciones máximas del ajuste del GMM (converge mucho antes)
   partes_a_clickhouse: [test]  # qué scores se guardan en anomaly_scores
   rejillas:                    # configuraciones que se prueban de cada modelo
     iforest:
@@ -113,6 +114,10 @@ modelos:
     dbscan:                    # eps elegido mirando la distancia al k-ésimo vecino en el ajuste
       eps: [2.0, 3.0, 4.0, 5.0, 6.0]  # (mediana ~2, percentil 95 ~5 con k = 5-20)
       min_samples: [5, 10, 20, 50]
+    gmm:                       # mezcla de gaussianas: lo poco probable bajo la mezcla es lo raro
+      n_components: [2, 4, 6, 8]
+      covariance_type: [full, tied, diag]
+      reg_covar: [0.003]       # la de la búsqueda de Jorge (modelo_supervisado): estabiliza las covarianzas
 
 # entrenar_autoencoder.py (usa también modelos.proporcion_val: mismas filas de validación)
 # La semilla del entrenamiento es la global (semilla: 42, arriba)
@@ -135,9 +140,11 @@ autoencoder:
   eval_cada: 1                 # cada cuántas épocas se mide la PR-AUC de validación
   semillas_estabilidad: [1, 2] # semillas EXTRA para comprobar estabilidad (~15 s cada una; [] = no)
 
-# entrenar_modelo_supervisado.py (HGB + GMM). Se ejecuta a mano: NO está en main.py.
-# Usa las etiquetas de fraude confirmadas y una señal de rareza del GMM. La variable
-# n_comercios_cliente_3h se guarda en datos_ml/extra_comercios.parquet y NO entra en las
+# entrenar_modelo_supervisado.py y puntuar_modelo_supervisado.py (HGB + GMM): el modelo supervisado.
+# Aprende con los fraudes confirmados al final del train (la etiqueta conocida, como el resto) y con la
+# rareza que le da su propio GMM. Entra en el pipeline y en las comparativas como uno más, marcado como
+# supervisado: no compite al elegir el detector, porque ve etiquetas y los no supervisados no.
+# La variable n_comercios_cliente_3h se guarda en datos_ml/extra_comercios.parquet y NO entra en las
 # 36 variables de los modelos no supervisados.
 modelo_supervisado:
   variables_extra: [n_comercios_cliente_3h]
@@ -178,8 +185,10 @@ feedback:
   # Detectores cuyos percentiles entran en el recalibrador. Con varios, el HistGradientBoosting aprende
   # a ponderarlos: no hay que elegir uno. Para añadir el modelo que esté probando un compañero, basta
   # con poner aquí su nombre si guarda <nombre>.joblib y <nombre>_referencia.joblib (y lo entiende
-  # modelos_nosupervisados.puntuar). El autoencoder se puntúa solo con sus artefactos.
-  detectores: [kmeans, autoencoder]
+  # modelos_nosupervisados.puntuar). El autoencoder se puntúa solo con sus artefactos. El GMM (mezcla de
+  # gaussianas) mide lo raro de otra forma que KMeans (probabilidad en vez de distancia): aporta señal propia.
+  # El HGB + GMM supervisado NO entra: ya ha aprendido de las etiquetas y el recalibrador aprendería de él.
+  detectores: [kmeans, autoencoder, gmm]
   presupuesto: 0.01            # parte de las transacciones de cada día que revisan los analistas (~7 al día)
   exploracion: 0.15            # de esas revisiones, la parte (al menos 1) que va a lo que los detectores solos
                                # ven más raro y el recalibrador dejó fuera: así no "olvida" ningún tipo de

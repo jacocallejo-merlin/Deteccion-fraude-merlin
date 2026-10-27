@@ -17,6 +17,9 @@ from preparacion_datos_ml import preparar_features
 from modelos_nosupervisados import MODELOS, entrenar, puntuar
 from modelos_nosupervisados import cargar as cargar_particiones
 from entrenar_autoencoder import Autoencoder, error_reconstruccion
+import entrenar_modelo_supervisado as supervisado
+import modelo_supervisado
+SUPERVISADO = supervisado.MODELO          # hgb_gmm
 TOLERANCIA = 1e-6
 INFORMES_A_GUARDAR = CONFIG.get('historico', {}).get('informes_validacion', 10)   # validacion_*.txt
 
@@ -44,10 +47,11 @@ class Informe:
 def comprobar_artefactos(inf):
     inf.titulo('1. ARTEFACTOS DEL ENTRENAMIENTO')
     rutas = [CARPETA_DATOS / f for f in ('X_test.parquet', 'info_test.parquet', 'escalador.joblib')]
-    for m in MODELOS:
+    for m in MODELOS + [SUPERVISADO]:
         rutas += [CARPETA_MODELOS / f'{m}.joblib',
                   CARPETA_MODELOS / f'{m}_referencia.joblib',
                   CARPETA_MODELOS / f'{m}_scores_test.parquet']
+    rutas += [CARPETA_MODELOS / f'{SUPERVISADO}_resumen.json', CARPETA_DATOS / 'extra_comercios.parquet']
     todos = True
     for r in rutas:
         inf.check(r.exists(), r.name)
@@ -73,7 +77,7 @@ def comprobar_consistencia(inf, client):
         FROM anomaly_scores GROUP BY model ORDER BY model
     ''').result_rows
     presentes = {m for m, *_ in filas}
-    for m in MODELOS + ['autoencoder']:
+    for m in MODELOS + ['autoencoder', SUPERVISADO]:
         inf.check(m in presentes, f'{m}: tiene scores en anomaly_scores')
 
     # Recorre TODOS los modelos que haya en la tabla
@@ -153,8 +157,38 @@ def comprobar_autoencoder(inf, X_test):
               f'diferencia máx {dif:.2e}')
 
 
+def extra_de(info):
+    """n_comercios_cliente_3h de esas transacciones (la variable extra del modelo supervisado)."""
+    return supervisado._valores_extra(supervisado._leer_extra(), info['transaccion_id'])
+
+
+def comprobar_supervisado(inf, X_test, info_test):
+    inf.titulo('6. REPRODUCIBILIDAD: MODELO SUPERVISADO HGB + GMM GUARDADO')
+    modelo = modelo_supervisado.cargar(CARPETA_MODELOS / f'{SUPERVISADO}.joblib')
+    s, _ = modelo_supervisado.puntuar(modelo, X_test, extra_de(info_test))
+    guardado = (pd.read_parquet(CARPETA_MODELOS / f'{SUPERVISADO}_scores_test.parquet')
+                .reindex(X_test.index)['score'].to_numpy())
+    dif = float(np.abs(s - guardado).max())
+    inf.check(dif <= TOLERANCIA, f'{SUPERVISADO}: el modelo guardado reproduce sus scores de test',
+              f'diferencia máx {dif:.2e}')
+
+
+def comprobar_reentreno_supervisado(inf):
+    with open(CARPETA_MODELOS / f'{SUPERVISADO}_resumen.json', encoding='utf-8') as fh:
+        r = json.load(fh)
+    (_, X_test, _info_test, X_fit, _, _, extra_test, extra_fit, _, y_fit, _) = supervisado.cargar()
+    modelo = modelo_supervisado.construir(X_fit, extra_fit, y_fit, r['parametros_gmm'], r['parametros_hgb'],
+                                          r['semilla'], columnas=list(X_fit.columns))
+    s, _ = modelo_supervisado.puntuar(modelo, X_test, extra_test)
+    guardado = (pd.read_parquet(CARPETA_MODELOS / f'{SUPERVISADO}_scores_test.parquet')
+                .reindex(X_test.index)['score'].to_numpy())
+    dif = float(np.abs(s - guardado).max())
+    inf.check(dif <= TOLERANCIA, f'{SUPERVISADO}: reentrenado con semilla {r["semilla"]} da los mismos scores',
+              f'diferencia máx {dif:.2e}')
+
+
 def comprobar_reentreno(inf):
-    inf.titulo('6. REPRODUCIBILIDAD: REENTRENAR LOS CLÁSICOS CON LA MISMA SEMILLA')
+    inf.titulo('7. REPRODUCIBILIDAD: REENTRENAR LOS MODELOS CON LA MISMA SEMILLA')
     with open(CARPETA_MODELOS / 'resumen_entrenamiento.json', encoding='utf-8') as fh:
         resumen = json.load(fh)
     _, X_test, X_fit, _, _, _ = cargar_particiones()
@@ -171,6 +205,7 @@ def comprobar_reentreno(inf):
         dif = float(np.abs(s - guardado).max())
         inf.check(dif <= TOLERANCIA, f'{m}: reentrenado con semilla {r["semilla"]} da los mismos scores',
                   f'diferencia máx {dif:.2e}')
+    comprobar_reentreno_supervisado(inf)
 
 
 # ---------------------------------------------------------------------------- main
@@ -178,7 +213,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--reentrenar', action='store_true',
-                        help='reentrena los modelos clásicos para comprobar la semilla (más lento)')
+                        help='reentrena los modelos clásicos y el supervisado para comprobar la semilla (más lento)')
     args = parser.parse_args()
 
     inf = Informe()
@@ -197,6 +232,7 @@ def main():
         comprobar_preparacion(inf, client, X_test, info_test)
         comprobar_scoring(inf, X_test)
         comprobar_autoencoder(inf, X_test)
+        comprobar_supervisado(inf, X_test, info_test)
         if args.reentrenar:
             comprobar_reentreno(inf)
     else:

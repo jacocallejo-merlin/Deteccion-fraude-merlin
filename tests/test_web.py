@@ -182,6 +182,9 @@ def test_web_modelos(web_modelos):
     assert web_modelos.get("/").status_code == 200
     d = web_modelos.get("/api/modelos").json()
     claves = {m["clave"] for m in d["modelos"]}
-    assert claves <= {"kmeans", "iforest", "ocsvm", "dbscan", "autoencoder"} and claves
+    assert claves <= {"kmeans", "iforest", "ocsvm", "dbscan", "gmm", "autoencoder", "hgb_gmm"} and claves
     assert sum(m["elegido"] for m in d["modelos"]) == 1
     assert all(0 <= m["encontrados"] <= d["fraudes"] for m in d["modelos"])
+    # El supervisado sale, pero nunca es el elegido ni el mejor de la prueba previa: no compite
+    assert not any(m["elegido"] for m in d["modelos"] if m["supervisado"])
+    assert d["mejor_validacion"] != "hgb_gmm"

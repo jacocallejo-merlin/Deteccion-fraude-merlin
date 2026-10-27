@@ -3,7 +3,7 @@ DAGs de Airflow del proyecto antifraude (Hito 5)
 
 Tres DAGs, todos lanzan los scripts de pipeline/ con BashOperator:
   fraude_setup          (manual, una vez)   borra la BD -> crea tablas -> dataset inicial
-  fraude_entrenamiento  (manual o semanal)  ETL -> entrena los 5 modelos -> puntúa -> evalúa -> valida
+  fraude_entrenamiento  (manual o semanal)  ETL -> entrena los 7 modelos -> puntúa -> evalúa -> valida
   fraude_scoring        (diario)            lote nuevo -> ETL -> puntúa con los modelos guardados -> valida
 Los dos últimos terminan con el feedback de analistas (Hito 6):
   puntuar -> simular_analistas -> integrar_feedback -> recalibrar_modelo -> medir_feedback
@@ -128,7 +128,7 @@ with DAG(
 # -------------------------------------------------------------------- entrenamiento
 with DAG(
     dag_id='fraude_entrenamiento',
-    description='ETL, entrenamiento de los 5 modelos, scoring, evaluación y validación',
+    description='ETL, entrenamiento de los 7 modelos, scoring, evaluación y validación',
     schedule='0 5 * * 0',                  # domingos a las 05:00, como el CronJob de k8s (None = solo a mano)
     start_date=INICIO,
     catchup=False,
@@ -143,13 +143,15 @@ with DAG(
     preparacion = paso('preparacion_datos_ml', 'preparacion_datos_ml.py')
     features >> preparacion
 
-    # Entrenamiento (en paralelo)
+    # Entrenamiento (en paralelo): los 5 clásicos (con el GMM), el autoencoder y el supervisado HGB + GMM
     clasicos = paso('entrenar_nosupervisados', 'modelos_nosupervisados.py')
     autoencoder = paso('entrenar_autoencoder', 'entrenar_autoencoder.py')
+    supervisado = paso('entrenar_supervisado', 'entrenar_modelo_supervisado.py')
 
     # Scoring de todo lo que quede sin puntuar, con los modelos recién entrenados
     puntuar_clasicos = paso('puntuar_nosupervisados', 'puntuar_nosupervisados.py')
     puntuar_ae = paso('puntuar_autoencoder', 'puntuar_autoencoder.py')
+    puntuar_sup = paso('puntuar_supervisado', 'puntuar_modelo_supervisado.py')
 
     # Evaluación
     eval_clasicos = paso('evaluar_modelos_nosupervisados', 'evaluar_modelos_nosupervisados.py')
@@ -159,19 +161,21 @@ with DAG(
     # Tras entrenar también se comprueba que reentrenar con la misma semilla da lo mismo
     validacion = paso('validacion', 'validacion_reproducibilidad_consistencia.py', '--reentrenar')
 
-    preparacion >> [clasicos, autoencoder]
+    preparacion >> [clasicos, autoencoder, supervisado]
     clasicos >> puntuar_clasicos
     autoencoder >> puntuar_ae
+    supervisado >> puntuar_sup
     autoencoder >> eval_ae
-    # Las comparativas leen los scores de los 5 modelos y las alertas de las reglas
-    [clasicos, autoencoder, reglas] >> eval_clasicos
-    [clasicos, autoencoder, reglas] >> comparacion
-    [puntuar_clasicos, puntuar_ae, eval_clasicos, eval_ae, comparacion] >> validacion
+    # Las comparativas leen los scores de los 7 modelos y las alertas de las reglas
+    [clasicos, autoencoder, supervisado, reglas] >> eval_clasicos
+    [clasicos, autoencoder, supervisado, reglas] >> comparacion
+    [puntuar_clasicos, puntuar_ae, puntuar_sup, eval_clasicos, eval_ae, comparacion] >> validacion
     puntuar_clasicos >> paso('vigilar_drift', 'vigilar_drift.py')     # ¿se parecen los pagos al nuevo train?
 
-    # Con el detector reentrenado el recalibrador anterior ya no vale: se rehace con el feedback
+    # Con los detectores reentrenados el recalibrador anterior ya no vale: se rehace con el feedback. Puntúa él
+    # mismo con los detectores de feedback.detectores (KMeans, GMM y el autoencoder): espera a que estén todos
     analistas = feedback(ajustar=True)
-    puntuar_clasicos >> analistas
+    [puntuar_clasicos, puntuar_ae] >> analistas
 
 
 # -------------------------------------------------------------------------- scoring
@@ -188,6 +192,7 @@ with DAG(
     carga, limpieza, features, reglas = etl()
     puntuar_clasicos = paso('puntuar_nosupervisados', 'puntuar_nosupervisados.py')
     puntuar_ae = paso('puntuar_autoencoder', 'puntuar_autoencoder.py')
+    puntuar_sup = paso('puntuar_supervisado', 'puntuar_modelo_supervisado.py')
     validacion = paso('validacion', 'validacion_reproducibilidad_consistencia.py')
 
     if GENERAR_LOTE:
@@ -195,8 +200,8 @@ with DAG(
         lote = paso('generar_lote', 'generar_lote.py')
         lote >> carga
 
-    features >> [puntuar_clasicos, puntuar_ae]
-    [reglas, puntuar_clasicos, puntuar_ae] >> validacion
+    features >> [puntuar_clasicos, puntuar_ae, puntuar_sup]
+    [reglas, puntuar_clasicos, puntuar_ae, puntuar_sup] >> validacion
     puntuar_clasicos >> paso('vigilar_drift', 'vigilar_drift.py')     # ¿se parecen los pagos al train?
 
     # scoring -> feedback -> recalibración

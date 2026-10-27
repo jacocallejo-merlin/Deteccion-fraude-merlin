@@ -12,6 +12,7 @@ import pandas as pd
 from sklearn.cluster import DBSCAN, KMeans
 from sklearn.ensemble import IsolationForest
 from sklearn.metrics import average_precision_score
+from sklearn.mixture import GaussianMixture
 from sklearn.neighbors import NearestNeighbors
 from sklearn.svm import OneClassSVM
 
@@ -43,6 +44,9 @@ DBSCAN_MAX_FILAS = _cfg['dbscan_max_filas']
 
 # Veces que KMeans repite el agrupamiento con centros iniciales distintos (se queda con el mejor).
 KMEANS_N_INIT = _cfg['kmeans_n_init']
+
+# Iteraciones máximas del ajuste del GMM (EM): con los datos escalados converge mucho antes.
+GMM_MAX_ITER = _cfg.get('gmm_max_iter', 500)
 
 # Configuraciones que se prueban de cada modelo. Se entrenan todas SIN etiquetas
 # y se elige la de mejor PR-AUC en validación (la etiqueta solo sirve para elegir).
@@ -92,6 +96,12 @@ def entrenar(nombre, p, X, semilla):
                            cache_size=1000).fit(X[filas])
     if nombre == 'dbscan':
         return entrenar_dbscan(p, X, semilla)
+    if nombre == 'gmm':
+        # Mezcla de gaussianas: describe lo normal como varias "nubes" con su forma (covarianza). El score es
+        # lo poco probable que es el pago bajo la mezcla: un pago lejos de todas las nubes es raro
+        return GaussianMixture(n_components=p['n_components'], covariance_type=p['covariance_type'],
+                               reg_covar=p.get('reg_covar', 1e-6), max_iter=GMM_MAX_ITER,
+                               random_state=semilla).fit(X)
     raise ValueError(f'Modelo desconocido: {nombre}')
 
 
@@ -130,6 +140,9 @@ def puntuar(nombre, modelo, X):
         ruido = distancia > modelo['eps']
         cluster = np.where(ruido, -1, modelo['cluster_central'][cercano])
         return distancia, {'cluster': cluster, 'ruido': ruido.astype(int)}
+    if nombre == 'gmm':
+        # -log verosimilitud: cuanto menos probable bajo la mezcla, más raro. cluster = la nube más probable
+        return -modelo.score_samples(X), {'cluster': modelo.predict(X)}
     raise ValueError(f'Modelo desconocido: {nombre}')
 
 
@@ -287,13 +300,15 @@ def procesar(nombre, X_train, X_test, X_fit, X_val, y_val, ids, run_id, client):
         'run_id': run_id,
         **({'n_clusters': modelo['n_clusters'], 'pct_ruido_muestra': modelo['pct_ruido_muestra']}
            if nombre == 'dbscan' else {}),
+        **({'convergido': bool(modelo.converged_), 'iteraciones': int(modelo.n_iter_)} if nombre == 'gmm' else {}),
     })
     print(f'Guardado en "{CARPETA_MODELOS}/": {nombre}.joblib y {nombre}_scores_train/val/test.parquet')
     if client is not None:
         guardar_en_clickhouse(client, nombre, scores, ids, run_id, ref_ordenada)
 
 def main():
-    parser = argparse.ArgumentParser(description='Entrena los modelos no supervisados clásicos')
+    parser = argparse.ArgumentParser(description='Entrena los modelos no supervisados clásicos '
+                                                 '(Isolation Forest, KMeans, One-Class SVM, DBSCAN y GMM)')
     parser.add_argument('modelos', nargs='*', default='todos', choices=MODELOS + ['todos'])
     parser.add_argument('--sin-clickhouse', action='store_true',
                         help='no guardar los scores en anomaly_scores')

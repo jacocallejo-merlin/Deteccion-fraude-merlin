@@ -14,7 +14,7 @@ short_description: Detección de fraude en pagos con aprendizaje no supervisado
 Herramienta antifraude para una entidad de pagos y sus comercios.
 
 - **Casos y alertas** (`/`): los pagos sospechosos de cada día, con la acción recomendada y la probabilidad de fraude.
-- **Modelos** (`/modelos/`): resumen visual de los cinco modelos entrenados, cuál se usa y por qué.
+- **Modelos** (`/modelos/`): resumen visual de los modelos entrenados, cuál se usa y por qué.
 
 Los datos son simulados. Esta carpeta la genera `despliegue/publicar.py` del repositorio del proyecto: un solo
 contenedor con ClickHouse y las dos webs, que al arrancar carga una copia fija de la base de datos. Las revisiones

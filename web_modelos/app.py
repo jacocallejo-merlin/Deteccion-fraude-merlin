@@ -63,11 +63,26 @@ DETECTORES = {
         'como_funciona': 'Hace cortes al azar en los datos, como un juego de preguntas de sí o no. Un pago normal '
                          'necesita muchas preguntas para quedarse solo; uno raro queda aislado con muy pocas.',
     },
+    'gmm': {
+        'nombre': 'GMM', 'familia': 'Probabilidad',
+        'idea': 'Describe lo normal como varias nubes de pagos; avisa del pago muy poco probable.',
+        'como_funciona': 'Imagina los pagos normales como unas pocas nubes, cada una con su forma: compras pequeñas '
+                         'de diario, pagos grandes de clientes habituales... Para cada pago nuevo calcula lo probable '
+                         'que es que salga de alguna de esas nubes. Si es muy improbable para todas, es raro.',
+    },
     'autoencoder': {
         'nombre': 'Autoencoder', 'familia': 'Red neuronal',
         'idea': 'Una red neuronal que copia pagos normales; avisa del que no sabe copiar.',
         'como_funciona': 'Una red neuronal aprende a resumir cada pago en unos pocos números y a reconstruirlo '
                          'después. Con los pagos normales lo hace bien; si no consigue reconstruir uno, es que es raro.',
+    },
+    'hgb_gmm': {
+        'nombre': 'HGB + GMM', 'familia': 'Supervisado', 'supervisado': True,
+        'idea': 'Aprende de los fraudes ya confirmados; avisa del pago que se les parece.',
+        'como_funciona': 'Al contrario que los demás, este sí ve ejemplos de fraude: los que el banco ya había '
+                         'confirmado. Con ellos aprende, como un árbol de preguntas, qué pagos se parecen a un fraude, '
+                         'y además tiene en cuenta lo raro que es cada pago para un GMM. Por eso no compite al elegir '
+                         'el detector: es la referencia de lo que se gana con las etiquetas.',
     },
 }
 
@@ -104,10 +119,16 @@ app.add_middleware(ProtegerWeb, almacen=lambda: _almacen, solo_roles=('administr
 _cache = {'clave': None, 'datos': None}
 
 
+def _imprescindibles():
+    return [INFO_TEST, RESULTADOS / 'comparativa_test.csv', RESULTADOS / 'recall_por_tipo_test.csv',
+            MODELOS / 'resumen_entrenamiento.json']
+
+
 def _archivos():
-    return ([INFO_TEST, RESULTADOS / 'comparativa_test.csv', RESULTADOS / 'recall_por_tipo_test.csv',
-             MODELOS / 'resumen_entrenamiento.json']
-            + [MODELOS / f'{m}_scores_test.parquet' for m in DETECTORES])
+    """Los que se leen: los imprescindibles y las notas de los modelos que estén entrenados (el que no lo esté,
+    no sale)."""
+    notas = [MODELOS / f'{m}_scores_test.parquet' for m in DETECTORES]
+    return _imprescindibles() + [a for a in notas + [MODELOS / 'hgb_gmm_resumen.json'] if a.exists()]
 
 
 def _leer_json(ruta):
@@ -126,14 +147,14 @@ def _calcular():
 
     modelos = []
     for clave, textos in DETECTORES.items():
-        if clave not in comparativa.index:
+        if clave not in comparativa.index or not (MODELOS / f'{clave}_scores_test.parquet').exists():
             continue
         nota = pd.read_parquet(MODELOS / f'{clave}_scores_test.parquet')['score'].to_numpy()
         fila = comparativa.loc[clave]
         avisos = int(round(fila['pres_marcadas_%'] * n / 100))        # cuántos pagos puede señalar
         marcados = np.argsort(-nota, kind='stable')[:avisos]
         modelos.append({
-            'clave': clave, **textos, 'elegido': str(fila.get('elegido', '')).strip() == '<--',
+            'clave': clave, 'supervisado': False, **textos, 'elegido': str(fila.get('elegido', '')).strip() == '<--',
             'avisos': avisos, 'avisos_dia': round(avisos / dias, 1), 'encontrados': int(y[marcados].sum()),
             'veces_azar': round(float(fila['lift']), 1),                # cuántas veces mejor que elegir al azar
             'nota_validacion': float(fila['PR-AUC_val']),                # la prueba previa con la que se eligió
@@ -152,12 +173,18 @@ def _calcular():
                                'cuello': red.get('mejores_parametros', {}).get('cuello'),
                                'rondas': ent.get('epocas'), 'mejor_ronda': ent.get('mejor_epoca')},
             }
+        elif m['clave'] == 'hgb_gmm':
+            sup = _leer_json(MODELOS / 'hgb_gmm_resumen.json')
+            m['entrenamiento'] = {'versiones': int(sup.get('combinaciones_probadas', 1)),
+                                  'parametros': sup.get('mejores_parametros', {})}
         else:
             c = clasicos.get(m['clave'], {})
             m['entrenamiento'] = {'versiones': int(c.get('combinaciones_probadas', 0)),
                                   'parametros': c.get('mejores_parametros', {})}
-    modelos.sort(key=lambda m: (-m['encontrados'], not m['elegido'], -m['veces_azar']))
-    mejor_validacion = max(modelos, key=lambda m: m['nota_validacion'])['clave']
+    # Los no supervisados primero (los que compiten), y dentro, los que más fraude encuentran; el supervisado,
+    # al final, como referencia de lo que se gana con las etiquetas
+    modelos.sort(key=lambda m: (m['supervisado'], -m['encontrados'], not m['elegido'], -m['veces_azar']))
+    mejor_validacion = max((m for m in modelos if not m['supervisado']), key=lambda m: m['nota_validacion'])['clave']
 
     por_tipo = pd.read_csv(RESULTADOS / 'recall_por_tipo_test.csv', index_col=0)
     tipos = [{'clave': t, 'nombre': TIPOS_FRAUDE.get(t, t.replace('_', ' ').capitalize()), 'casos': int(f['n']),
@@ -208,7 +235,7 @@ def modelos():
         if _cache['clave'] != 'publicado':
             _cache['datos'], _cache['clave'] = json.loads(PUBLICADO.read_text(encoding='utf-8')), 'publicado'
         return {**_cache['datos'], 'web_casos': os.getenv('WEB_CASOS_URL')}
-    faltan = [str(a.relative_to(RAIZ)) for a in _archivos() if not a.exists()]
+    faltan = [str(a.relative_to(RAIZ)) for a in _imprescindibles() if not a.exists()]
     if faltan:
         raise HTTPException(503, 'Faltan los resultados de los modelos (' + ', '.join(faltan[:3])
                             + '). Ejecuta antes el pipeline: python main.py')

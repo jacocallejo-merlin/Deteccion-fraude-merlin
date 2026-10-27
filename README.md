@@ -11,17 +11,20 @@ cómo ejecutarlo.
 
 - **Qué hace:** da una nota de sospecha a cada pago y ordena las alertas para que el equipo revise
   solo el 1 % más sospechoso (unas 6-7 al día), en vez de revisar los ~650 pagos diarios.
-- **Cómo:** cuatro detectores no supervisados (Isolation Forest, KMeans, DBSCAN y One-Class SVM) y
-  un autoencoder semi-supervisado (se entrena solo con pagos legítimos); KMeans y el autoencoder
-  alimentan un modelo supervisado que recalibra el orden cada semana con lo que confirman el banco y
-  los analistas.
+- **Cómo:** cinco detectores no supervisados (Isolation Forest, KMeans, DBSCAN, One-Class SVM y GMM)
+  y un autoencoder semi-supervisado (se entrena solo con pagos legítimos); KMeans, el autoencoder y el
+  GMM alimentan un modelo supervisado que recalibra el orden cada semana con lo que confirman el banco y
+  los analistas. Un séptimo modelo, HGB + GMM, aprende directamente de los fraudes confirmados y sirve de
+  referencia de lo que aportan las etiquetas.
 - **Datos:** unos 117.000 pagos sintéticos en 180 días (116.547 tras limpiar), 2.000 clientes,
   30 comercios, 616 pagos fraudulentos (0,53 %) y 10 tipos de fraude, incluido uno que el sistema no
   ha visto nunca.
-- **Resultado principal (test: 29.174 pagos, 201 fraudes):** el autoencoder mejorado y KMeans quedan
-  prácticamente empatados: PR-AUC 0,415 y 0,408 (los dos rondan 0,41; unas 60 veces el azar). Los dos
-  encuentran el 42 % del fraude revisando el 1 % (el umbral de validación marca un 1,1 % real en
-  test) y de cada 100 alertas unas 27 son fraude. El Hito 6 combina los dos y aprende a ponderarlos.
+- **Resultado principal (test: 30.042 pagos, 221 fraudes):** el GMM es el mejor detector no supervisado:
+  gana en validación (PR-AUC 0,140) y en test (0,46, unas 62 veces el azar), y encuentra el 50 % del
+  fraude revisando el 1 %, con 36 de cada 100 alertas siendo fraude; KMeans saca 0,40 y el autoencoder
+  0,36. El supervisado HGB + GMM, que aprende de los fraudes confirmados, llega a 0,66 (73 % del fraude):
+  la referencia de lo que aportan las etiquetas. El Hito 6 combina KMeans, el autoencoder y el GMM y
+  aprende a ponderarlos.
 - **Aprendizaje (Hito 6):** en los mismos días y con la misma carga de revisión, el modelo
   recalibrado con los fraudes que confirma el banco encuentra 98 fraudes frente a 70 de KMeans
   (+40 %). Esa medición es con KMeans como único detector; el ensemble con autoencoder está
@@ -260,12 +263,13 @@ La respuesta (si es fraude o no) **no se usa como variable de entrada**: se guar
 cuatro detectores clásicos ni siquiera la miran; el autoencoder la usa solo para entrenar con pagos
 legítimos, y el modelo recalibrado, para aprender de fraudes ya confirmados.
 
-## Los modelos: cinco formas de buscar lo raro
+## Los modelos: seis formas de buscar lo raro y una que aprende de los fraudes
 
-Los cuatro detectores clásicos no usan la etiqueta: buscan **lo que se sale de lo normal** y dan
+Los cinco detectores clásicos no usan la etiqueta: buscan **lo que se sale de lo normal** y dan
 una nota más alta a los pagos raros. El autoencoder sí usa la etiqueta, pero solo para entrenar con
-pagos legítimos. Ninguno recibe "esto es fraude" como variable de entrada. Se probaron los cinco
-para ver cuál funciona mejor.
+pagos legítimos. Ninguno recibe "esto es fraude" como variable de entrada. Se probaron los seis
+para ver cuál funciona mejor. Aparte hay un séptimo, **supervisado**, que sí aprende de los fraudes
+confirmados: sale en todas las comparativas como referencia, pero no compite al elegir el detector.
 
 | Modelo | Cómo piensa (explicado fácil) |
 |---|---|
@@ -273,19 +277,25 @@ para ver cuál funciona mejor.
 | **KMeans** (modelo base) | Agrupa los pagos en unos pocos "perfiles típicos" (aquí, 3). La nota es la distancia del pago a su perfil más parecido: si no se parece a ninguno, es raro. |
 | **DBSCAN** | Busca las zonas donde hay muchos pagos juntos. Lo que queda lejos de todas esas zonas es raro. |
 | **One-Class SVM** | Dibuja una frontera alrededor de la mayoría de los pagos. Lo que cae fuera es raro. |
+| **GMM** (mezcla de gaussianas) | Describe lo normal como varias "nubes" de pagos, cada una con su forma. La nota es lo poco probable que es el pago bajo todas ellas. Se parece a KMeans, pero mide probabilidad en vez de distancia y cada nube tiene su propia forma. |
 | **Autoencoder** (red neuronal) | Aprende a "copiar" pagos normales: los comprime y los vuelve a reconstruir. Si un pago no lo sabe reconstruir bien, es que no se parece a lo normal. La nota es lo mal que lo copia. |
+| **HGB + GMM** (supervisado) | Un HistGradientBoosting (árboles de preguntas) que aprende con los fraudes confirmados al final del entrenamiento (la misma etiqueta conocida que usan los demás para elegir), usando además la rareza que le da su propio GMM y `n_comercios_cliente_3h`. `entrenar_modelo_supervisado.py` y `puntuar_modelo_supervisado.py`. |
 
-**¿Cuál se usa?** **KMeans y el autoencoder**, juntos. KMeans sigue siendo el detector de referencia
-para el drift y para comparar con la serie histórica, pero el Hito 6 ya no obliga a elegir uno:
-recibe las notas de los dos y aprende a ponderarlas (`feedback.detectores`). Antes de la primera
-recalibración, el orden es la media de ambos percentiles. En la comparación pura de PR-AUC, el
+**¿Cuál se usa?** **KMeans, el autoencoder y el GMM**, juntos. KMeans sigue siendo el detector de
+referencia para el drift y para comparar con la serie histórica, pero el Hito 6 ya no obliga a elegir
+uno: recibe las notas de los tres y aprende a ponderarlas (`feedback.detectores`). Antes de la primera
+recalibración, el orden es la media de sus percentiles. El HGB + GMM no entra ahí: ya ha aprendido de
+las etiquetas, y el recalibrado semanal hace ese mismo papel (aprender de lo confirmado) encima de los
+detectores, poniéndose al día cada semana. En la comparación pura de PR-AUC, el
 **autoencoder mejorado** queda ligeramente por delante (0,415 frente a 0,408 en test; 0,148 frente a
 0,133 en validación), pero la diferencia es pequeña: en test los intervalos se solapan y en
 validación el bootstrap los da por empatados. Por eso tiene sentido sumar los dos en vez de
 descartar uno.
-Los cuatro clásicos se probaron con 37 combinaciones de hiperparámetros y se quedó la mejor de cada
-uno; el autoencoder se ajustó en una búsqueda aparte (`buscar_autoencoder.py`, 36 combinaciones) y
-luego se entrenó la configuración ganadora.
+Los cinco clásicos se probaron con 49 combinaciones de hiperparámetros (37 de los cuatro primeros y
+12 del GMM: 2, 4, 6 u 8 nubes, con forma libre, común o alineada con las variables) y se quedó la mejor
+de cada uno; el autoencoder se ajustó en una búsqueda aparte (`buscar_autoencoder.py`, 36 combinaciones)
+y luego se entrenó la configuración ganadora. El HGB + GMM usa la configuración que encontró su propia
+búsqueda (en `config.yaml`, `modelo_supervisado`) y se comprueba con seis semillas.
 
 El cambio principal del autoencoder no es solo la arquitectura: la búsqueda eligió una variante algo
 más comprimida (cuello 6 en vez de 8) y LeakyReLU en vez de tanh. Pero lo que más importa es **cómo
@@ -423,18 +433,31 @@ mide **como se haría en un banco real**:
 
 ### Los modelos
 
-Medido en el test (los últimos 45 días, unos 29.000 pagos y 201 fraudes):
+Medido en el test con los datos regenerados hasta el 22-10-2026 (del 11-9 al 26-10: 46 días, 30.042 pagos
+y 221 fraudes), con los siete modelos:
 
-| Modelo | PR-AUC test | Margen (95 %) | Fraude encontrado revisando el 1 % |
-|---|---|---|---|
-| **Autoencoder** | **0,41** | 0,32 – 0,53 | **42 %** |
-| **KMeans** (modelo base) | 0,41 | 0,30 – 0,52 | 42 % |
-| One-Class SVM | 0,37 | 0,26 – 0,48 | 42 % |
-| DBSCAN | 0,33 | 0,23 – 0,43 | 32 % |
-| Isolation Forest | 0,15 | 0,08 – 0,27 | 25 % |
+| Modelo | PR-AUC validación | PR-AUC test | Margen (95 %) | Fraude encontrado revisando el 1 % |
+|---|---|---|---|---|
+| **GMM** (elegido) | **0,140** | **0,46** | 0,35 – 0,57 | **50 %** |
+| KMeans | 0,111 | 0,40 | 0,31 – 0,52 | 41 % |
+| DBSCAN | 0,118 | 0,39 | 0,29 – 0,50 | 38 % |
+| One-Class SVM | 0,090 | 0,37 | 0,27 – 0,49 | 42 % |
+| Autoencoder | 0,126 | 0,36 | 0,26 – 0,47 | 40 % |
+| Isolation Forest | 0,037 | 0,20 | 0,10 – 0,32 | 27 % |
+| *HGB + GMM (supervisado, no compite)* | *0,262* | *0,66* | *0,57 – 0,75* | *73 %* |
 
-> El autoencoder saca 0,415 exacto y KMeans 0,408: los dos se leen como 0,41, pero el autoencoder
-> queda ligeramente arriba. La diferencia no es significativa con estos datos.
+> El detector se elige por la PR-AUC de validación entre los seis no supervisados, y gana el **GMM**;
+> el test lo confirma (es el mejor de los seis). El HGB + GMM aprende con los fraudes confirmados al
+> final del entrenamiento, así que no compite: es la referencia de lo que se gana con las etiquetas, y
+> en el sistema ese papel lo hace el recalibrado semanal encima de KMeans, el autoencoder y el GMM.
+> Las cifras de los apartados siguientes son de la ejecución anterior (KMeans y autoencoder como
+> mejores); las de cada ejecución están en `resultados/conclusiones.md` y `resultados/comparativa_test.csv`.
+
+Por tipo de fraude (revisando el 1 %), lo que aportan los nuevos: el GMM detecta mucho mejor el
+*smurfing* (55 % frente a 13 % de KMeans) y los bots (95 % frente a 70 %); el HGB + GMM encuentra
+además casi todo lo que ya había visto confirmado (pico de gasto 76 %, IP sospechosa 75 %, smurfing
+97 %), pero el fraude nuevo (`cash_out_multicomercio`) sigue escapándose: 0 % el GMM y 11 % el
+supervisado, porque no estaba en sus etiquetas.
 
 **Cómo leerlo:**
 
@@ -734,7 +757,7 @@ están en **`config.yaml`**, comentados.
 |---|---|
 | **Los pagos sospechosos y los avisos**, como los vería el cliente | La web: http://localhost:8000 (ver abajo) |
 | **El resumen de los modelos**: cuál gana, qué detecta, cuánto fiarse | `resultados/conclusiones.md` |
-| Las curvas de los 5 modelos | `resultados/curvas_pr_test.png` |
+| Las curvas de los 7 modelos | `resultados/curvas_pr_test.png` |
 | La comparación con la red neuronal (Hito 4) | `resultados/conclusiones_hito4.md`, `comparativa_final_pr.png` |
 | **Si mejora al aprender** (Hito 6) | `resultados/feedback_semanal.png`, `conclusiones_feedback.md` |
 | **El ajuste de umbrales y variables** (Hito 6) | `resultados/ajuste_umbrales.md` (y `ajuste_reglas.csv`, `ajuste_variables.csv`) |
@@ -921,9 +944,10 @@ La documentación de los datos que da el servidor está en http://localhost:8000
 | 7 | `features.py` | Calcula las 36 variables |
 | 8 | `reglas_alerta.py` | Aplica las reglas fijas |
 | 9 | `preparacion_datos_ml.py` | Parte los datos por fechas (entrenamiento / validación / test) y los prepara |
-| 10 | `modelos_nosupervisados.py` | Entrena Isolation Forest, KMeans, DBSCAN y One-Class SVM |
+| 10 | `modelos_nosupervisados.py` | Entrena Isolation Forest, KMeans, DBSCAN, One-Class SVM y GMM |
 | 11 | `entrenar_autoencoder.py` | Entrena la red neuronal |
-| 12-13 | `puntuar_nosupervisados.py`, `puntuar_autoencoder.py` | Ponen nota a los pagos que aún no la tienen |
+| 11b | `entrenar_modelo_supervisado.py` | Entrena el supervisado HGB + GMM con los fraudes confirmados |
+| 12-13 | `puntuar_nosupervisados.py`, `puntuar_autoencoder.py`, `puntuar_modelo_supervisado.py` | Ponen nota a los pagos que aún no la tienen |
 | 14 | `simular_analistas.py` | Los analistas revisan las alertas de cada día |
 | 15 | `generar_avisos.py` | Une modelo y reglas en una cola con niveles (crítico y alto; medio opcional) y crea los avisos |
 | 16 | `integrar_feedback.py` | Junta lo que dicen los analistas (y la web) con lo que confirma el banco |
@@ -943,7 +967,7 @@ entrenar los modelos principales ni a ajustar umbrales (eso es una decisión per
 |---|---|---|---|
 | 1. Introducción y exploración | Base de datos, carga de datos, informe de limpieza, primeros gráficos | `crear_tablas.py`, `dataset.py`, `carga_transacciones.py`, `informe_limpieza.py`, `notebooks/exploracion_visualizacion.ipynb` | Hecho |
 | 2. Estadística y preprocesamiento | Limpieza, valores atípicos (Z-score, IQR), patrones de fraude, dataset limpio | `limpieza.py`, `notebooks/outliers_patrones_tecnicas.ipynb`, `preparacion_datos_ml.py` | Hecho |
-| 3. ML para anomalías | Isolation Forest, One-Class SVM, KMeans, DBSCAN; variables; ajuste; puntuación | `features.py`, `modelos_nosupervisados.py`, `puntuar_nosupervisados.py`, `evaluar_modelos_nosupervisados.py` | Hecho |
+| 3. ML para anomalías | Isolation Forest, One-Class SVM, KMeans, DBSCAN (y además GMM, y el supervisado HGB + GMM como referencia); variables; ajuste; puntuación | `features.py`, `modelos_nosupervisados.py`, `puntuar_nosupervisados.py`, `entrenar_modelo_supervisado.py`, `puntuar_modelo_supervisado.py`, `evaluar_modelos_nosupervisados.py` | Hecho |
 | 4. Autoencoders | Red neuronal, error de reconstrucción, comparación con los clásicos | `entrenar_autoencoder.py`, `puntuar_autoencoder.py`, `evaluar_autoencoders.py`, `comparacion_modelos.py` | Hecho |
 | 5. Orquestación y despliegue | Airflow, Docker, Kubernetes, ejecuciones periódicas, reproducibilidad | `dags/`, `Dockerfile`, `docker-compose*.yml`, `k8s/`, `generar_lote.py`, `validacion_reproducibilidad_consistencia.py` | Hecho |
 | 6. Analistas y dashboards | Feedback de analistas, ajuste de umbrales, dashboards, patrones por cliente/comercio/dispositivo/hora | Feedback: `simular_analistas.py`, `integrar_feedback.py`, `recalibrar_modelo.py`, `medir_feedback.py`. Umbrales y variables: `ajustar_umbrales.py`, `config.yaml` (`reglas`, `feedback`). Dashboard: la web (`web/`) con alertas por niveles, avisos y revisión. Patrones: `notebooks/` y `resultados/` | Hecho |

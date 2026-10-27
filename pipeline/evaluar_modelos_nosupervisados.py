@@ -19,7 +19,11 @@ from artefactos import guardar, ultimo_run
 
 COLUMNA_GRUPO = 'cliente_id'   
 
-MODELOS = ['iforest', 'kmeans', 'dbscan', 'ocsvm', 'autoencoder']   # se omite el que no tenga scores
+MODELOS = ['iforest', 'kmeans', 'dbscan', 'ocsvm', 'gmm', 'autoencoder', 'hgb_gmm']   # se omite el que no tenga scores
+# Los que aprenden con etiquetas: salen en todas las tablas (marcados), pero no compiten al elegir el detector,
+# porque los demás no ven ninguna etiqueta. Son la referencia de lo que aportan los fraudes ya confirmados
+SUPERVISADOS = {'hgb_gmm'}
+SCRIPTS = {'autoencoder': 'entrenar_autoencoder.py', 'hgb_gmm': 'entrenar_modelo_supervisado.py'}
 PRESUPUESTO_PCT = 1.0
 PORCENTAJES_TOP = [0.5, 1, 2, 5, 10]
 N_BOOTSTRAP = 300
@@ -39,7 +43,7 @@ def cargar(carpeta):
     for m in MODELOS:
         rutas = {p: os.path.join(carpeta, f'{m}_scores_{p}.parquet') for p in ('val', 'test')}
         if not all(os.path.exists(r) for r in rutas.values()):
-            script = 'entrenar_autoencoder.py' if m == 'autoencoder' else f'modelos_nosupervisados.py {m}'
+            script = SCRIPTS.get(m, f'modelos_nosupervisados.py {m}')
             print(f'  {m}: sin scores en {carpeta}/, se omite (python {script})')
             continue
 
@@ -234,9 +238,15 @@ INFO_MODELOS = {
                'zona densa son ruido, y cuanto más lejos quedan, más raras'),
     'ocsvm': ('One-Class SVM',
               'dibuja una frontera alrededor de las transacciones normales y marca lo que queda fuera'),
+    'gmm': ('GMM (mezcla de gaussianas)',
+            'describe las transacciones normales como varias nubes con su propia forma y marca como '
+            'sospechosas las que son muy poco probables bajo todas ellas'),
     'autoencoder': ('Autoencoder',
                     'es una red neuronal que aprende a comprimir y reconstruir las transacciones '
                     'normales; las que reconstruye mal son las más raras'),
+    'hgb_gmm': ('HGB + GMM (supervisado)',
+                'aprende con los fraudes ya confirmados (HistGradientBoosting), usando además lo rara que '
+                'es cada transacción para su propio GMM'),
 }
 
 # Para cada tipo: (descripción, variables que YA tiene el modelo para detectarlo)
@@ -275,7 +285,34 @@ def nombre_detector(det):
     return INFO_MODELOS.get(det, (det,))[0]
 
 
-def conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resumen):
+def lineas_supervisados(f, supervisados, elegido, por_tipo):
+    """Los modelos supervisados frente al detector elegido: lo que se gana con las etiquetas."""
+    nom = nombre_detector(elegido)
+    L = ['\n## Con etiquetas: el modelo supervisado']
+    for m in supervisados:
+        s, e = f.loc[m], f.loc[elegido]
+        L.append(f'- {INFO_MODELOS[m][0]} {INFO_MODELOS[m][1]}.')
+        L.append(f'- Saca una PR-AUC de {s["PR-AUC"]:.2f} en test (frente a {e["PR-AUC"]:.2f} de {nom}) y, '
+                 f'revisando el {PRESUPUESTO_PCT:g} %, encuentra el {s["pres_recall_%"]:.0f} % del fraude '
+                 f'(frente al {e["pres_recall_%"]:.0f} %).')
+        if len(por_tipo) and m in por_tipo:
+            ventaja = (por_tipo[m] - por_tipo[elegido])
+            mejor_en = ventaja[ventaja >= 10].index.tolist()
+            if mejor_en:
+                L.append(f'- Donde más gana es en {lista(mejor_en)}: tipos que ya había visto confirmados al entrenar.')
+            if TIPO_DESCONOCIDO in por_tipo.index:
+                L.append(f'- En {TIPO_DESCONOCIDO}, el fraude que nadie había visto, encuentra el '
+                         f'{por_tipo.loc[TIPO_DESCONOCIDO, m]:.0f} % (el elegido, el '
+                         f'{por_tipo.loc[TIPO_DESCONOCIDO, elegido]:.0f} %): lo que no está en las etiquetas, '
+                         f'un modelo supervisado solo lo ve por lo raro que es.')
+    L.append('- No compite al elegir el detector: aprende de los fraudes confirmados y los demás no ven ninguna '
+             'etiqueta. Es la referencia de lo que aportan las etiquetas. En el sistema, ese papel lo hace el '
+             'recalibrado semanal, que aprende igual de las etiquetas, encima de los detectores, y se pone al día '
+             'cada semana con lo que confirman el banco y los analistas.')
+    return L
+
+
+def conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resumen, supervisados=()):
     f = tabla.set_index('detector')
     e = f.loc[elegido]
     nom = nombre_detector(elegido)
@@ -371,6 +408,9 @@ def conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resume
         L.append(f'- Ojo: en validación empata con {lista(nombre_detector(x) for x in empatan)}. '
                  f'La ventaja sobre el resto es pequeña y, con solo 26 fraudes confirmados, '
                  f'no es concluyente.')
+
+    if supervisados:
+        L.extend(lineas_supervisados(f, supervisados, elegido, por_tipo))
 
     if len(por_tipo):
         L.append('\n## Qué fraudes detecta y cuáles no')
@@ -471,29 +511,36 @@ def main():
     os.makedirs(CARPETA_RESULTADOS, exist_ok=True)
     seccion = Secciones()
     detectores, datos = cargar(CARPETA_MODELOS)
-    simples = list(detectores)
+    todos = list(detectores)
+    simples = [m for m in todos if m not in SUPERVISADOS]          # los que compiten al elegir
+    supervisados = [m for m in todos if m in SUPERVISADOS]
+    if not simples:
+        raise SystemExit('No hay ningún modelo no supervisado entrenado: no se puede elegir el detector')
 
     filas = [evaluar_detector(n, d, datos) for n, d in detectores.items()]
     tabla = pd.DataFrame(filas).sort_values('PR-AUC_val', ascending=False).reset_index(drop=True)
-    elegido = tabla.loc[0, 'detector']
+    elegido = tabla.loc[tabla['detector'].isin(simples), 'detector'].iloc[0]
 
-    aps = ap_bootstrap(datos['y_test'], [detectores[n]['test'] for n in simples],
+    aps = ap_bootstrap(datos['y_test'], [detectores[n]['test'] for n in todos],
                        N_BOOTSTRAP, datos['grupo_test'])
     inf, sup = np.percentile(aps, [2.5, 97.5], axis=0)
-    tabla = tabla.merge(pd.DataFrame({'detector': simples, 'IC95_inf': inf, 'IC95_sup': sup}),
+    tabla = tabla.merge(pd.DataFrame({'detector': todos, 'IC95_inf': inf, 'IC95_sup': sup}),
                         on='detector', how='left')
     tabla.insert(1, 'elegido', np.where(tabla['detector'] == elegido, '<--', ''))
+    tabla.insert(2, 'tipo', np.where(tabla['detector'].isin(SUPERVISADOS), 'supervisado', 'no supervisado'))
     tabla.round(4).to_csv(os.path.join(CARPETA_RESULTADOS, 'comparativa_test.csv'), index=False)
 
     seccion('CALIDAD DEL RANKING EN TEST   (modelos ordenados por PR-AUC de validación)')
-    cols = ['detector', 'elegido', 'PR-AUC_val', 'PR-AUC', 'IC95_inf', 'IC95_sup', 'ROC-AUC', 'lift']
+    cols = ['detector', 'elegido', 'tipo', 'PR-AUC_val', 'PR-AUC', 'IC95_inf', 'IC95_sup', 'ROC-AUC', 'lift']
     print(tabla[cols].round(3).to_string(index=False))
     print(f'  Base rate test: {datos["y_test"].mean():.4f} (PR-AUC de un score aleatorio).')
-    print(f'  El modelo elegido es "{elegido}": mejor PR-AUC en validación.')
+    print(f'  El modelo elegido es "{elegido}": mejor PR-AUC en validación de los no supervisados'
+          + (f' ({", ".join(supervisados)} aprende con etiquetas: no compite)' if supervisados else '') + '.')
 
     seccion('¿EL ELEGIDO GANA DE VERDAD?   (bootstrap pareado en validación, '
             'dif = PR-AUC elegido - PR-AUC fila)')
-    eleccion = bootstrap_eleccion(tabla, detectores, datos, N_BOOTSTRAP)
+    eleccion = bootstrap_eleccion(tabla[tabla['detector'].isin(simples)].reset_index(drop=True),
+                                  detectores, datos, N_BOOTSTRAP)
     print(eleccion.round(4).to_string(index=False))
     eleccion.round(4).to_csv(os.path.join(CARPETA_RESULTADOS, 'bootstrap_eleccion_val.csv'),
                              index=False)
@@ -512,7 +559,7 @@ def main():
         print(f'\n  AVISO de deriva: marcan en test lejos del {PRESUPUESTO_PCT:g} % previsto -> '
               + ', '.join(f'{n} ({v:.2f} %)' for n, v in fuera.items()))
 
-    marcas = {n: detectores[n]['marca_presupuesto'] for n in simples}
+    marcas = {n: detectores[n]['marca_presupuesto'] for n in todos}
     seccion(f'RECALL % POR TIPO DE FRAUDE (presupuesto {PRESUPUESTO_PCT:g} %; elegido: {elegido})')
     por_tipo = recall_por_tipo(marcas, datos)
     print(por_tipo.to_string())
@@ -539,7 +586,7 @@ def main():
             run_id = ultimo_run()
 
     seccion('CONCLUSIONES')
-    lineas = conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resumen)
+    lineas = conclusiones(tabla, eleccion, simples, elegido, datos, por_tipo, top, resumen, supervisados)
     print('\n'.join(lineas))
     with open(os.path.join(CARPETA_RESULTADOS, 'conclusiones.md'), 'w', encoding='utf-8') as fh:
         fh.write('# Conclusiones: detección de anomalías con modelos no supervisados\n\n')

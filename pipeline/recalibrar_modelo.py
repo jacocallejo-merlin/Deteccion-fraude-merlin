@@ -159,8 +159,11 @@ def matriz(df, extra=None, quitar=()):
     escalador = joblib.load(CARPETA_DATOS / 'escalador.joblib')
     with contextlib.redirect_stdout(io.StringIO()):     # sus mensajes se repetirían cada día
         X, info = preparar_features(df, escalador)
-    for nombre in DETECTORES:
-        X[f'pct_{nombre}'] = percentil(puntuar_detector(nombre, X), cargar_referencia(nombre))
+    # Primero se puntúa con todos los detectores y luego se añaden sus percentiles: cada detector tiene que ver
+    # solo las 36 variables con que se entrenó, no los percentiles de los detectores anteriores
+    pcts = {nombre: percentil(puntuar_detector(nombre, X), cargar_referencia(nombre)) for nombre in DETECTORES}
+    for nombre, pct in pcts.items():
+        X[f'pct_{nombre}'] = pct
     for variable in VARIABLES_EXTRA if extra is None else extra:
         X[variable] = df[variable].to_numpy(dtype=float)
     return X.drop(columns=list(quitar)), info
