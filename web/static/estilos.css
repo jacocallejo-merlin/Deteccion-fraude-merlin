@@ -95,36 +95,30 @@ code { font-size: .92em; background: var(--resalte); padding: 1px 5px; border-ra
 .panel-pie { display: block; width: 100%; padding: 11px; text-align: center; border-top: 1px solid var(--linea); }
 
 /* ============================================================ el parte de la noche */
-.parte { max-width: var(--ancho); margin: 0 auto; padding: 36px 24px 26px; }
-.parte-fecha { margin: 0 0 10px; color: var(--sobre-noche-suave); }
-.parte-titulo {
-  margin: 0 0 30px; font-size: clamp(30px, 4.4vw, 52px); line-height: 1.06; font-weight: 650;
-  letter-spacing: -.022em; color: var(--blanco);
-}
-.parte-titulo span { display: block; }
-.parte-titulo .segunda { color: var(--sobre-noche-suave); }
+/* Corto a propósito: qué día es, cuántos casos esperan y por dónde empezar. Lo importante va debajo, en los
+   recuadros de casos */
+.parte { max-width: var(--ancho); margin: 0 auto; padding: 26px 24px 30px;
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: 20px 40px; }
+.parte-fecha { margin: 0 0 6px; color: var(--sobre-noche-suave); }
+.parte-titulo { margin: 0; font-size: clamp(26px, 3.2vw, 38px); line-height: 1.1; font-weight: 650;
+  letter-spacing: -.02em; color: var(--blanco); }
+.parte-guia { margin: 8px 0 0; color: var(--sobre-noche); max-width: 60ch; }
+.parte-guia:empty { display: none; }
 
-/* El día en una línea: cada barra es un pago, de menos a más riesgo */
-.dia { height: 112px; }
-.dia svg { display: block; width: 100%; height: 100%; overflow: visible; }
-.dia rect { fill: rgba(233, 238, 236, .24); transform-box: fill-box; transform-origin: 50% 100%;
-  animation: crecer .7s cubic-bezier(.2, .7, .2, 1) both; animation-delay: calc(var(--i) * .9ms); }
-.dia rect.critico, .dia rect.alto { cursor: pointer; animation: crecer .7s cubic-bezier(.2, .7, .2, 1) both,
-  encender .5s ease-out both; animation-delay: calc(var(--i) * .9ms), .95s; }
-.dia rect.critico { fill: var(--alarma); }
-.dia rect.alto { fill: var(--ambar); }
-.dia rect.critico:hover, .dia rect.alto:hover, .dia rect:focus-visible { fill: var(--blanco); outline: none; }
-.dia-vacio { margin: 0; padding-top: 70px; color: var(--sobre-noche-suave); }
-@keyframes crecer { from { transform: scaleY(0); } }
-@keyframes encender { from { fill: rgba(233, 238, 236, .24); } }
+/* Las tres cifras: pagos revisados y casos por resolver de cada nivel (estas llevan a su recuadro) */
+.parte-cifras { display: flex; gap: 10px; }
+.parte-cifra { display: flex; flex-direction: column; min-width: 128px; padding: 12px 16px 13px;
+  border: 1px solid var(--linea-noche); border-radius: var(--radio); color: var(--sobre-noche); text-decoration: none; }
+a.parte-cifra:hover { border-color: var(--sobre-noche-suave); background: rgba(233, 238, 236, .05); }
+.parte-num { font-size: 30px; font-weight: 700; line-height: 1.1; color: var(--blanco); }
+.parte-cifra.critico { border-top: 3px solid var(--alarma); }
+.parte-cifra.alto { border-top: 3px solid var(--ambar); }
+.parte-que { font-size: 13px; color: var(--sobre-noche-suave); }
+.parte-extra { margin-top: 2px; font-size: 13px; font-weight: 600; color: var(--sobre-noche); }
 
-.dia-ejes { display: flex; justify-content: space-between; gap: 12px; margin-top: 10px; padding-top: 9px;
-  border-top: 1px solid var(--linea-noche); color: var(--sobre-noche-suave); font-size: 13px; }
-.leyenda { display: flex; align-items: center; gap: 6px; }
-.leyenda .mas { margin-left: 14px; }
 .cuadro { display: inline-block; width: 9px; height: 9px; border-radius: 2px; background: var(--suave); }
 .cuadro.critico { background: var(--alarma); }
-.cuadro.alto { background: var(--ambar); margin-left: 8px; }
+.cuadro.alto { background: var(--ambar); }
 .cuadro.medio { background: var(--medio); }
 
 /* ============================================================ zona de trabajo (papel) */
@@ -140,14 +134,55 @@ main { max-width: var(--ancho); margin: 0 auto; padding: 26px 24px 56px; }
 }
 .herramientas select { cursor: pointer; }
 .buscador { flex: 1 1 340px; max-width: 560px; }
-.en-riesgo { margin: 0; color: var(--suave); }
-.en-riesgo b { color: var(--tinta); font-weight: 650; }
+/* Los filtros de la lista de casos, plegados: casi nunca hacen falta */
+.filtrar { margin-left: auto; }
+.filtrar summary { cursor: pointer; color: var(--suave); padding: 7px 4px; list-style-position: inside; }
+.filtrar summary:hover { color: var(--tinta); }
+.filtrar[open] summary { margin-bottom: 8px; }
+.filtrar .selects { margin-left: 0; }
 
 .segmentos { display: inline-flex; border: 1px solid var(--linea); border-radius: var(--radio); overflow: hidden;
   background: var(--blanco); }
 .segmentos button { border: 0; background: none; padding: 7px 14px; cursor: pointer; color: var(--suave); }
 .segmentos button + button { border-left: 1px solid var(--linea); }
 .segmentos button.activa { background: var(--tinta); color: var(--blanco); }
+
+/* ------------------------------------------------------------ casos por resolver: un recuadro por nivel */
+.caja { padding: 18px 20px 20px; border: 1px solid var(--linea); border-top: 4px solid var(--medio);
+  border-radius: var(--radio); background: var(--blanco); scroll-margin-top: 16px; }
+.caja + .caja { margin-top: 22px; }
+.caja.critico { border-top-color: var(--alarma); background: #FDF4F2; }
+.caja.alto { border-top-color: var(--ambar); background: #FDF8EF; }
+.caja-cabecera { margin-bottom: 14px; }
+.caja-cabecera h2 { margin: 0; font-size: 21px; font-weight: 650; display: flex; align-items: center; gap: 10px;
+  flex-wrap: wrap; }
+.caja-cabecera .cuadro { width: 11px; height: 11px; }
+.caja-num { font-size: 15px; font-weight: 500; color: var(--suave); }
+.caja-total { margin-left: auto; font-size: 17px; font-weight: 650; }
+.caja-guia { margin: 4px 0 0; color: var(--suave); }
+.caja-guia b { color: var(--tinta); font-weight: 650; }
+.caja.critico .caja-guia b { color: var(--alarma); }
+.caja.alto .caja-guia b { color: var(--ambar-texto); }
+.caja-vacia { margin: 0; color: var(--suave); }
+
+/* Cada caso, una tarjeta que se pulsa para abrirlo */
+.tarjetas-casos { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 12px; }
+.tarjeta-caso { display: flex; flex-direction: column; gap: 6px; padding: 14px 14px 12px; cursor: pointer;
+  background: var(--blanco); border: 1px solid var(--linea); border-left: 4px solid var(--medio);
+  border-radius: var(--radio); transition: border-color .15s ease, box-shadow .15s ease; }
+.tarjeta-caso.critico { border-left-color: var(--alarma); }
+.tarjeta-caso.alto { border-left-color: var(--ambar); }
+.tarjeta-caso:hover { border-color: var(--suave); box-shadow: 0 4px 14px rgba(15, 34, 41, .08); }
+.tarjeta-caso.critico:hover { border-left-color: var(--alarma); }
+.tarjeta-caso.alto:hover { border-left-color: var(--ambar); }
+.tc-cabeza { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; }
+.tc-motivo { margin: 0; font-weight: 600; line-height: 1.35; }
+.tc-motivo .sub { font-weight: 400; }
+.tc-donde { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tc-pie { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 6px; }
+.tc-abrir { margin-left: auto; padding: 4px 12px; border-radius: 14px; background: var(--tinta); color: var(--blanco);
+  font-size: 13px; font-weight: 600; }
+.tarjeta-caso.critico .tc-abrir { background: var(--alarma); }
 
 /* ------------------------------------------------------------ registro de casos */
 .grupo + .grupo { margin-top: 34px; }
@@ -272,49 +307,70 @@ tr.clicable:hover td { background: var(--resalte); }
 .cerrar { border: 0; background: none; font-size: 30px; line-height: 1; cursor: pointer; color: var(--suave);
   border-radius: var(--radio); padding: 0 6px; }
 .cerrar:hover { color: var(--tinta); }
-.ficha-cuerpo { padding: 22px 24px 40px; overflow-y: auto; }
-.ficha-cuerpo h3 { margin: 28px 0 8px; font-size: 16px; font-weight: 650; }
+.ficha-cuerpo { flex: 1; min-height: 0; padding: 22px 24px 32px; overflow-y: auto; }
+.ficha-cuerpo h3 { margin: 0 0 10px; font-size: 17px; font-weight: 650; }
+.ficha-bloque { margin-top: 28px; }
 
-/* La decisión, lo primero que se lee */
-.decision-principal { padding: 2px 0 18px 16px; border-left: 4px solid var(--medio); }
-.decision-principal.critico { border-left-color: var(--alarma); }
-.decision-principal.alto { border-left-color: var(--ambar); }
+/* 1. La decisión, lo primero que se lee */
+.decision-principal { padding: 16px 18px; border-radius: var(--radio); background: var(--blanco);
+  border: 1px solid var(--linea); border-left: 5px solid var(--medio); }
+.decision-principal.critico { border-left-color: var(--alarma); background: #FDF4F2; }
+.decision-principal.alto { border-left-color: var(--ambar); background: #FDF8EF; }
 .decision-principal.fraude { border-left-color: var(--alarma); }
 .decision-principal.legitima { border-left-color: var(--vigia); }
 .decision-principal.sin_incidencia { border-left-color: var(--linea); }
 .decision-principal .que { margin: 0; color: var(--suave); font-size: 14px; }
-.decision-principal h3 { margin: 2px 0 6px; font-size: 30px; line-height: 1.1; letter-spacing: -.02em; font-weight: 650; }
-.decision-principal p { margin: 0 0 6px; max-width: 62ch; }
+.decision-principal h3 { margin: 2px 0 6px; font-size: 28px; line-height: 1.1; letter-spacing: -.02em; font-weight: 650; }
+.decision-principal.critico h3 { color: var(--alarma); }
+.decision-principal.alto h3 { color: var(--ambar-texto); }
+.decision-principal p { margin: 0 0 4px; max-width: 62ch; }
+.decision-principal .probabilidad { margin-top: 8px; font-weight: 600; }
 
-.datos { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 6px 0 0;
-  border-top: 1px solid var(--linea); border-bottom: 1px solid var(--linea); }
-.datos div { padding: 11px 12px 11px 0; }
-.datos div + div { padding-left: 12px; border-left: 1px solid var(--linea); }
-.datos dt { color: var(--suave); font-size: 13px; }
-.datos dd { margin: 2px 0 0; font-weight: 600; }
-.datos dd .sub { display: block; font-weight: 400; }
+/* 2. Por qué es sospechoso: las reglas, con su explicación */
+.motivos { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.motivos li { position: relative; padding-left: 20px; line-height: 1.4; }
+.motivos li::before { content: ''; position: absolute; left: 2px; top: .5em; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--ambar); }
+.motivos li .sub { display: block; font-size: 14px; }
 
-.revision { margin-top: 22px; padding: 16px; background: var(--blanco); border: 1px solid var(--linea);
-  border-radius: var(--radio); }
-.revision h3 { margin: 0 0 4px; }
-.revision > p { margin: 0 0 10px; color: var(--suave); font-size: 14px; max-width: 64ch; }
-.revision textarea { width: 100%; min-height: 58px; resize: vertical; border: 1px solid var(--linea);
-  border-radius: var(--radio); padding: 8px 10px; margin-bottom: 10px; background: var(--papel); }
-.botones { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-.botones .sub { margin-left: 4px; }
-
-.pago { padding: 12px 0 12px 14px; border-bottom: 1px solid var(--linea); border-left: 3px solid transparent; }
+/* 3. Los pagos */
+.pago { padding: 12px 14px; margin-bottom: 8px; background: var(--blanco); border: 1px solid var(--linea);
+  border-left: 4px solid var(--linea); border-radius: var(--radio); }
 .pago.critico { border-left-color: var(--alarma); }
 .pago.alto { border-left-color: var(--ambar); }
 .pago.medio { border-left-color: var(--medio); }
-.pago-cab { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
-.pago-cab p { margin: 2px 0 0; }
-.pago-der { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.pago-der .pills { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; }
-.pago ul { margin: 8px 0 2px; padding-left: 18px; }
-.pago li { margin: 1px 0; }
-.pago .nota-pago { margin: 6px 0 0; color: var(--suave); font-size: 13px; }
-.pago .botones { margin-top: 8px; }
+.pago-cab { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+.pago > p { margin: 4px 0 0; }
+.pago .nota-pago { margin: 8px 0 0; font-size: 14px; color: var(--suave); }
+.pago .nota-pago.fraude { color: var(--alarma); }
+.pago .nota-pago.legitima { color: var(--vigia); }
+
+/* 4. El titular */
+.titular { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 18px; margin: 0; }
+.titular dt { color: var(--suave); }
+.titular dd { margin: 0; font-weight: 500; }
+
+/* 5. Lo plegado: más pagos, el historial y el comentario */
+.desplegable { margin-top: 10px; }
+.desplegable summary { cursor: pointer; color: var(--vigia); font-weight: 600; padding: 4px 0; }
+.desplegable[open] summary { margin-bottom: 8px; }
+.historial { width: 100%; border-collapse: collapse; font-size: 14px; }
+.historial td { padding: 7px 8px 7px 0; border-bottom: 1px solid var(--linea); }
+.historial td.num { text-align: right; white-space: nowrap; }
+
+.botones { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.botones .sub { margin-left: 4px; }
+
+/* 6. La pregunta, fija abajo */
+.ficha-pie { padding: 14px 24px 18px; background: var(--blanco); border-top: 1px solid var(--linea);
+  box-shadow: 0 -6px 18px rgba(15, 34, 41, .06); }
+.pie-pregunta { margin: 0; }
+.pie-pregunta b { display: block; font-size: 18px; }
+.ficha-pie .desplegable { margin-top: 4px; }
+.ficha-pie textarea { width: 100%; min-height: 58px; resize: vertical; border: 1px solid var(--linea);
+  border-radius: var(--radio); padding: 8px 10px; background: var(--papel); }
+.ficha-pie .botones { margin-top: 10px; align-items: stretch; }
+.ficha-pie .boton { flex: 1; padding: 12px 16px; font-size: 16px; }
 
 /* ============================================================ botones y otros */
 .boton { border-radius: var(--radio); padding: 8px 14px; cursor: pointer; font-weight: 600;
@@ -344,6 +400,7 @@ footer { max-width: var(--ancho); margin: 0 auto; padding: 18px 24px 30px; borde
 @media (max-width: 980px) {
   .barra { flex-wrap: wrap; gap: 12px 20px; }
   .pestanas { order: 3; width: 100%; }
+  .parte { grid-template-columns: minmax(0, 1fr); }
   .fila-caso {
     grid-template-columns: 4px minmax(0, 1fr) auto;
     grid-template-areas: "m t im" "m mo mo" "m cu ac";
@@ -356,12 +413,18 @@ footer { max-width: var(--ancho); margin: 0 auto; padding: 18px 24px 30px; borde
   .barra, .parte, main, footer { padding-left: 16px; padding-right: 16px; }
   .controles { width: 100%; margin-left: 0; }
   .controles select { flex: 1; min-width: 0; max-width: none; }
-  .parte { padding-top: 22px; }
-  .dia { height: 84px; }
-  .leyenda .mas { display: none; }
+  .parte { padding-top: 20px; grid-template-columns: minmax(0, 1fr); }
+  .parte-cifras { width: 100%; display: grid; grid-template-columns: 1fr 1fr; }
+  .parte-cifra { min-width: 0; padding: 10px 12px; }
+  .caja-total { margin-left: 0; width: 100%; font-size: 15px; }
+  .parte-num { font-size: 24px; }
+  .caja { padding: 16px 14px; }
+  .ficha-cuerpo, .ficha-pie { padding-left: 16px; padding-right: 16px; }
+  .ficha-pie { padding-top: 12px; padding-bottom: 14px; }
+  .pie-pregunta .sub { display: none; }          /* en el móvil, solo la pregunta y los botones */
+  .ficha-pie .boton { padding: 10px 8px; font-size: 15px; }
+  .filtrar { margin-left: 0; }
   .selects { margin-left: 0; }
-  .datos { grid-template-columns: minmax(0, 1fr); }
-  .datos div + div { padding-left: 0; border-left: 0; border-top: 1px solid var(--linea); }
   .panel-avisos { width: calc(100vw - 32px); right: -48px; }
   .cifra + .cifra { padding-left: 0; border-left: 0; }
   .cifra { border-bottom: 1px solid var(--linea); }

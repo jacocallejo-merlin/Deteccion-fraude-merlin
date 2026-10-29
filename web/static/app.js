@@ -29,7 +29,7 @@ const guardar = (clave, valor) => { try { localStorage.setItem(clave, valor); } 
 const estado = {
   pestana: 'alertas', comercio: leer('comercio', '0'), filtroEstado: 'pendientes', filtroAvisos: 'no_leidos',
   usuario: '', demo: leer('demo', '0') === '1', comercios: {},
-  noLeidos: null, caso: null, niveles: ['critico', 'alto'],
+  noLeidos: null, caso: null, niveles: ['critico', 'alto'], alertas: null,
   ordenAlertas: leer('ordenAlertas', 'riesgo'), ordenTransacciones: leer('ordenTransacciones', 'reciente'),
 };
 const graficas = {};
@@ -123,49 +123,74 @@ async function cargarContexto() {
 }
 
 // ------------------------------------------------------------------------------ el parte de la noche
-function pintarParte(r, d) {
-  const criticos = r.por_nivel.critico || 0;
-  const altos = r.por_nivel.alto || 0;
+// Arriba, solo lo esencial: lo revisado esta noche, cuántos casos de cada nivel esperan una decisión y por
+// dónde empezar. Las cifras de cada nivel llevan a su recuadro
+function pintarParte(r, d, casos) {
+  const quien = comercio() === '0' ? '' : ` de ${nombreComercio()}`;
+  const graves = estado.niveles.filter((n) => n !== 'medio');
+  const pendientes = graves.reduce((s, n) => s + (r.por_nivel[n] || 0), 0);
   document.getElementById('parte-fecha').textContent =
     capital(fecha(d.dia).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }));
-  const quien = comercio() === '0' ? '' : ` de ${nombreComercio()}`;
-  document.getElementById('parte-revisados').textContent = d.pagos
-    ? `${plural(d.pagos, 'pago', 'pagos')}${quien} revisados esta noche.`
-    : `Esta noche no ha habido pagos${quien}.`;
-  const partes = [criticos && plural(criticos, 'crítico', 'críticos'), altos && plural(altos, 'alto', 'altos')].filter(Boolean);
-  document.getElementById('parte-pendientes').textContent = partes.length
-    ? `${partes.join(' y ')} ${criticos + altos === 1 ? 'espera' : 'esperan'} una decisión.`
-    : 'Nada espera una decisión.';
-  pintarDia(d);
+  document.getElementById('parte-titulo').textContent = pendientes
+    ? `${plural(pendientes, 'caso necesita', 'casos necesitan')} tu decisión`
+    : 'Todo en orden: nada por resolver';
+  document.getElementById('parte-guia').textContent = pendientes
+    ? `Empieza por los ${r.por_nivel.critico ? 'críticos' : 'altos'}: pulsa un caso para ver qué ha pasado y decidir si es fraude.`
+    : 'Centinela ha revisado los pagos y no hay nada sospechoso pendiente. Los casos nuevos aparecerán aquí.';
+  // Los casos nuevos de esta noche, de cada nivel (se saben con la lista de los que están por resolver)
+  const nuevos = (n) => (casos ? casos.filter((c) => c.nivel === n && c.dia === d.dia).length : 0);
+  const cifra = (valor, texto, extra = '', clase = '', destino = '') => {
+    const etiqueta = destino ? 'a' : 'div';
+    return `<${etiqueta} class="parte-cifra ${clase}"${destino ? ` href="#${destino}"` : ''}>
+      <span class="parte-num">${valor}</span><span class="parte-que">${texto}</span>${extra ? `<span class="parte-extra">${extra}</span>` : ''}</${etiqueta}>`;
+  };
+  document.getElementById('parte-cifras').innerHTML = [
+    cifra(num(d.pagos), `pagos${quien} revisados esta noche`),
+    ...graves.map((n) => cifra(num(r.por_nivel[n] || 0), `${NIVEL_PLURAL[n]} por resolver`,
+      nuevos(n) ? plural(nuevos(n), 'nuevo hoy', 'nuevos hoy') : '', n, casos ? `caja-${n}` : '')),
+    cifra(eur(r.importe_en_riesgo), 'en juego en los casos por resolver', '', 'dinero'),
+  ].join('');
 }
 
-// El día en una línea: una barra por pago, de menos a más riesgo; las alertas, en su color
-function pintarDia(d) {
-  const cont = document.getElementById('dia');
-  document.getElementById('dia-ejes').hidden = !d.barras.length;
-  if (!d.barras.length) { cont.innerHTML = ''; return; }
-  // Cada pago ocupa un hueco; los que tienen alerta, ANCHO_ALERTA huecos, para que se vean y se puedan
-  // pulsar. Con pocos pagos (vista de un comercio) las barras no se ensanchan: se pegan a la derecha
-  const ANCHO_ALERTA = 5;
-  const anchos = d.barras.map(([, prioridad]) => (prioridad >= 2 ? ANCHO_ALERTA : 1));
-  const usados = anchos.reduce((s, a) => s + a, 0);
-  const huecos = Math.max(usados, 160);
-  let x = huecos - usados;
-  const barras = d.barras.map(([h, prioridad, metodo, importe], i) => {
-    const alto = 4 + h * 96;
-    const nivel = prioridad >= 2 ? NIVEL_DE[prioridad] : '';
-    const ancho = anchos[i];
-    const atributos = nivel
-      ? ` class="${nivel}" data-metodo="${metodo}" data-dia="${d.dia}" tabindex="0" role="button" aria-label="${NIVEL_TEXTO[nivel]}, ${eur(importe)}. Abrir el caso"`
-      : '';
-    const rect = `<rect x="${x + ancho * 0.16}" y="${100 - alto}" width="${ancho * 0.68}" height="${alto}" style="--i:${i}"${atributos}>`
-      + `${nivel ? `<title>${NIVEL_TEXTO[nivel]}, ${eur(importe)}</title>` : ''}</rect>`;
-    x += ancho;
-    return rect;
-  }).join('');
-  const n = d.barras.filter(([, p]) => p >= 2).length;
-  cont.innerHTML = `<svg viewBox="0 0 ${huecos} 100" preserveAspectRatio="none" role="img"
-    aria-label="Los ${num(d.pagos)} pagos del día ordenados de menos a más riesgo; ${plural(n, 'tiene', 'tienen')} alerta">${barras}</svg>`;
+// ------------------------------------------------------------------------------ casos por resolver
+// Un recuadro por nivel, del más grave al menos, con qué hacer y cada caso como una tarjeta que se pulsa.
+// Salen todos los casos, sin recortar: todos piden una decisión
+const PRIORIDAD = { critico: 3, alto: 2, medio: 1 };
+
+function tarjetaCaso(c) {
+  const donde = c.comercios.length === 1 ? c.comercios[0] : `${c.comercios.length} comercios`;
+  const resto = c.motivos.length - 1;
+  return `<div class="tarjeta-caso ${c.nivel}" role="button" tabindex="0" data-metodo="${c.metodo_id}" data-dia="${c.dia}"
+      aria-label="Caso ${NIVEL_TEXTO[c.nivel].toLowerCase()}, tarjeta acabada en ${esc(String(c.tarjeta).slice(-4))}, ${eur(c.importe)}. Abrir el caso">
+    <div class="tc-cabeza"><span class="tarjeta-num">${tarjeta(c.tarjeta)}</span><span class="importe">${eur(c.importe)}</span></div>
+    <p class="tc-motivo">${esc(c.motivos[0])}${resto > 0 ? `<span class="sub"> y ${plural(resto, 'motivo más', 'motivos más')}</span>` : ''}</p>
+    <p class="sub tc-donde">${plural(c.transacciones, 'pago', 'pagos')} en ${esc(donde)}</p>
+    <div class="tc-pie"><span class="sub">${diaCorto(c.dia)}, ${hora(c.desde)}</span>${realPill(c.real)}<span class="tc-abrir">Revisar</span></div>
+  </div>`;
+}
+
+function cajaNivel(n, casos, r) {
+  const p = r.probabilidad[n].prob;
+  const guia = p == null ? '' : p >= 0.1 ? ` De cada 10 casos así, ${sobreDiez(p)} acaban siendo fraude.`
+    : ` Solo ${proporcion(p)} casos así acaba siendo fraude.`;
+  const total = casos.reduce((s, c) => s + c.importe, 0);
+  return `<section class="caja ${n}" id="caja-${n}" aria-labelledby="caja-titulo-${n}">
+    <div class="caja-cabecera">
+      <h2 id="caja-titulo-${n}"><span class="cuadro ${n}" aria-hidden="true"></span>${NIVEL_GRUPO[n]}
+        <span class="caja-num">${casos.length ? `${num(casos.length)} por resolver` : 'ninguno por resolver'}</span>
+        ${casos.length ? `<span class="caja-total">${eur(total)} en total</span>` : ''}</h2>
+      ${casos.length ? `<p class="caja-guia"><b>Qué hacer: ${esc(r.acciones[n].toLowerCase())}.</b>${guia}</p>` : ''}
+    </div>
+    ${casos.length ? `<div class="tarjetas-casos">${casos.map(tarjetaCaso).join('')}</div>`
+      : `<p class="caja-vacia">No hay casos ${NIVEL_PLURAL[n]} pendientes.</p>`}
+  </section>`;
+}
+
+function pintarCajas() {
+  const { casos, resumen } = estado.alertas;
+  const minimo = Number(document.getElementById('filtro-nivel').value);
+  document.getElementById('lista-casos').innerHTML = estado.niveles.filter((n) => PRIORIDAD[n] >= minimo)
+    .map((n) => cajaNivel(n, casos.filter((c) => c.nivel === n), resumen)).join('');
 }
 
 // ------------------------------------------------------------------------------ registro de casos
@@ -210,16 +235,19 @@ async function cargarAlertas() {
     api('/api/dia', { comercio: comercio() }),
   ]);
   const r = datos.resumen;
-  pintarParte(r, dia);
+  const porResolver = estado.filtroEstado === 'pendientes';
+  pintarParte(r, dia, porResolver ? datos.casos : null);
   document.getElementById('nav-pendientes').textContent = (r.por_nivel.critico + r.por_nivel.alto) || '';
-  document.getElementById('en-riesgo').innerHTML = r.importe_en_riesgo
-    ? `<b>${eur(r.importe_en_riesgo)}</b> en casos por resolver` : '';
+  // Por resolver: un recuadro por nivel. Cerrados o todos: el registro de siempre, en filas
+  if (porResolver) {
+    estado.alertas = datos;
+    pintarCajas();
+    return;
+  }
   const periodo = dias === '0' ? 'desde el inicio' : `en ${dias} días`;
   const lista = document.getElementById('lista-casos');
   if (!datos.casos.length) {
-    lista.innerHTML = estado.filtroEstado === 'pendientes'
-      ? '<div class="vacio"><b>Nada por resolver</b><p>Los casos nuevos aparecerán aquí cuando Centinela revise los pagos de esta noche.</p></div>'
-      : '<div class="vacio"><b>No hay casos con estos filtros</b><p>Prueba con otro periodo o con otro nivel.</p></div>';
+    lista.innerHTML = '<div class="vacio"><b>No hay casos con estos filtros</b><p>Prueba con otro periodo o con otro nivel.</p></div>';
     return;
   }
   // Ordenados por riesgo, los casos van por niveles; en los demás órdenes, en una sola lista
@@ -234,27 +262,47 @@ async function cargarAlertas() {
 }
 
 // ------------------------------------------------------------------------------ ficha del caso
-function tarjetaPago(t, conAcciones) {
-  const detalle = [t.categoria, t.canal, t.dispositivo, t.ip_pais && `IP de ${t.ip_pais}`].filter(Boolean).join(', ');
-  const motivos = t.motivos.length ? `<ul>${t.motivos.map((m) => `<li>${esc(m)}</li>`).join('')}</ul>` : '';
-  const acciones = conAcciones && t.nivel && abierto(t.estado) ? `
-    <div class="botones">
-      <button class="boton fraude pequeno" data-revisar="fraude" data-ids="${t.transaccion_id}">Es fraude</button>
-      <button class="boton legitima pequeno" data-revisar="legitima" data-ids="${t.transaccion_id}">Es legítimo</button>
-    </div>` : '';
+// Pensada para quien no conoce Centinela: en orden, qué hacer, por qué es sospechoso, los pagos, quién es el
+// titular y cómo suele pagar. La pregunta "¿es fraude?" va fija abajo, siempre a la vista
+
+// Las reglas, explicadas en una frase (las que no estén aquí salen solo con su nombre)
+const REGLAS = {
+  'Pico de gasto anómalo': 'Gasta mucho más de lo habitual en poco tiempo.',
+  'Card testing': 'Varios pagos pequeños seguidos: es lo típico de quien prueba si una tarjeta robada funciona.',
+  'Cash-out multicomercio': 'Compras en varios comercios en poco tiempo, para sacar todo lo posible antes de que se bloquee la tarjeta.',
+  'Dispositivo nuevo de alto riesgo': 'Paga desde un dispositivo que el cliente no había usado nunca, junto con otras señales de riesgo.',
+  'IP/geolocalización sospechosa': 'La conexión viene de un sitio que no encaja con el cliente.',
+  'Account takeover': 'Alguien podría haber entrado en la cuenta del cliente: cambios de datos, intentos de acceso o un dispositivo nuevo.',
+  'Bust-out': 'La tarjeta se usaba con normalidad y de repente agota el crédito: típico de quien no piensa pagar.',
+  'Actividad tipo bot': 'Acciones demasiado rápidas para una persona: probablemente un programa automático.',
+  'Estructuración (smurfing)': 'Un importe grande repartido en varios pagos pequeños para no llamar la atención.',
+};
+const CANAL_TEXTO = { app: 'por la app', web: 'por la web', datafono: 'en tienda, con datáfono' };
+const DISPOSITIVO_TEXTO = { movil: 'desde el móvil', ordenador: 'desde un ordenador', tablet: 'desde una tableta' };
+
+function listaMotivos(motivos) {
+  return `<ul class="motivos">${motivos.map((m) => {
+    if (!m.startsWith('Regla: ')) return `<li>${esc(m)}</li>`;
+    const regla = m.slice(7);
+    return `<li><b>${esc(regla)}</b>${REGLAS[regla] ? `<span class="sub">${esc(REGLAS[regla])}</span>` : ''}</li>`;
+  }).join('')}</ul>`;
+}
+
+// Un pago, en limpio: dónde, cuánto, cuándo y cómo. Si ya está cerrado, cómo acabó
+function tarjetaPago(t) {
+  const como = [CANAL_TEXTO[t.canal] || t.canal, DISPOSITIVO_TEXTO[t.dispositivo], t.ip_pais && `con conexión desde ${t.ip_pais}`]
+    .filter(Boolean).join(', ');
+  const cerrado = t.estado && !abierto(t.estado);
   return `
     <article class="pago ${t.nivel}">
       <div class="pago-cab">
-        <div><b>${hora(t.timestamp)}, ${esc(t.comercio)}</b>
-          <p class="sub">${esc(capital(detalle))}${t.estado_pago === 'rechazada' ? '. Pago rechazado' : ''}. Pago ${t.transaccion_id}</p></div>
-        <div class="pago-der"><span class="importe">${eur(t.importe)}</span>
-          <span class="pills">${nivelPill(t.nivel)}${estadoPill(t.estado, t.estado_detalle)}${realPill(t.real)}</span>
-          ${puesto(t.percentil) ? `<span class="sub">${puesto(t.percentil)}</span>` : ''}</div>
+        <div><b>${esc(t.comercio)}</b>${t.categoria ? `<span class="sub"> ${esc(capital(t.categoria))}</span>` : ''}</div>
+        <span class="importe">${eur(t.importe)}</span>
       </div>
-      ${motivos}
+      <p class="sub">A las ${hora(t.timestamp)}, ${esc(como)}.${t.estado_pago === 'rechazada' ? ' El pago fue rechazado.' : ''}
+        Pago nº ${t.transaccion_id}. ${realPill(t.real)}</p>
+      ${cerrado ? `<p class="nota-pago ${t.estado}">${RESULTADO[t.estado]}: ${esc(t.estado_detalle)}.</p>` : ''}
       ${t.comentario ? `<p class="nota-pago">Comentario: ${esc(t.comentario)}</p>` : ''}
-      ${t.estado && !abierto(t.estado) ? `<p class="nota-pago">${esc(capital(t.estado_detalle))}.</p>` : ''}
-      ${acciones}
     </article>`;
 }
 
@@ -266,38 +314,65 @@ function bloqueDecision(c) {
       <p class="que">Caso cerrado</p><h3>${RESULTADO[c.estado]}</h3>
       <p>${esc(capital(c.estado_detalle))}.</p></section>`;
   }
-  const p = c.probabilidad;
+  const p = c.probabilidad.prob;
+  const guia = p == null ? '' : p >= 0.1 ? `De cada 10 casos como este, ${sobreDiez(p)} acaban siendo fraude.`
+    : `Solo ${proporcion(p)} casos como este acaba siendo fraude.`;
   return `<section class="decision-principal ${c.nivel}">
     <p class="que">Qué hacer</p><h3>${esc(c.accion.corta)}</h3>
     <p>${esc(c.accion.texto)}</p>
-    ${p.prob != null ? `<p class="sub">De los casos ${NIVEL_PLURAL[c.nivel]} ya cerrados, ${fraseFraude(p.prob)}
-      (${pct(p.prob)} de ${num(p.casos)}).</p>` : ''}</section>`;
+    ${guia ? `<p class="probabilidad">${guia}</p>` : ''}</section>`;
 }
 
-// La entidad da el veredicto; el comercio solo aporta lo que sabe. Las dos cosas son opcionales
-function bloqueRevision(c, ids, n) {
-  const cierre = `Si nadie lo revisa, el caso se cierra solo: como fraude si llega el contracargo del banco, o sin
-    incidencia si pasan ${c.dias_cierre} días sin reclamación.`;
-  if (c.vista === 'comercio') {
-    return `<section class="revision">
-      <h3>¿Sabes algo de este caso?</h3>
-      <p>No tienes que decidir si es fraude: la entidad revisa los casos graves. ${cierre} Si tienes información,
-        ayuda a cerrarlo antes y a que Centinela aprenda.</p>
-      <textarea id="comentario" aria-label="Comentario" placeholder="Comentario, si quieres: por ejemplo, he llamado al cliente y reconoce la compra"></textarea>
+// Cómo suele pagar la tarjeta: una frase con lo normal y, plegada, la lista de sus últimos pagos
+function bloqueHistorial(c, enComercio) {
+  const h = c.historial;
+  const donde = enComercio ? ' en tu comercio' : '';
+  if (!h.length) return `<p>Es la primera vez que vemos pagos de esta tarjeta${donde}: no hay nada con qué comparar.</p>`;
+  const importes = h.map((t) => t.importe).sort((a, b) => a - b);
+  const mediana = importes[Math.floor(importes.length / 2)];
+  const conAlerta = h.filter((t) => t.nivel).length;
+  const fraudes = h.filter((t) => t.estado === 'fraude').length;
+  const cuantos = h.length >= 15 ? 'sus últimos 15 pagos' : plural(h.length, 'pago anterior', 'pagos anteriores');
+  const alertas = h.length === 1 ? (fraudes ? 'fue fraude' : conAlerta ? 'tuvo alerta' : 'no tuvo alerta')
+    : conAlerta ? `${plural(conAlerta, 'tuvo alerta', 'tuvieron alerta')}${fraudes ? ` y ${plural(fraudes, 'fue fraude', 'fueron fraude')}` : ''}`
+      : 'ninguno tuvo alerta';
+  const frase = h.length === 1 ? `Solo tiene un pago anterior${donde}, de ${eur(mediana)}, y ${alertas}.`
+    : `Normalmente paga unos <b>${eur(mediana)}</b>${donde}. De ${cuantos}, ${alertas}.`;
+  return `<p>${frase}</p>
+    <details class="desplegable"><summary>Ver ${cuantos}</summary>
+      <table class="historial"><tbody>${h.map((t) => `<tr><td>${fechaHora(t.timestamp)}</td><td>${esc(t.comercio)}</td>
+        <td class="num">${eur(t.importe)}</td><td>${t.nivel ? nivelPill(t.nivel) : ''} ${t.estado === 'fraude' ? estadoPill('fraude') : ''}</td></tr>`).join('')}
+      </tbody></table></details>`;
+}
+
+// La pregunta, fija abajo. La entidad da el veredicto; el comercio solo cuenta lo que sabe. Las dos cosas son opcionales
+function pieRevision(c, abiertas, enComercio) {
+  const pie = document.getElementById('ficha-pie');
+  pie.hidden = !(c.nivel && abierto(c.estado) && abiertas.length);
+  if (pie.hidden) { pie.innerHTML = ''; return; }
+  if (estado.sesion?.invitado) {
+    pie.innerHTML = '<p class="sub">Estás como invitado: puedes ver el caso, pero no responder.</p>';
+    return;
+  }
+  const ids = abiertas.map((t) => t.transaccion_id).join(',');
+  const cierre = `Si nadie responde, se cierra solo: como fraude si llega un contracargo, o sin incidencia a los ${c.dias_cierre} días.`;
+  pie.innerHTML = enComercio ? `
+      <p class="pie-pregunta"><b>¿Sabes algo de este caso?</b>
+        <span class="sub">No tienes que decidir tú: la entidad revisa los casos graves. ${cierre}</span></p>
+      <details class="desplegable"><summary>Añadir un comentario</summary>
+        <textarea id="comentario" aria-label="Comentario" placeholder="Por ejemplo: he llamado al cliente y reconoce la compra"></textarea></details>
       <div class="botones">
         <button class="boton legitima" data-revisar="legitima" data-ids="${ids}">El cliente reconoce la compra</button>
         <button class="boton fraude" data-revisar="fraude" data-ids="${ids}">Confirmo que es fraude</button>
-      </div></section>`;
-  }
-  return `<section class="revision">
-    <h3>Veredicto para ${n === 1 ? 'el pago abierto' : `los ${n} pagos abiertos`}</h3>
-    <p>Es opcional. ${cierre}</p>
-    <textarea id="comentario" aria-label="Comentario" placeholder="Comentario, si quieres: por ejemplo, el titular no reconoce las compras"></textarea>
-    <div class="botones">
-      <button class="boton fraude" data-revisar="fraude" data-ids="${ids}">Es fraude</button>
-      <button class="boton legitima" data-revisar="legitima" data-ids="${ids}">${n === 1 ? 'Es legítimo' : 'Son legítimos'}</button>
-      <span class="sub">Revisa ${esc(estado.usuario)}. Centinela aprende de cada veredicto.</span>
-    </div></section>`;
+      </div>` : `
+      <p class="pie-pregunta"><b>¿Es fraude?</b>
+        <span class="sub">Tu respuesta cierra el caso y Centinela aprende de ella. ${cierre}</span></p>
+      <details class="desplegable"><summary>Añadir un comentario</summary>
+        <textarea id="comentario" aria-label="Comentario" placeholder="Por ejemplo: el titular no reconoce las compras"></textarea></details>
+      <div class="botones">
+        <button class="boton fraude" data-revisar="fraude" data-ids="${ids}">Sí, es fraude</button>
+        <button class="boton legitima" data-revisar="legitima" data-ids="${ids}">No, es una compra legítima</button>
+      </div>`;
 }
 
 async function abrirCaso(metodo, dia) {
@@ -307,40 +382,39 @@ async function abrirCaso(metodo, dia) {
   ficha.hidden = false;
   const cuerpo = document.getElementById('ficha-cuerpo');
   cuerpo.innerHTML = '<p class="sub">Cargando el caso…</p>';
+  document.getElementById('ficha-pie').hidden = true;
   document.getElementById('cerrar-ficha').focus();
   try {
     const c = await api('/api/caso', { metodo_id: metodo, dia, comercio: comercio() });
     const enComercio = c.vista === 'comercio';
     const alertadas = c.transacciones.filter((t) => t.nivel);
+    const otros = c.transacciones.filter((t) => !t.nivel);
     const abiertas = alertadas.filter((t) => abierto(t.estado));
     const total = alertadas.reduce((s, t) => s + t.importe, 0);
+    const motivos = [...new Set(alertadas.flatMap((t) => t.motivos))];
     const tj = c.tarjeta || {};
     document.getElementById('ficha-titulo').innerHTML = `
       ${c.nivel ? `<p class="ficha-nivel ${c.nivel}">Caso ${NIVEL_TEXTO[c.nivel].toLowerCase()}</p>` : ''}
       <h2>Tarjeta ${tarjeta(tj.tarjeta)}</h2>
       <p class="sub">${capital(fecha(c.dia).toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' }))}.
-        ${plural(alertadas.length, 'pago', 'pagos')} con alerta por ${eur(total)}.</p>`;
+        ${alertadas.length ? `${capital(plural(alertadas.length, 'pago sospechoso', 'pagos sospechosos'))} por ${eur(total)}.` : 'Ningún pago sospechoso.'}</p>`;
     const titular = enComercio
-      ? `<div><dt>Cliente</dt><dd>${tj.cliente_id}<span class="sub">${esc(tj.pais)}</span></dd></div>`
-      : `<div><dt>Titular</dt><dd>${esc(tj.cliente)}<span class="sub">Cliente ${tj.cliente_id}, ${esc(tj.pais)}, desde ${tj.alta ? new Date(tj.alta).getFullYear() : '–'}</span></dd></div>`;
-    const datosTarjeta = enComercio
-      ? `<div><dt>Tarjeta</dt><dd>${esc(tipoTarjeta(tj.tipo))}</dd></div>`
-      : `<div><dt>Tarjeta</dt><dd>${esc(tipoTarjeta(tj.tipo))}, ${esc(tj.entidad)}<span class="sub">${tj.limite ? `Límite de ${eur(tj.limite)}` : 'Sin límite de crédito'}</span></dd></div>`;
+      ? `<dt>Cliente</dt><dd>Nº ${tj.cliente_id}, ${esc(tj.pais)}</dd><dt>Tarjeta</dt><dd>${esc(tipoTarjeta(tj.tipo))}</dd>`
+      : `<dt>Titular</dt><dd>${esc(tj.cliente)}</dd>
+         <dt>Cliente</dt><dd>Nº ${tj.cliente_id}, ${esc(tj.pais)}${tj.alta ? `, desde ${new Date(tj.alta).getFullYear()}` : ''}</dd>
+         <dt>Tarjeta</dt><dd>${esc(tipoTarjeta(tj.tipo))} de ${esc(tj.entidad)}, ${tj.limite ? `límite de ${eur(tj.limite)}` : 'sin límite de crédito'}</dd>`;
     cuerpo.innerHTML = `
       ${bloqueDecision(c)}
-      <dl class="datos">${titular}${datosTarjeta}
-        <div><dt>Pagos con alerta</dt><dd>${alertadas.length}<span class="sub">${abiertas.length ? `${abiertas.length} sin cerrar` : 'Todos cerrados'}</span></dd></div>
-      </dl>
-      ${c.nivel && abierto(c.estado) && abiertas.length
-        ? bloqueRevision(c, abiertas.map((t) => t.transaccion_id).join(','), abiertas.length) : ''}
-      <h3>${enComercio ? 'Pagos de esta tarjeta ese día en tu comercio' : 'Pagos de la tarjeta ese día'}</h3>
-      ${c.transacciones.map((t) => tarjetaPago(t, !enComercio && abiertas.length > 1)).join('')}
-      <h3>${enComercio ? 'Compras anteriores de esta tarjeta en tu comercio' : 'Pagos anteriores de la tarjeta'}</h3>
-      ${c.historial.length ? `<div class="tabla-contenedor"><table>
-        <thead><tr><th>Fecha</th><th>Comercio</th><th>Canal</th><th class="num">Importe</th><th>Alerta</th></tr></thead>
-        <tbody>${c.historial.map((t) => `<tr><td>${fechaHora(t.timestamp)}</td><td>${esc(t.comercio)}</td><td>${esc(t.canal)}</td>
-          <td class="num">${eur(t.importe)}</td><td>${nivelPill(t.nivel)} ${estadoPill(t.estado, t.estado_detalle)}</td></tr>`).join('')}</tbody>
-      </table></div>` : '<p class="sub">No hay pagos anteriores.</p>'}`;
+      ${motivos.length ? `<section class="ficha-bloque"><h3>Por qué es sospechoso</h3>${listaMotivos(motivos)}</section>` : ''}
+      <section class="ficha-bloque">
+        <h3>${alertadas.length === 1 ? 'El pago sospechoso' : alertadas.length ? `Los ${alertadas.length} pagos sospechosos` : 'Pagos de la tarjeta ese día'}</h3>
+        ${(alertadas.length ? alertadas : otros).map(tarjetaPago).join('')}
+        ${alertadas.length && otros.length ? `<details class="desplegable"><summary>Ver ${plural(otros.length, 'pago más', 'pagos más')} de la tarjeta ese día, sin alerta</summary>
+          ${otros.map(tarjetaPago).join('')}</details>` : ''}
+      </section>
+      <section class="ficha-bloque"><h3>${enComercio ? 'El cliente' : 'El titular'}</h3><dl class="titular">${titular}</dl></section>
+      <section class="ficha-bloque"><h3>Cómo suele pagar</h3>${bloqueHistorial(c, enComercio)}</section>`;
+    pieRevision(c, abiertas, enComercio);
   } catch (e) {
     mostrarError('ficha-cuerpo', e);
   }

@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400..800&display=swap">
-  <link rel="stylesheet" href="/static/estilos.css?v=24">
+  <link rel="stylesheet" href="/static/estilos.css?v=27">
   <!-- Chart.js 4.4.4 copiado en static/: las gráficas salen también sin internet (p. ej. en una presentación) -->
   <script src="/static/chart.umd.min.js"></script>
 </head>
@@ -66,15 +66,14 @@
       </div>
     </div>
 
-    <!-- El parte: lo que Centinela ha revisado esta noche y lo que espera una decisión -->
+    <!-- El parte: lo revisado esta noche, lo que espera una decisión y por dónde empezar -->
     <section id="parte" class="parte" aria-labelledby="parte-titulo">
-      <p class="parte-fecha" id="parte-fecha">Cargando el parte…</p>
-      <h1 class="parte-titulo" id="parte-titulo"><span id="parte-revisados">&nbsp;</span><span id="parte-pendientes" class="segunda">&nbsp;</span></h1>
-      <div class="dia" id="dia"></div>
-      <div class="dia-ejes" id="dia-ejes" hidden>
-        <span>Menos riesgo</span>
-        <span class="leyenda"><span class="cuadro critico"></span>Crítico <span class="cuadro alto"></span>Alto <span class="mas">Más riesgo</span></span>
+      <div class="parte-texto">
+        <p class="parte-fecha" id="parte-fecha">Cargando el parte…</p>
+        <h1 class="parte-titulo" id="parte-titulo">&nbsp;</h1>
+        <p class="parte-guia" id="parte-guia"></p>
       </div>
+      <div class="parte-cifras" id="parte-cifras"></div>
     </section>
   </header>
 
@@ -87,8 +86,9 @@
           <button data-valor="revisadas" aria-pressed="false">Cerrados</button>
           <button data-valor="todas" aria-pressed="false">Todos</button>
         </div>
-        <p class="en-riesgo" id="en-riesgo"></p>
-        <div class="selects">
+        <details class="filtrar">
+          <summary>Filtrar y ordenar</summary>
+          <div class="selects">
           <select id="filtro-nivel" aria-label="Nivel">
             <option value="2" selected>Altos y críticos</option>
             <option value="3">Solo críticos</option>
@@ -104,7 +104,8 @@
             <option value="30" selected>Últimos 30 días</option>
             <option value="0">Desde el inicio</option>
           </select>
-        </div>
+          </div>
+        </details>
       </div>
       <div id="lista-casos" class="registro" aria-live="polite"></div>
     </section>
@@ -254,6 +255,7 @@
       <button class="cerrar" id="cerrar-ficha" aria-label="Cerrar la ficha">×</button>
     </div>
     <div id="ficha-cuerpo" class="ficha-cuerpo"></div>
+    <div id="ficha-pie" class="ficha-pie" hidden></div>
   </aside>
 
   <div id="avisos-flotantes" class="avisos-flotantes" aria-live="polite"></div>
@@ -402,7 +404,7 @@
     <span id="reloj"></span>
     <label class="casilla" id="zona-demo"><input type="checkbox" id="modo-demo"> Modo demostración: enseñar qué era fraude según el simulador</label>
   </footer>
-  <script src="/static/app.js?v=22"></script>
+  <script src="/static/app.js?v=25"></script>
   <script src="/static/patrones.js?v=1"></script>
   <script src="/static/ajustes.js?v=4"></script>
   <script src="/static/cuentas.js?v=5"></script>
