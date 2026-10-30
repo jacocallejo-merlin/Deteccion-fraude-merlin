@@ -26,9 +26,8 @@ cómo ejecutarlo.
   la referencia de lo que aportan las etiquetas. El Hito 6 combina KMeans, el autoencoder y el GMM y
   aprende a ponderarlos.
 - **Aprendizaje (Hito 6):** en los mismos días y con la misma carga de revisión, el modelo
-  recalibrado con los fraudes que confirma el banco encuentra 98 fraudes frente a 70 de KMeans
-  (+40 %). Esa medición es con KMeans como único detector; el ensemble con autoencoder está
-  pendiente de recalcular.
+  recalibrado con los fraudes que confirma el banco encuentra 104 fraudes frente a 68 de los
+  detectores sin aprender (KMeans + autoencoder + GMM): un 53 % más.
 - **Límite principal:** el fraude que imita a un cliente normal (`cash_out_multicomercio`) apenas
   se detecta: 0 % en el detector no supervisado y 16 % en la cola tras el ajuste del Hito 6.
 
@@ -503,22 +502,24 @@ sube su presencia en la cola del 9 % al 16 %, pero sigue siendo el tipo que peor
 
 ### Lo que mejora al aprender (Hito 6)
 
-> Las cifras de abajo se midieron con KMeans como único detector. El código ya combina KMeans y
-> autoencoder (y admite más detectores en `feedback.detectores`), pero hay que volver a ejecutar la
-> simulación para actualizar los números.
+> Medido con los tres detectores de `feedback.detectores` (KMeans, autoencoder y GMM) y con la
+> configuración del recalibrador de entonces (peso 10 a las revisiones y clases compensadas). Después,
+> `comparar_recalibradores.py` llevó a peso 3 y sin compensar; hay que repetir la simulación para
+> actualizar esta tabla (`resultados/conclusiones_feedback.md`).
 
-Comparando **los mismos días con el mismo trabajo** (el 1 % de los pagos: unas 6-7 alertas al día):
+Comparando **los mismos días con el mismo trabajo** (el 1 % de los pagos: unas 6-7 alertas al día;
+6 semanas con recalibración, 246 alertas y 176 fraudes):
 
 | Cómo se ordenan las alertas | Fraudes encontrados | Precisión | Recall |
 |---|---|---|---|
-| Solo KMeans (sin aprender) | 70 | 29 % | 40 % |
-| Aprendiendo de lo que confirma el banco | 98 | 41 % | 56 % |
-| Aprendiendo del banco + los analistas | 94 | 39 % | 53 % |
+| Solo los detectores (sin aprender) | 68 | 28 % | 39 % |
+| Aprendiendo de lo que confirma el banco | 104 | 42 % | 59 % |
+| Aprendiendo del banco + los analistas | 95 | 39 % | 54 % |
 
 **Cómo leerlo:**
 
 - ✅ **Aprender de los fraudes confirmados mejora mucho.** Con el mismo trabajo, se encuentra un
-  40 % más de fraude.
+  53 % más de fraude.
 - ⚠️ **Lo que aportan los analistas no se nota en estos datos.** El banco ya confirma unos 500
   fraudes, y unas 6-7 revisiones al día pesan poco al lado. Es un resultado honesto y se cuenta tal
   cual.
@@ -574,15 +575,21 @@ Contarlas da credibilidad. Son estas:
   intervalo es amplio (0,32–0,53) y la diferencia con KMeans (0,408) no es significativa. Además,
   la mejor época es muy temprana (5 de 25): si se entrena más, la red reconstruye también los
   fraudes y el ranking empeora. Hay que vigilarlo al cambiar de datos.
-- **El Hito 6 se midió con KMeans; el ensemble es nuevo.** Las cifras de aprendizaje semanal todavía
-  no incluyen al autoencoder: hay que recalibrar y repetir las comparaciones para saber si mejora.
+- **Las cifras del Hito 6 son de la configuración anterior del recalibrador.** El cambio a peso 3 y
+  sin compensar las clases mejora en `comparar_recalibradores.py` (61 frente a 55 fraudes de 104 en
+  las semanas de comprobación), pero es una diferencia pequeña, elegida entre 6 variantes y con pocos
+  fraudes: hay que repetir la simulación para confirmarlo.
+- **Los analistas simulados y las personas de la web se mezclan.** Lo que se marca en la web
+  (`revision_web`) entra en el recalibrado semanal igual que el feedback simulado: probar la web en
+  una demo puede cambiar el modelo.
 - **Casi 3 de cada 4 alertas son falsas alarmas.** Es normal en fraude, pero hay margen de mejora.
 - **Los fraudes "de una sola cosa"** (pico de gasto, IP sospechosa, devoluciones) se escapan al
   detector. Necesitan reglas.
-- **El presupuesto de revisión de los analistas sigue saliendo solo del modelo.** La web ya enseña
-  una cola única (modelo + reglas), pero el 1 % que revisan los analistas se elige con la nota del
-  modelo; las reglas solo elevan el nivel en la web. Lo ideal sería que la cola única ordenara
-  también ese presupuesto.
+- **El presupuesto de revisión de los analistas no usa las reglas.** El 1 % que revisan se elige
+  con la nota del recalibrador, y un 15 % de esas revisiones (`feedback.exploracion`) va a lo que los
+  detectores ven más raro y el recalibrador dejó fuera, para que no "olvide" ningún tipo de fraude.
+  Las reglas solo elevan el nivel en la web; lo ideal sería que la cola única (modelo + reglas)
+  ordenara también ese presupuesto.
 - **El ajuste de umbrales se decide con pocos fraudes** (unas decenas validados en 3 semanas). Por
   eso solo se adopta lo que mejora con claridad, y hay que repetirlo cuando haya más datos.
 - **Probado en pequeño.** 2.000 clientes y un clúster de Kubernetes de un solo ordenador.
@@ -600,8 +607,8 @@ Porque no hace falta elegir uno: el Hito 6 recibe las notas de los dos y aprende
 el autoencoder añade una señal distinta, la de lo mal que reconstruye cada pago. En la comparación
 pura, el autoencoder queda un poco por delante (0,415 frente a 0,408 en test; 0,148 frente a 0,133 en
 validación), pero el bootstrap no los separa con solo 26 fraudes. Por eso se usan los dos: si uno
-falla en un tipo de fraude, el otro puede compensarlo. Las cifras del Hito 6 todavía son las de
-KMeans solo; hay que recalcularlas con el ensemble.
+falla en un tipo de fraude, el otro puede compensarlo. Por la misma razón entra también el GMM: el
+recalibrador semanal recibe las notas de los tres.
 
 **¿Por qué solo el 1 %?**
 Es lo que da tiempo a revisar a un equipo pequeño (unos 7 pagos al día). Se puede cambiar en
@@ -971,3 +978,13 @@ entrenar los modelos principales ni a ajustar umbrales (eso es una decisión per
 | 4. Autoencoders | Red neuronal, error de reconstrucción, comparación con los clásicos | `entrenar_autoencoder.py`, `puntuar_autoencoder.py`, `evaluar_autoencoders.py`, `comparacion_modelos.py` | Hecho |
 | 5. Orquestación y despliegue | Airflow, Docker, Kubernetes, ejecuciones periódicas, reproducibilidad | `dags/`, `Dockerfile`, `docker-compose*.yml`, `k8s/`, `generar_lote.py`, `validacion_reproducibilidad_consistencia.py` | Hecho |
 | 6. Analistas y dashboards | Feedback de analistas, ajuste de umbrales, dashboards, patrones por cliente/comercio/dispositivo/hora | Feedback: `simular_analistas.py`, `integrar_feedback.py`, `recalibrar_modelo.py`, `medir_feedback.py`. Umbrales y variables: `ajustar_umbrales.py`, `config.yaml` (`reglas`, `feedback`). Dashboard: la web (`web/`) con alertas por niveles, avisos y revisión. Patrones: `notebooks/` y `resultados/` | Hecho |
+
+Dos herramientas cambian respecto a lo que proponían los hitos:
+
+- **Autoencoder en PyTorch en vez de TensorFlow/Keras.** El modelo es el mismo (una red que comprime
+  y reconstruye; la nota es el error de reconstrucción). PyTorch tiene versión solo CPU mucho más
+  ligera para las imágenes Docker y fija la semilla de forma reproducible con `fijar_semillas`.
+- **Una web propia en vez de PowerBI/Metabase/Superset.** Un dashboard de solo lectura no basta para
+  el Hito 6: los analistas tienen que poder dar su veredicto y que vuelva al recalibrado semanal, y
+  cada comercio tiene que ver solo sus pagos. La web hace las dos cosas sobre los mismos datos de
+  ClickHouse.

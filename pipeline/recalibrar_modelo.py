@@ -49,6 +49,9 @@ PESO_REVISADAS = _cfg['peso_revisadas']
 # Parámetros del HistGradientBoosting (feedback.modelo en config.yaml); por defecto, los originales
 PARAMETROS = {'learning_rate': 0.05, 'max_iter': 200, 'max_leaf_nodes': 31, 'min_samples_leaf': 20,
               'l2_regularization': 0.0, **(_cfg.get('modelo') or {})}
+# Compensar las clases (dar más peso a los fraudes) desordena el top de la cola: feedback.class_weight
+# (null = sin compensar; si no está, 'balanced', el comportamiento original). Ver comparar_recalibradores.py
+CLASES = _cfg.get('class_weight', 'balanced')
 # Variables de features_transaccion que usa el recalibrador además de las de los modelos
 # (ajustar_umbrales.py decide si alguna aporta). Van sin escalar: los árboles no lo necesitan.
 VARIABLES_EXTRA = _cfg.get('variables_extra') or []
@@ -239,7 +242,7 @@ def datos_entrenamiento(client, corte, etiquetas):
 
 
 def entrenar(X, y, peso):
-    return HistGradientBoostingClassifier(**PARAMETROS, class_weight='balanced',
+    return HistGradientBoostingClassifier(**PARAMETROS, class_weight=CLASES,
                                           random_state=SEMILLA).fit(X, y, sample_weight=peso)
 
 

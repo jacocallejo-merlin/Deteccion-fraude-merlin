@@ -199,8 +199,15 @@ feedback:
     senior: 0.02
   reentrenar_cada_dias: 7      # cada cuánto se recalibra con las etiquetas nuevas
   # Peso de las transacciones revisadas al recalibrar. Son las que el detector pone arriba: enseñan
-  # qué alertas fueron falsas alarmas. Probado 1, 10 y 50: 10 da la mejor precisión (37 % frente a 36 %)
-  peso_revisadas: 10
+  # qué alertas fueron falsas alarmas. Pero los analistas a veces se equivocan, y con peso 10 el
+  # recalibrador aprende también sus errores. comparar_recalibradores.py (cada variante reentrenada en
+  # las mismas fechas con lo que se sabía entonces): elegida con las semanas anteriores a la fecha de
+  # decisión, "peso 3 y sin compensar las clases" pone 45 fraudes en la cola frente a 42, y en las
+  # semanas siguientes, que no intervienen, 61 frente a 55 (de 104), lo mismo que el HGB + GMM.
+  peso_revisadas: 3
+  # Compensar las clases (balanced) da tanto peso a cada fraude que desordena el top de la cola, que es
+  # lo único que se revisa. null = sin compensar (la otra mitad de la mejora de arriba)
+  class_weight: null
   # Parámetros del recalibrador (HistGradientBoosting). Elegidos con el mismo esquema que el ajuste:
   # entrenando con lo anterior al test y validando en las semanas de feedback previas a la fecha de
   # decisión con lo que se sabía entonces. Entre 72 combinaciones, árboles más pequeños y regularizados
