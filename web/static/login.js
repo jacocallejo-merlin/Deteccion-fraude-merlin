@@ -133,12 +133,22 @@ alEnviar('form-cambiar', 'm-cambiar', async () => {
 
 // ------------------------------------------------------------------ entrar como invitado (solo mirar)
 fetch('/api/invitado').then((r) => r.json()).then((d) => { $('zona-invitado').hidden = !d.disponible; }).catch(() => {});
+// Sin la contraseña de acceso de prueba no se entra: se pide antes de nada
+function claveInvitado() {
+  const clave = $('clave-invitado').value;
+  $('m-clave-invitado').textContent = clave ? '' : 'Escribe la contraseña de acceso de prueba';
+  if (!clave) $('clave-invitado').focus();
+  return clave;
+}
+$('clave-invitado').addEventListener('input', () => { $('m-clave-invitado').textContent = ''; });
 document.querySelectorAll('[data-invitado]').forEach((b) => b.addEventListener('click', async () => {
+  const clave = claveInvitado();
+  if (!clave) return;
   try {
-    await enviar('/api/invitado', { rol: b.dataset.invitado });
+    await enviar('/api/invitado', { rol: b.dataset.invitado, clave });
     location.href = destino();
   } catch (err) {
-    $('m-entrar').textContent = err.message;
+    $('m-clave-invitado').textContent = err.message;
   }
 }));
 
@@ -157,7 +167,9 @@ function pintarEmpresas() {
     </button>`).join('') : '<p class="sub">No hay ninguna empresa con ese nombre en ese sector.</p>';
 }
 
-document.querySelector('[data-vista="vista-invitado-comercio"]').addEventListener('click', async () => {
+$('boton-invitado-comercio').addEventListener('click', async () => {
+  if (!claveInvitado()) return;
+  verVista('vista-invitado-comercio');
   if (empresas.length) return;
   try {
     const r = await fetch('/api/invitado/comercios');
@@ -176,7 +188,7 @@ $('ie-lista').addEventListener('click', async (e) => {
   const b = e.target.closest('[data-comercio]');
   if (!b) return;
   try {
-    await enviar('/api/invitado', { rol: 'comercio', comercio_id: Number(b.dataset.comercio) });
+    await enviar('/api/invitado', { rol: 'comercio', comercio_id: Number(b.dataset.comercio), clave: $('clave-invitado').value });
     location.href = '/';
   } catch (err) {
     $('m-invitado').textContent = err.message;

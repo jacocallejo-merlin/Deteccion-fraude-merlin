@@ -13,6 +13,8 @@ os.environ['CUENTAS_URL'] = f'sqlite:///{Path(tempfile.mkdtemp(prefix="centinela
 # Y sin enviar correos de verdad aunque el .env tenga Brevo o un servidor SMTP (vacío = no configurado)
 for variable in ('BREVO_API_KEY', 'SMTP_SERVIDOR', 'TEAMS_WEBHOOK_URL', 'SLACK_WEBHOOK_URL'):
     os.environ[variable] = ''
+# La contraseña de acceso de prueba de los invitados: la de los tests, no la del .env
+os.environ['CLAVE_INVITADO'] = 'clave-de-tests'
 
 
 @pytest.fixture(scope="session")

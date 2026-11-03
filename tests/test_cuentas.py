@@ -10,6 +10,7 @@ pytest.importorskip("fastapi")
 from fastapi.testclient import TestClient
 
 CONTRASENA = "prueba-de-tests-123"
+CLAVE = "clave-de-tests"                    # la contraseña de acceso de prueba (conftest.py)
 
 
 def borrar_cuentas_de_prueba(clickhouse):
@@ -245,7 +246,7 @@ def test_invitado_solo_mira(entorno):
         invitado = TestClient(entorno["app"])
         assert invitado.get("/api/invitado").json() == {"disponible": True}        # en local, sí
         comercio = entorno["comercio"] if rol == "comercio" else 0
-        assert invitado.post("/api/invitado", json={"rol": rol, "comercio_id": comercio}).status_code == 200
+        assert invitado.post("/api/invitado", json={"rol": rol, "comercio_id": comercio, "clave": CLAVE}).status_code == 200
         s = invitado.get("/api/sesion").json()
         assert s["rol"] == rol and s["invitado"] is True and s["comercio_id"] == comercio
         assert invitado.get("/api/perfil").status_code == 200                      # mira
@@ -261,9 +262,9 @@ def test_invitado_de_comercio_elige_la_empresa(entorno):
     anonimo = TestClient(entorno["app"])
     empresas = anonimo.get("/api/invitado/comercios").json()
     assert empresas and {"id", "nombre", "categoria", "ciudad", "pagos"} <= set(empresas[0])
-    assert anonimo.post("/api/invitado", json={"rol": "comercio"}).status_code == 422          # sin elegir, no
+    assert anonimo.post("/api/invitado", json={"rol": "comercio", "clave": CLAVE}).status_code == 422   # sin elegir, no
     otra = next(e["id"] for e in empresas if e["id"] != entorno["comercio"])
-    anonimo.post("/api/invitado", json={"rol": "comercio", "comercio_id": otra})
+    anonimo.post("/api/invitado", json={"rol": "comercio", "comercio_id": otra, "clave": CLAVE})
     assert anonimo.get("/api/sesion").json()["comercio_id"] == otra
     if entorno["scoring"]:
         assert {c["id"] for c in anonimo.get("/api/contexto").json()["comercios"]} == {otra}   # solo esa
@@ -275,3 +276,14 @@ def test_invitado_apagado(entorno, monkeypatch):
     assert anonimo.get("/api/invitado").json() == {"disponible": False}
     assert anonimo.post("/api/invitado", json={"rol": "administrador"}).status_code == 404
     assert anonimo.get("/api/invitado/comercios").status_code == 404        # la lista de empresas no es pública
+
+
+def test_invitado_pide_la_contrasena_de_prueba(entorno, monkeypatch):
+    anonimo = TestClient(entorno["app"])
+    for clave in ["", "otra-cosa"]:
+        r = anonimo.post("/api/invitado", json={"rol": "administrador", "clave": clave})
+        assert r.status_code == 401 and "contraseña" in r.json()["detail"]
+    assert anonimo.get("/api/sesion").status_code == 401                     # no ha entrado
+    monkeypatch.delenv("CLAVE_INVITADO")                                    # sin contraseña configurada: cerrado
+    assert anonimo.get("/api/invitado").json() == {"disponible": False}
+    assert anonimo.post("/api/invitado", json={"rol": "administrador", "clave": CLAVE}).status_code == 404

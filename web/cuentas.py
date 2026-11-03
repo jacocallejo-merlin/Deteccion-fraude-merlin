@@ -20,6 +20,7 @@ web/bd_cuentas.py), que se guarda de verdad. En ClickHouse solo está su fila de
 se cruza con los pagos: si falta (se rehicieron los datos, o la web publicada acaba de arrancar), la web la vuelve
 a poner.
 """
+import hmac
 import json
 import os
 import re
@@ -161,13 +162,15 @@ def correo_valido(email):
 class Invitado(BaseModel):
     rol: Literal['administrador', 'analista', 'comercio']
     comercio_id: int = Field(0, ge=0)            # el invitado de comercio elige qué empresa ver
+    clave: str = Field('', max_length=200)       # la contraseña de acceso de prueba (CLAVE_INVITADO)
 
 
 def invitados_permitidos(request):
     """Entrar como invitado, para enseñar o probar la web: en este equipo (localhost) o si se activa con
-    MODO_INVITADO=1 (la web publicada para el tutor). En una instalación de verdad, apagado."""
+    MODO_INVITADO=1 (la web publicada para el tutor). En una instalación de verdad, apagado. Además pide la
+    contraseña de acceso de prueba (CLAVE_INVITADO, en el .env o en Render): sin ella, apagado."""
     valor = os.environ.get('MODO_INVITADO', '').strip().lower()
-    if valor in ('0', 'no', 'false'):
+    if valor in ('0', 'no', 'false') or not os.environ.get('CLAVE_INVITADO'):
         return False
     return valor in ('1', 'si', 'sí', 'true') or request.url.hostname in ('localhost', '127.0.0.1', 'testserver')
 
@@ -232,6 +235,10 @@ def crear_router(almacen, nombre_comercio, cliente):
         empresas distintas a la vez). Su contraseña es aleatoria y no se enseña: solo se entra por aquí."""
         if not invitados_permitidos(request):
             raise HTTPException(404, 'Not Found')
+        if not hmac.compare_digest(i.clave.encode(), os.environ['CLAVE_INVITADO'].encode()):
+            time.sleep(0.5)                          # como al entrar: probar contraseñas a ciegas, despacio
+            almacen().registrar(f'{i.rol}{DOMINIO_INVITADO}', 'entrar_fallido', 'contraseña de prueba incorrecta')
+            raise HTTPException(401, 'La contraseña de acceso no es correcta')
         if i.rol == 'comercio':
             nombre = nombre_comercio(i.comercio_id) if i.comercio_id else None
             if nombre is None:
