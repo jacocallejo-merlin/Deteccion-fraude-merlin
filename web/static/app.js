@@ -584,9 +584,17 @@ async function comprobarAvisos(primeraVez = false) {
 }
 
 async function marcarLeidos(cuerpo) {
-  await api('/api/avisos/leidos', {}, { ...cuerpo, comercio: Number(comercio()) });
-  await comprobarAvisos(true);
-  if (estado.pestana === 'avisos') cargarAvisos();
+  const botones = cuerpo.todos ? [document.getElementById('leer-todos'), document.getElementById('panel-leer-todos')] : [];
+  botones.forEach((b) => { b.disabled = true; });
+  try {
+    await api('/api/avisos/leidos', {}, { ...cuerpo, comercio: Number(comercio()) });
+    await comprobarAvisos(true);
+    if (estado.pestana === 'avisos') cargarAvisos();
+  } catch (e) {
+    flotante('No se han marcado como leídos', e.message);
+  } finally {
+    botones.forEach((b) => { b.disabled = false; });
+  }
 }
 
 // ------------------------------------------------------------------------------ navegación

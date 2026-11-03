@@ -644,10 +644,14 @@ class Leidos(BaseModel):
 @app.post('/api/avisos/leidos')
 def marcar_leidos(l: Leidos, request: Request):
     """Marca avisos como leídos para quien lo pide (cada analista y cada comercio, los suyos)."""
-    reloj()
+    _, ahora, _ = reloj()
     if l.todos:
+        # Solo los que siguen sin leer: los de hace más de una semana ya cuentan como leídos (ver avisos())
+        leidos = sorted(int(i) for i in _almacen.avisos_leidos(sesiones.usuario_de(request)['email']))
         ids = [int(f['id']) for f in filas(
-            'SELECT aviso_id AS id FROM aviso FINAL WHERE {c:UInt32} = 0 OR has(comercios, {c:UInt32})', c=l.comercio)]
+            '''SELECT aviso_id AS id FROM aviso FINAL
+               WHERE ({c:UInt32} = 0 OR has(comercios, {c:UInt32})) AND fecha >= {ahora:DateTime} - INTERVAL 7 DAY
+                 AND NOT has({leidos:Array(UInt64)}, aviso_id)''', c=l.comercio, ahora=ahora, leidos=leidos)]
     else:
         try:
             ids = [int(i) for i in l.aviso_ids]

@@ -71,6 +71,17 @@ def test_cada_analista_tiene_sus_avisos_leidos(entorno, clickhouse):
     assert de_luis["no_leidos"] == antes["no_leidos"]                         # a Luis no le cambia nada
 
 
+def test_marcar_todos_como_leidos(entorno, clickhouse):
+    if not clickhouse.command("EXISTS TABLE aviso") or not clickhouse.command("SELECT count() FROM aviso"):
+        pytest.skip("no hay avisos: ejecuta el pipeline completo")
+    ana, luis = entorno["ana"], entorno["luis"]
+    antes = ana.get("/api/avisos").json()["no_leidos"]
+    assert ana.post("/api/avisos/leidos", json={"todos": True}).json()["marcados"] == antes
+    assert ana.get("/api/avisos").json()["no_leidos"] == 0
+    assert ana.post("/api/avisos/leidos", json={"todos": True}).json()["marcados"] == 0   # ya no queda nada
+    assert luis.get("/api/avisos").json()["no_leidos"] == antes                          # a Luis no le cambia nada
+
+
 # ---------------------------------------------------------------------------- revisiones que no se pierden
 class ClickHouseDeMentira:
     """Lo que usa web/revisiones.py de ClickHouse: la tabla revision_web y el primer día de los datos."""

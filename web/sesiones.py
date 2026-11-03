@@ -204,9 +204,14 @@ class Almacen:
         return {f['aviso_id'] for f in self.bd.filas('SELECT aviso_id FROM avisos_leidos WHERE email = ?', [email])}
 
     def marcar_leidos(self, email, aviso_ids):
-        for aviso_id in aviso_ids:
-            self.bd.guardar('avisos_leidos', {'email': email, 'aviso_id': str(aviso_id), 'leido': ahora()},
-                            ['email', 'aviso_id'])
+        # En bloques de varias filas por consulta: uno a uno, "marcar todos" eran cientos de viajes a Neon
+        ids, momento = sorted({str(i) for i in aviso_ids}), ahora()
+        for i in range(0, len(ids), 500):
+            bloque = ids[i:i + 500]
+            self.bd.ejecutar('INSERT INTO avisos_leidos (email, aviso_id, leido) VALUES '
+                             + ', '.join(['(?, ?, ?)'] * len(bloque))
+                             + ' ON CONFLICT (email, aviso_id) DO UPDATE SET leido = excluded.leido',
+                             [v for a in bloque for v in (email, a, momento)])
 
     # ------------------------------------------------------------------ revisiones de la web (web/revisiones.py)
     def guardar_revision(self, fila):
