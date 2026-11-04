@@ -242,19 +242,42 @@ def test_cerrar_la_sesion_en_otros_equipos(entorno):
 
 # ---------------------------------------------------------------------------- entrar como invitado
 def test_invitado_solo_mira(entorno):
-    for rol in ["administrador", "analista", "comercio"]:
-        invitado = TestClient(entorno["app"])
-        assert invitado.get("/api/invitado").json() == {"disponible": True}        # en local, sí
-        comercio = entorno["comercio"] if rol == "comercio" else 0
-        assert invitado.post("/api/invitado", json={"rol": rol, "comercio_id": comercio, "clave": CLAVE}).status_code == 200
-        s = invitado.get("/api/sesion").json()
-        assert s["rol"] == rol and s["invitado"] is True and s["comercio_id"] == comercio
-        assert invitado.get("/api/perfil").status_code == 200                      # mira
-        r = invitado.post("/api/perfil", json={"nombre": "Otro nombre"})           # pero no cambia nada
-        assert r.status_code == 403 and "invitado" in r.json()["detail"]
-        assert invitado.post("/api/logout").status_code == 200                     # salir, sí
-    # No salen en la pestaña Cuentas: no son de nadie
-    assert not any(c["email"].endswith("@invitado.centinela")
+    """El comercio de prueba entra como invitado: solo mira."""
+    invitado = TestClient(entorno["app"])
+    assert invitado.get("/api/invitado").json() == {"disponible": True}        # en local, sí
+    assert invitado.post("/api/invitado", json={"rol": "comercio", "comercio_id": entorno["comercio"],
+                                                "clave": CLAVE}).status_code == 200
+    s = invitado.get("/api/sesion").json()
+    assert s["rol"] == "comercio" and s["invitado"] is True and s["comercio_id"] == entorno["comercio"]
+    assert invitado.get("/api/perfil").status_code == 200                      # mira
+    r = invitado.post("/api/perfil", json={"nombre": "Otro nombre"})           # pero no cambia nada
+    assert r.status_code == 403 and "invitado" in r.json()["detail"]
+    r = invitado.post("/api/revisiones", json={"transaccion_ids": [], "veredicto": "x"})   # ni da veredictos
+    assert r.status_code == 403
+    assert invitado.post("/api/logout").status_code == 200                     # salir, sí
+
+
+def test_administrador_y_analista_de_prueba(entorno):
+    """Con la contraseña de prueba, el administrador y el analista entran con una cuenta normal de su rol: el
+    administrador gestiona cuentas pero no da veredictos, y el analista da veredictos pero no gestiona cuentas."""
+    clientes = {}
+    for rol in ["administrador", "analista"]:
+        clientes[rol] = TestClient(entorno["app"])
+        r = clientes[rol].post("/api/invitado", json={"rol": rol, "clave": CLAVE})
+        assert r.status_code == 200 and r.json()["invitado"] is False
+        s = clientes[rol].get("/api/sesion").json()
+        assert s["rol"] == rol and s["invitado"] is False
+    admin, analista = clientes["administrador"], clientes["analista"]
+    assert admin.get("/api/cuentas").status_code == 200                         # gestiona cuentas
+    assert analista.get("/api/cuentas").status_code == 403
+    # Veredictos (con datos no válidos, para no escribir nada): el analista llega a validarlos; el
+    # administrador, no
+    sin_datos = {"transaccion_ids": [], "veredicto": "x"}
+    assert analista.post("/api/revisiones", json=sin_datos).status_code == 422
+    r = admin.post("/api/revisiones", json={"transaccion_ids": [1], "veredicto": "fraude"})
+    assert r.status_code == 403 and "administrador" in r.json()["detail"]
+    # Las cuentas de los botones de prueba no salen en la pestaña Cuentas: no son de nadie
+    assert not any(c["email"].endswith(("@invitado.centinela", "@prueba.centinela"))
                    for c in entorno["admin"].get("/api/cuentas").json()["cuentas"])
 
 

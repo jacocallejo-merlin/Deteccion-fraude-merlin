@@ -479,6 +479,9 @@ class Revision(BaseModel):
 def revisar(r: Revision, request: Request):
     """Guarda el veredicto de una persona. El recalibrado semanal lo usa como feedback. Se guarda también en la
     base de cuentas (web/revisiones.py), para que no se pierda, y queda en el registro de actividad."""
+    if sesiones.usuario_de(request)['rol'] == 'administrador':
+        raise HTTPException(403, 'El administrador gestiona las cuentas: los veredictos los dan los analistas '
+                                 'y los comercios')
     _, ahora, _ = reloj()
     existentes = {f['transaccion_id'] for f in filas(   # un comercio solo puede opinar de sus pagos
         'SELECT transaccion_id FROM transacciones_enriquecidas WHERE transaccion_id IN {ids:Array(UInt32)} '

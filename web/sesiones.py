@@ -55,8 +55,10 @@ ESTATICOS_SESION = Path(__file__).resolve().parent / 'static'
 LOGIN_HTML = ESTATICOS_SESION / 'login.html'
 # Con una contraseña provisional solo se puede cambiarla (y ver quién eres o salir)
 SIN_CAMBIAR_CONTRASENA = {'/api/sesion', '/api/logout', '/api/perfil/contrasena'}
-# Las cuentas de invitado (para enseñar la web sin contraseñas, ver web/cuentas.py) solo pueden mirar
+# Las cuentas de invitado (el comercio de prueba, ver web/cuentas.py) solo pueden mirar
 DOMINIO_INVITADO = '@invitado.centinela'
+# El administrador y el analista de prueba (con la contraseña de acceso de prueba) son cuentas normales de su rol
+DOMINIO_PRUEBA = '@prueba.centinela'
 
 COLUMNAS = ['email', 'nombre', 'rol', 'comercio_id', 'sal', 'hash', 'estado', 'telefono', 'nota', 'creada',
             'revisada_por', 'cambiar_contrasena']
@@ -96,6 +98,11 @@ def huella_codigo(email, codigo):
 
 def es_invitado(usuario):
     return usuario['email'].endswith(DOMINIO_INVITADO)
+
+
+def es_de_prueba(usuario):
+    """Las cuentas de los botones de prueba (invitados y de prueba): no son de nadie, no salen en Cuentas."""
+    return usuario['email'].endswith((DOMINIO_INVITADO, DOMINIO_PRUEBA))
 
 
 def ve_todo(usuario):

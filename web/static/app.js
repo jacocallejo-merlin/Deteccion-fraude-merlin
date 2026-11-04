@@ -354,6 +354,10 @@ function pieRevision(c, abiertas, enComercio) {
     pie.innerHTML = '<p class="sub">Estás como invitado: puedes ver el caso, pero no responder.</p>';
     return;
   }
+  if (estado.sesion?.rol === 'administrador') {
+    pie.innerHTML = '<p class="sub">Como administrador puedes ver el caso, pero no responder: el veredicto lo dan los analistas y los comercios.</p>';
+    return;
+  }
   const ids = abiertas.map((t) => t.transaccion_id).join(',');
   const cierre = `Si nadie responde, se cierra solo: como fraude si llega un contracargo, o sin incidencia a los ${c.dias_cierre} días.`;
   pie.innerHTML = enComercio ? `

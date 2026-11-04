@@ -90,7 +90,7 @@ def usuarios():
         return [{'email': u['email'], 'rol': u['rol'], 'comercio_id': u['comercio_id'],
                  **ajustes_de(u['rol'], guardados.get(u['email'], {}))}
                 for u in bd.filas("SELECT email, rol, comercio_id FROM usuarios WHERE estado = 'activa'")
-                if not u['email'].endswith('@invitado.centinela')]     # los invitados no reciben avisos
+                if not u['email'].endswith(('@invitado.centinela', '@prueba.centinela'))]   # las de prueba, sin avisos
     except Exception:
         return []
 

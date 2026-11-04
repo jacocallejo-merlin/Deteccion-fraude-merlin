@@ -118,7 +118,8 @@ def test_conectar_elegir_canal_publicar_y_desconectar(entorno, monkeypatch):
 
 def test_sin_configurar_y_como_invitado(entorno, monkeypatch):
     invitado = TestClient(entorno["app"])
-    invitado.post("/api/invitado", json={"rol": "analista", "clave": "clave-de-tests"})
+    comercio = invitado.get("/api/invitado/comercios").json()[0]["id"]      # el invitado es el comercio de prueba
+    invitado.post("/api/invitado", json={"rol": "comercio", "comercio_id": comercio, "clave": "clave-de-tests"})
     assert invitado.get("/api/teams/conectar", follow_redirects=False).status_code == 403
     monkeypatch.setenv("MS_CLIENTE_ID", "")
     assert entorno["web"].get("/api/teams").json()["disponible"] is False

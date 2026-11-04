@@ -35,8 +35,8 @@ from pydantic import BaseModel, Field
 
 import notificar
 from config import CONFIG
-from web.sesiones import (DOMINIO_INVITADO, cifrar, con_sesion, contrasena_provisional, contrasena_valida,
-                          es_invitado, usuario_de)
+from web.sesiones import (DOMINIO_INVITADO, DOMINIO_PRUEBA, cifrar, con_sesion, contrasena_provisional,
+                          contrasena_valida, es_de_prueba, usuario_de)
 
 CORREO = re.compile(r'^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$')
 PRIMER_REGISTRADO = 100_000           # los comercios que se registran, a partir de aquí (no chocan con los de la entidad)
@@ -231,8 +231,10 @@ def crear_router(almacen, nombre_comercio, cliente):
 
     @router.post('/api/invitado')
     def entrar_como_invitado(i: Invitado, request: Request):
-        """Una cuenta de solo lectura por rol y, para comercios, una por empresa (así dos personas pueden mirar
-        empresas distintas a la vez). Su contraseña es aleatoria y no se enseña: solo se entra por aquí."""
+        """Con la contraseña de acceso de prueba. El administrador y el analista entran con una cuenta normal de su
+        rol (el administrador gestiona cuentas, el analista da veredictos). El comercio entra como invitado de la
+        empresa que elige, solo para mirar, una cuenta por empresa (así dos personas pueden mirar empresas
+        distintas a la vez). Su contraseña es aleatoria y no se enseña: solo se entra por aquí."""
         if not invitados_permitidos(request):
             raise HTTPException(404, 'Not Found')
         if not hmac.compare_digest(i.clave.encode(), os.environ['CLAVE_INVITADO'].encode()):
@@ -245,12 +247,13 @@ def crear_router(almacen, nombre_comercio, cliente):
                 raise HTTPException(422, 'Elige la empresa que quieres ver')
             email, nombre = f'comercio-{i.comercio_id}{DOMINIO_INVITADO}', f'Invitado ({nombre})'
         else:
-            email, nombre = f'{i.rol}{DOMINIO_INVITADO}', f'Invitado ({i.rol})'
+            email, nombre = f'{i.rol}{DOMINIO_PRUEBA}', f'{i.rol.capitalize()} de prueba'
         if almacen().usuario(email) is None:
             almacen().guardar_usuario(email, nombre, i.rol, i.comercio_id, contrasena_provisional() * 3,
                                       revisada_por='invitado')
         almacen().registrar(email, 'entrar_invitado', nombre)
-        return con_sesion(JSONResponse({'rol': i.rol, 'invitado': True}), request, almacen(), email, False)
+        return con_sesion(JSONResponse({'rol': i.rol, 'invitado': i.rol == 'comercio'}), request, almacen(), email,
+                          False)
 
     # ------------------------------------------------------------------ contraseña olvidada
     @router.post('/api/recuperar')
@@ -392,8 +395,8 @@ def crear_router(almacen, nombre_comercio, cliente):
         nombres = {}
         filas = []
         for c in almacen().cuentas():
-            if es_invitado(c):
-                continue                          # las de invitado no son de nadie: no se gestionan
+            if es_de_prueba(c):
+                continue                          # las de los botones de prueba no son de nadie: no se gestionan
             if c['comercio_id'] and c['comercio_id'] not in nombres:
                 nombres[c['comercio_id']] = nombre_comercio(c['comercio_id'])
             filas.append({**c, 'comercio': nombres.get(c['comercio_id'])})
