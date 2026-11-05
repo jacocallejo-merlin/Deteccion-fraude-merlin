@@ -240,21 +240,33 @@ def test_cerrar_la_sesion_en_otros_equipos(entorno):
     assert otro_equipo.get("/api/sesion").status_code == 401
 
 
-# ---------------------------------------------------------------------------- entrar como invitado
-def test_invitado_solo_mira(entorno):
-    """El comercio de prueba entra como invitado: solo mira."""
-    invitado = TestClient(entorno["app"])
-    assert invitado.get("/api/invitado").json() == {"disponible": True}        # en local, sí
-    assert invitado.post("/api/invitado", json={"rol": "comercio", "comercio_id": entorno["comercio"],
-                                                "clave": CLAVE}).status_code == 200
-    s = invitado.get("/api/sesion").json()
-    assert s["rol"] == "comercio" and s["invitado"] is True and s["comercio_id"] == entorno["comercio"]
-    assert invitado.get("/api/perfil").status_code == 200                      # mira
-    r = invitado.post("/api/perfil", json={"nombre": "Otro nombre"})           # pero no cambia nada
-    assert r.status_code == 403 and "invitado" in r.json()["detail"]
-    r = invitado.post("/api/revisiones", json={"transaccion_ids": [], "veredicto": "x"})   # ni da veredictos
-    assert r.status_code == 403
-    assert invitado.post("/api/logout").status_code == 200                     # salir, sí
+# ---------------------------------------------------------------------------- acceso de prueba
+def test_cuentas_de_invitado_antiguas_solo_miran(entorno):
+    """Ya no se crean cuentas de invitado, pero las de versiones anteriores pueden seguir en la base de cuentas:
+    si alguien entra con una, solo puede mirar."""
+    email = entorno["email"]("antiguo").replace("@tests.centinela", "@invitado.centinela")
+    entorno["almacen"].guardar_usuario(email, "Invitado antiguo", "comercio", entorno["comercio"], CONTRASENA)
+    try:
+        invitado = TestClient(entorno["app"])
+        assert entrar(invitado, email).status_code == 200
+        assert invitado.get("/api/sesion").json()["invitado"] is True
+        assert invitado.get("/api/perfil").status_code == 200                      # mira
+        r = invitado.post("/api/perfil", json={"nombre": "Otro nombre"})           # pero no cambia nada
+        assert r.status_code == 403 and "invitado" in r.json()["detail"]
+        r = invitado.post("/api/revisiones", json={"transaccion_ids": [], "veredicto": "x"})   # ni da veredictos
+        assert r.status_code == 403
+        assert invitado.post("/api/logout").status_code == 200                     # salir, sí
+    finally:
+        entorno["almacen"].borrar_usuarios(email)
+
+
+def test_comercio_sin_acceso_de_prueba(entorno):
+    """Los comercios entran con la cuenta de su empresa: no hay acceso de prueba de comercio ni lista de empresas."""
+    anonimo = TestClient(entorno["app"])
+    r = anonimo.post("/api/invitado", json={"rol": "comercio", "comercio_id": entorno["comercio"], "clave": CLAVE})
+    assert r.status_code == 422
+    assert anonimo.get("/api/sesion").status_code == 401                     # no ha entrado
+    assert anonimo.get("/api/invitado/comercios").status_code == 401         # la lista de empresas ya no es pública
 
 
 def test_administrador_y_analista_de_prueba(entorno):
@@ -263,8 +275,8 @@ def test_administrador_y_analista_de_prueba(entorno):
     clientes = {}
     for rol in ["administrador", "analista"]:
         clientes[rol] = TestClient(entorno["app"])
-        r = clientes[rol].post("/api/invitado", json={"rol": rol, "clave": CLAVE})
-        assert r.status_code == 200 and r.json()["invitado"] is False
+        assert clientes[rol].get("/api/invitado").json() == {"disponible": True}   # en local, sí
+        assert clientes[rol].post("/api/invitado", json={"rol": rol, "clave": CLAVE}).status_code == 200
         s = clientes[rol].get("/api/sesion").json()
         assert s["rol"] == rol and s["invitado"] is False
     admin, analista = clientes["administrador"], clientes["analista"]
@@ -281,24 +293,11 @@ def test_administrador_y_analista_de_prueba(entorno):
                    for c in entorno["admin"].get("/api/cuentas").json()["cuentas"])
 
 
-def test_invitado_de_comercio_elige_la_empresa(entorno):
-    anonimo = TestClient(entorno["app"])
-    empresas = anonimo.get("/api/invitado/comercios").json()
-    assert empresas and {"id", "nombre", "categoria", "ciudad", "pagos"} <= set(empresas[0])
-    assert anonimo.post("/api/invitado", json={"rol": "comercio", "clave": CLAVE}).status_code == 422   # sin elegir, no
-    otra = next(e["id"] for e in empresas if e["id"] != entorno["comercio"])
-    anonimo.post("/api/invitado", json={"rol": "comercio", "comercio_id": otra, "clave": CLAVE})
-    assert anonimo.get("/api/sesion").json()["comercio_id"] == otra
-    if entorno["scoring"]:
-        assert {c["id"] for c in anonimo.get("/api/contexto").json()["comercios"]} == {otra}   # solo esa
-
-
 def test_invitado_apagado(entorno, monkeypatch):
     monkeypatch.setenv("MODO_INVITADO", "0")
     anonimo = TestClient(entorno["app"])
     assert anonimo.get("/api/invitado").json() == {"disponible": False}
     assert anonimo.post("/api/invitado", json={"rol": "administrador"}).status_code == 404
-    assert anonimo.get("/api/invitado/comercios").status_code == 404        # la lista de empresas no es pública
 
 
 def test_invitado_pide_la_contrasena_de_prueba(entorno, monkeypatch):

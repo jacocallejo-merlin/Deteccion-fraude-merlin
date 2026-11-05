@@ -4,6 +4,7 @@
 // Al entrar, vuelve a la página que se quería abrir (?volver=...), solo si es de esta misma máquina.
 
 const $ = (id) => document.getElementById(id);
+const escapar = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const parametros = new URLSearchParams(location.search);
 let provisional = '';            // la contraseña con la que se acaba de entrar, si hay que cambiarla
 
@@ -131,7 +132,7 @@ alEnviar('form-cambiar', 'm-cambiar', async () => {
   location.href = destino();
 });
 
-// ------------------------------------------------------------------ entrar como invitado (solo mirar)
+// ------------------------------------------------------------------ acceso de prueba (administrador o analista)
 fetch('/api/invitado').then((r) => r.json()).then((d) => { $('zona-invitado').hidden = !d.disponible; }).catch(() => {});
 // Sin la contraseña de acceso de prueba no se entra: se pide antes de nada
 function claveInvitado() {
@@ -151,49 +152,6 @@ document.querySelectorAll('[data-invitado]').forEach((b) => b.addEventListener('
     $('m-clave-invitado').textContent = err.message;
   }
 }));
-
-// El invitado de comercio elige antes qué empresa ver, por nombre o por sector
-let empresas = [];
-const escapar = (t) => String(t ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-
-function pintarEmpresas() {
-  const texto = $('ie-buscar').value.trim().toLowerCase();
-  const sector = $('ie-sector').value;
-  const vistas = empresas.filter((e) => (!sector || e.categoria === sector) && e.nombre.toLowerCase().includes(texto));
-  $('ie-lista').innerHTML = vistas.length ? vistas.map((e) => `
-    <button type="button" class="empresa-opcion" role="listitem" data-comercio="${e.id}">
-      <b>${escapar(e.nombre)}</b>
-      <span class="sub">${escapar([e.categoria, e.ciudad].filter(Boolean).join(' · '))}${e.pagos ? ` · ${e.pagos.toLocaleString('es-ES')} pagos` : ' · sin pagos aún'}</span>
-    </button>`).join('') : '<p class="sub">No hay ninguna empresa con ese nombre en ese sector.</p>';
-}
-
-$('boton-invitado-comercio').addEventListener('click', async () => {
-  if (!claveInvitado()) return;
-  verVista('vista-invitado-comercio');
-  if (empresas.length) return;
-  try {
-    const r = await fetch('/api/invitado/comercios');
-    empresas = await r.json();
-    const sectores = [...new Set(empresas.map((e) => e.categoria).filter(Boolean))].sort();
-    $('ie-sector').innerHTML = '<option value="">Todos los sectores</option>'
-      + sectores.map((s) => `<option>${escapar(s)}</option>`).join('');
-    pintarEmpresas();
-  } catch (err) {
-    $('m-invitado').textContent = 'No se ha podido cargar la lista de empresas';
-  }
-});
-$('ie-buscar').addEventListener('input', pintarEmpresas);
-$('ie-sector').addEventListener('change', pintarEmpresas);
-$('ie-lista').addEventListener('click', async (e) => {
-  const b = e.target.closest('[data-comercio]');
-  if (!b) return;
-  try {
-    await enviar('/api/invitado', { rol: 'comercio', comercio_id: Number(b.dataset.comercio), clave: $('clave-invitado').value });
-    location.href = '/';
-  } catch (err) {
-    $('m-invitado').textContent = err.message;
-  }
-});
 
 // Llegar con una sesión que aún tiene la contraseña provisional (la web manda aquí con ?cambiar=1)
 if (parametros.get('cambiar')) verVista('vista-cambiar');

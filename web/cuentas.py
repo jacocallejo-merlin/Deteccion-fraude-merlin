@@ -35,14 +35,14 @@ from pydantic import BaseModel, Field
 
 import notificar
 from config import CONFIG
-from web.sesiones import (DOMINIO_INVITADO, DOMINIO_PRUEBA, cifrar, con_sesion, contrasena_provisional,
-                          contrasena_valida, es_de_prueba, usuario_de)
+from web.sesiones import (DOMINIO_PRUEBA, cifrar, con_sesion, contrasena_provisional, contrasena_valida,
+                          es_de_prueba, usuario_de)
 
 CORREO = re.compile(r'^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$')
 PRIMER_REGISTRADO = 100_000           # los comercios que se registran, a partir de aquí (no chocan con los de la entidad)
 # Rutas sin sesión (las añade web/app.py a las públicas del middleware) y las solo de administradores
 PUBLICAS = {'/api/recuperar', '/api/recuperar/confirmar', '/api/registro', '/api/registro/confirmar',
-            '/api/registro/comprobar', '/api/registro/opciones', '/api/invitado', '/api/invitado/comercios'}
+            '/api/registro/comprobar', '/api/registro/opciones', '/api/invitado'}
 DE_ADMINISTRADORES = ('/api/cuentas',)
 CAMPOS_EMPRESA = ['nombre', 'cif', 'categoria', 'pais', 'ciudad', 'direccion', 'telefono', 'web']
 # Cuántos pagos al día genera el simulador a un comercio registrado, según el tamaño que elige (config.yaml)
@@ -160,13 +160,13 @@ def correo_valido(email):
 
 
 class Invitado(BaseModel):
-    rol: Literal['administrador', 'analista', 'comercio']
-    comercio_id: int = Field(0, ge=0)            # el invitado de comercio elige qué empresa ver
+    # Los comercios no tienen acceso de prueba: entran con la cuenta de su empresa
+    rol: Literal['administrador', 'analista']
     clave: str = Field('', max_length=200)       # la contraseña de acceso de prueba (CLAVE_INVITADO)
 
 
 def invitados_permitidos(request):
-    """Entrar como invitado, para enseñar o probar la web: en este equipo (localhost) o si se activa con
+    """El acceso de prueba, para enseñar o probar la web: en este equipo (localhost) o si se activa con
     MODO_INVITADO=1 (la web publicada para el tutor). En una instalación de verdad, apagado. Además pide la
     contraseña de acceso de prueba (CLAVE_INVITADO, en el .env o en Render): sin ella, apagado."""
     valor = os.environ.get('MODO_INVITADO', '').strip().lower()
@@ -210,50 +210,28 @@ def crear_router(almacen, nombre_comercio, cliente):
             print(f'Centinela: código de {proposito} para {email}: {codigo} (no hay servidor de correo)', flush=True)
         return {'codigo_demo': codigo} if en_local(request) else {}
 
-    # ------------------------------------------------------------------ entrar como invitado
+    # ------------------------------------------------------------------ acceso de prueba
     @router.get('/api/invitado')
     def hay_invitados(request: Request):
         return {'disponible': invitados_permitidos(request)}
 
-    @router.get('/api/invitado/comercios')
-    def comercios_para_invitado(request: Request):
-        """Las empresas que puede elegir el invitado de comercio (nombre, sector y ciudad), con cuántos pagos
-        tiene cada una. Solo con el modo invitado activado: si no, la lista no es pública."""
-        if not invitados_permitidos(request):
-            raise HTTPException(404, 'Not Found')
-        return list(cliente().query('''
-            SELECT c.comercio_id AS id, c.nombre AS nombre, c.categoria_negocio AS categoria, c.ciudad AS ciudad,
-                   ifNull(p.pagos, 0) AS pagos
-            FROM comercio AS c
-            LEFT JOIN (SELECT comercio_id, count() AS pagos FROM transacciones_enriquecidas GROUP BY comercio_id) AS p
-                   ON p.comercio_id = c.comercio_id
-            ORDER BY c.nombre''').named_results())
-
     @router.post('/api/invitado')
     def entrar_como_invitado(i: Invitado, request: Request):
-        """Con la contraseña de acceso de prueba. El administrador y el analista entran con una cuenta normal de su
-        rol (el administrador gestiona cuentas, el analista da veredictos). El comercio entra como invitado de la
-        empresa que elige, solo para mirar, una cuenta por empresa (así dos personas pueden mirar empresas
-        distintas a la vez). Su contraseña es aleatoria y no se enseña: solo se entra por aquí."""
+        """Con la contraseña de acceso de prueba, el administrador y el analista entran con una cuenta normal de su
+        rol (el administrador gestiona cuentas, el analista da veredictos). Su contraseña es aleatoria y no se
+        enseña: solo se entra por aquí."""
         if not invitados_permitidos(request):
             raise HTTPException(404, 'Not Found')
+        email = f'{i.rol}{DOMINIO_PRUEBA}'
         if not hmac.compare_digest(i.clave.encode(), os.environ['CLAVE_INVITADO'].encode()):
             time.sleep(0.5)                          # como al entrar: probar contraseñas a ciegas, despacio
-            almacen().registrar(f'{i.rol}{DOMINIO_INVITADO}', 'entrar_fallido', 'contraseña de prueba incorrecta')
+            almacen().registrar(email, 'entrar_fallido', 'contraseña de prueba incorrecta')
             raise HTTPException(401, 'La contraseña de acceso no es correcta')
-        if i.rol == 'comercio':
-            nombre = nombre_comercio(i.comercio_id) if i.comercio_id else None
-            if nombre is None:
-                raise HTTPException(422, 'Elige la empresa que quieres ver')
-            email, nombre = f'comercio-{i.comercio_id}{DOMINIO_INVITADO}', f'Invitado ({nombre})'
-        else:
-            email, nombre = f'{i.rol}{DOMINIO_PRUEBA}', f'{i.rol.capitalize()} de prueba'
+        nombre = f'{i.rol.capitalize()} de prueba'
         if almacen().usuario(email) is None:
-            almacen().guardar_usuario(email, nombre, i.rol, i.comercio_id, contrasena_provisional() * 3,
-                                      revisada_por='invitado')
+            almacen().guardar_usuario(email, nombre, i.rol, 0, contrasena_provisional() * 3, revisada_por='invitado')
         almacen().registrar(email, 'entrar_invitado', nombre)
-        return con_sesion(JSONResponse({'rol': i.rol, 'invitado': i.rol == 'comercio'}), request, almacen(), email,
-                          False)
+        return con_sesion(JSONResponse({'rol': i.rol}), request, almacen(), email, False)
 
     # ------------------------------------------------------------------ contraseña olvidada
     @router.post('/api/recuperar')

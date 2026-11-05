@@ -55,7 +55,8 @@ ESTATICOS_SESION = Path(__file__).resolve().parent / 'static'
 LOGIN_HTML = ESTATICOS_SESION / 'login.html'
 # Con una contraseña provisional solo se puede cambiarla (y ver quién eres o salir)
 SIN_CAMBIAR_CONTRASENA = {'/api/sesion', '/api/logout', '/api/perfil/contrasena'}
-# Las cuentas de invitado (el comercio de prueba, ver web/cuentas.py) solo pueden mirar
+# Las cuentas de invitado de versiones anteriores (ya no se crean, pero pueden seguir en la base de cuentas)
+# solo pueden mirar
 DOMINIO_INVITADO = '@invitado.centinela'
 # El administrador y el analista de prueba (con la contraseña de acceso de prueba) son cuentas normales de su rol
 DOMINIO_PRUEBA = '@prueba.centinela'
